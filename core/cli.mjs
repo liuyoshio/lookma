@@ -15,14 +15,15 @@ const log = createLog()
 const HELP = `lookma: talk to your Mac. Watch it work.
 
 Usage:
-  lookma [dir ...]         Start. Claude Code may work in each dir you pass.
+  lookma [dir ...]         Start. The agent may work in each dir you pass.
   lookma start [dir ...]   The same.
   lookma doctor [--fix]    Check what Lookma needs, with a fix for each problem.
                            --fix opens System Settings at the first missing permission.
   lookma --version         Print the version.
   lookma --help            Print this help.
 
-While it runs, watch Claude Code's own terminal with: tmux attach -t lookma
+While it runs, watch the agent: Claude Code in its terminal (tmux attach -t lookma),
+Codex in the log of the terminal that started Lookma.
 Just talk. While Lookma runs and is not paused, it listens: the microphone streams
 to the voice, and macOS shows its microphone indicator. To approve a card, say
 "yes, I approve". Pause or resume it with ⌃⌥P, its menu bar icon, or by saying
@@ -33,8 +34,11 @@ Settings, from the environment or ${path.join(ROOT, '.env')}:
   LOOKMA_VOICE_LANGUAGE    the language you speak, e.g. en or zh; unset, it is detected
   LOOKMA_VOICE_NOISE       noise reduction: far_field (default) or near_field for a headset
   LOOKMA_VOICE_MAX_TOKENS  the longest a spoken reply can be, in tokens (default 200)
+  LOOKMA_EXECUTOR          the agent: claude (Claude Code, the default) or codex (Codex CLI)
   LOOKMA_MODEL             the Claude Code model, e.g. opus
   LOOKMA_PERMISSION_MODE   Claude Code's permission mode; default gives more cards
+  LOOKMA_CODEX_MODEL       the Codex model; unset, Codex's default
+  LOOKMA_CODEX_FAST        1: Codex's Fast speed tier (uses more of your plan)
 All of them: the Configuration table in ${path.join(ROOT, 'README.md')}
 `
 
@@ -58,7 +62,7 @@ async function start(args) {
   // Without the app (LOOKMA_NO_APP=1) its build is yours too, which also keeps a dev core from
   // replacing the bundle another Lookma is running.
   const building = config.launchApp && isStale(config)
-  preflight({ build: building })
+  await preflight(config, { build: building })
   if (building) build(config)
   // Only now: the core needs the npm packages the preflight checked for.
   const { createCore } = await import('./core.mjs')

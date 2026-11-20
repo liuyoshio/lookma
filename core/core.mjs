@@ -208,9 +208,8 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   // ---------------------------------------------------------------- pause
 
   // Paused: the overlay closes the voice session and the hands refuse every step, until resume.
-  // Pausing stops a working turn like "stop"; resuming tells the executor to go on with it.
-  let interrupted = false
-
+  // Pausing stops a working turn like "stop". Resuming only turns the voice and the hands back on:
+  // the stopped work stays stopped until the user asks again.
   function setPaused(paused) {
     store.update(s => (s.paused = paused))
     app.send({ type: 'paused', paused })
@@ -219,8 +218,7 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   function pause() {
     if (store.data.paused) return
     log('pause')
-    interrupted = working()
-    if (interrupted) cancel()
+    if (working()) cancel()
     setPaused(true)
   }
 
@@ -228,13 +226,6 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     if (!store.data.paused) return
     log('resume')
     setPaused(false)
-    if (!interrupted) return
-    interrupted = false
-    try {
-      tell('Continue where you left off.', 'resume')
-    } catch (err) {
-      say({ speech: err.message })
-    }
   }
 
   // ---------------------------------------------------------------- overlay

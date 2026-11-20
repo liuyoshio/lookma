@@ -5,6 +5,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { logUnknown } from '../../util.mjs'
+import { serveTools } from '../tool-link.mjs'
 import { loadConfig } from './config.mjs'
 import { createTmux } from './tmux.mjs'
 import { parse, choose, escape } from './dialog.mjs'
@@ -71,33 +72,16 @@ export function create(ctx) {
     if (polling) timer = setTimeout(poll, POLL_MS)
   }
 
-  async function onProxyMessage(ws, raw) {
+  function onProxyMessage(ws, raw) {
     let msg
     try {
       msg = JSON.parse(raw)
     } catch {
       return
     }
-    switch (msg.type) {
-      case 'say':
-        emit({ type: 'say', speech: msg.speech, display: msg.display, kind: msg.kind })
-        break
-      case 'permission':
-        approvals.relay(msg)
-        break
-      case 'hands': {
-        let reply
-        try {
-          reply = { type: 'res', id: msg.id, ok: true, result: await ctx.hands(msg.tool, msg.args || {}) }
-        } catch (err) {
-          reply = { type: 'res', id: msg.id, ok: false, error: err.message }
-        }
-        if (ws.readyState === 1) ws.send(JSON.stringify(reply))
-        break
-      }
-      default:
-        unknown(msg.type)
-    }
+    if (serveTools(ctx, ws, msg)) return
+    if (msg.type === 'permission') approvals.relay(msg)
+    else unknown(msg.type)
   }
 
   return {

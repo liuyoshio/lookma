@@ -10,7 +10,6 @@ overlay/dev/shots/
 overlay/dev/.chrome/
 
 # local tooling and OS files
-/notes/
 .claude/
 .mcp.json
 *.log

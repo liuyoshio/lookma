@@ -377,14 +377,12 @@ let app2
   await app2.ready
   check('an app connecting while paused is told so', !!(await until(() => JSON.stringify(app2.notices[0]) === '{"type":"paused","paused":true}')), JSON.stringify(app2.notices[0]))
 
-  // Resume from the app (the menu bar or ⌃⌥P): the interrupted turn goes on.
+  // Resume from the app (the menu bar or ⌃⌥P): voice and hands come back; the stopped turn stays stopped.
   const prompts = count('prompt')
   app2.send({ type: 'resume' })
   check('resume: paused clears and the app is told', !!(await until(() => last().paused === false)) && !!(await until(() => JSON.stringify(app2.notices.at(-1)) === '{"type":"paused","paused":false}')))
-  await until(() => count('prompt') > prompts)
-  check('resume: the turn pause interrupted is told to continue', count('prompt') === prompts + 1 && calls.filter(c => c.name === 'prompt').at(-1).args[0] === 'Continue where you left off.' && !!(await until(() => last().turn?.phase === 'working' && last().turn.sent === 'Continue where you left off.')))
-  emit({ type: 'turnEnd', ok: true })
-  await until(() => last().turn.phase === 'done')
+  await sleep(50)
+  check('resume: the turn pause stopped is not started again', count('prompt') === prompts && last().turn.phase === 'cancelled', `${count('prompt') - prompts} prompts; turn ${last().turn.phase}`)
 
   // Pause with no turn working, then resume: nothing is cancelled or told.
   const before = calls.length

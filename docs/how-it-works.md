@@ -22,8 +22,8 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and mints voice keys. |
 | App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
 | Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
-| Executor adapter | `core/executors/claude/` | Wraps one agent behind the executor contract. Today that is Claude Code, running interactively in tmux. |
-| Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for Claude Code. |
+| Executor adapter | `core/executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code running interactively in tmux, or `codex`, Codex CLI through its app-server. |
+| Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
 | Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies and permissions. |
 
 ## A turn, end to end
@@ -32,10 +32,10 @@ Say “find three ramen places near the ferry and put them in a new note”:
 
 1. **You talk.** You just say it. The overlay streams your microphone to OpenAI Realtime, and the server hears when you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
 2. **The core starts a turn** and hands the text to the executor. If a turn is already running, the text goes in as a correction instead (`prompt` with `steer: true`).
-3. **Claude works.** Anything on screen goes through the six hands tools. Anything else (files, shell commands, web searches) uses Claude Code's normal tools; its hooks report each step, which shows up as the capsule's status line.
+3. **The agent works.** Anything on screen goes through the six hands tools. Anything else (files, shell commands, web searches) uses the agent's own tools; the adapter reports each step, which shows up as the capsule's status line.
 4. **Every hands call runs the pipeline** below, one call at a time.
-5. **Claude talks back** with `say`: one short sentence in your language. You hear one assistant: the voice speaks it as soon as nobody is talking, on the same session. Questions, confirmations and approval cards go to the front of the queue. Without voice, these are captions only.
-6. **The turn ends** when Claude Code stops. The capsule shows the result and how long it took, then shrinks away.
+5. **The agent talks back** with `say`: one short sentence in your language. You hear one assistant: the voice speaks it as soon as nobody is talking, on the same session. Questions, confirmations and approval cards go to the front of the queue. Without voice, these are captions only.
+6. **The turn ends** when the agent stops. The capsule shows the result and how long it took, then shrinks away.
 
 ## The hands pipeline
 
@@ -44,14 +44,14 @@ Say “find three ramen places near the ferry and put them in a new note”:
   <img src="images/hands-pipeline.svg" width="100%" alt="Every hands call (see, click, type, key, scroll, open) runs five steps: resolve, grant, attention, mark and act. If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead.">
 </picture>
 
-Claude's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each call carries a `label`, a few words in your language (“Search for ramen”), which the overlay shows at the target. Every call goes through the same steps, in `core/hands.mjs`:
+The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each call carries a `label`, a few words in your language (“Search for ramen”), which the overlay shows at the target. Every call goes through the same steps, in `core/hands.mjs`:
 
 1. **Resolve** the target to an app, a rect and a point:
    - an element id from the last `see`. Ids stay valid until the next `see`; a stale id is an error.
    - a point in the last screenshot's pixels. The app maps it back to screen points.
    - a Dock icon: opening an app means pressing its Dock icon, as a person would.
    - the app itself, for `see`, `type`, `key`, and `scroll` with no element or point.
-2. **Grant.** The first time the hands touch an app, the core raises its own card (“Allow controlling Maps?”). The answer is kept in `~/.lookma/apps.json`. A no ends the step with an error that Claude reads.
+2. **Grant.** The first time the hands touch an app, the core raises its own card (“Allow controlling Maps?”). The answer is kept in `~/.lookma/apps.json`. A no ends the step with an error that the agent reads.
 3. **Attention.** The app reports the seconds since your last key or mouse event every half second. You count as busy when you used either in the last 3 s.
    - **Not busy:** the target comes to the front.
    - **Busy:** nothing takes the front, the marks step aside, and a yellow tab at the screen edge says where it is working. What happens depends on the step:
@@ -63,11 +63,11 @@ Claude's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each 
 
 4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. The core waits about 350 ms so the marks arrive before anything happens.
 5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason.
-6. **Return** to Claude. `see` returns the screenshot plus a text list of elements (id, role, text). Every other tool returns one line: what happened and which app is frontmost now.
+6. **Return** to the agent. `see` returns the screenshot plus a text list of elements (id, role, text). Every other tool returns one line: what happened and which app is frontmost now.
 
 Screenshots contain only the target app's windows, its menus and popups included. The overlay and anything covering the app are left out. The long edge is at most 1280 px.
 
-Saying “stop” aborts the step in flight and everything queued, and sends Escape to Claude Code.
+Saying “stop” aborts the step in flight and everything queued, and interrupts the agent: Escape for Claude Code, `turn/interrupt` for Codex.
 
 ## Approvals
 
@@ -76,13 +76,16 @@ Saying “stop” aborts the step in flight and everything queued, and sends Esc
   <img src="images/approvals.svg" width="100%" alt="Three sources raise the same approval card: the Lookma core the first time it touches an app, a Claude Code tool permission relayed through the channel, and dialogs that only appear in Claude Code's terminal. You answer by voice, through a consent gate, or by clicking. The answer goes back the way the question came.">
 </picture>
 
-Everything that needs your OK is the same thing: one card, answered by voice or by click. Cards come from three sources:
+Everything that needs your OK is the same thing: one card, answered by voice or by click. Cards come from the core and from the agent:
 
 | Source | Example | How the answer gets back |
 |---|---|---|
 | Core | “Allow controlling Maps?” | The waiting pipeline step continues, or fails. |
-| Relay | A Claude Code tool permission request, forwarded by the channel | Through the channel. |
-| Terminal | Dialogs only the terminal shows: the development-channel warning at startup, a path outside the working folders | Keys sent to the tmux pane. |
+| Relay (Claude Code) | A Claude Code tool permission request, forwarded by the channel | Through the channel. |
+| Terminal (Claude Code) | Dialogs only the terminal shows: the development-channel warning at startup, a path outside the working folders | Keys sent to the tmux pane. |
+| app-server (Codex) | A command or file change that needs more than the sandbox allows | The reply to Codex's request. |
+
+The rest of this section is about Claude Code. Codex asks through its app-server, one request per question, so there is nothing to merge: Approve answers `accept` (this once, never `acceptForSession`) and Decline answers `decline`, and Codex goes on without that step.
 
 **Reading the terminal.** While the session lives, the adapter reads the tmux pane every second. One generic parser finds a dialog, a question plus numbered options, with no per-dialog code. Only permission and trust questions become cards: a question with Yes and No options, or a known startup warning. Settings pickers such as `/model` never do.
 
@@ -136,15 +139,15 @@ The voice model hears your audio, and a separate transcriber writes it down. On 
 
    A lone “approve” or “go ahead” is also how people ask back, so it never counts. Neither does a lone “ok” or “sure”. If the transcript does not arrive within 3 s, nothing is approved.
 
-Declines go through the same checks, with an explicit no instead (“no”, “cancel”, “don’t”). A wrong no is not free either: it interrupts Claude, and on the startup card it shuts Claude Code down.
+Declines go through the same checks, with an explicit no instead (“no”, “cancel”, “don’t”). A wrong no is not free either: the agent loses that step, and on Claude Code's startup card it shuts Claude Code down.
 
 When a voiced answer is refused, nothing is sent. The card shows “Not a clear yes” with what was heard, and the voice asks again. The approval words are English, whatever language you speak to it in; you can always click instead. Clicking Approve or Decline always works.
 
-**Commands.** An utterance that is only “stop” (or “cancel”) cancels a running turn at once, without waiting for the voice model. “Go ahead” (or “continue”) resumes a step that is waiting for you. “Pause” pauses: the running turn stops as with “stop”, the voice session closes and the microphone is off until you resume from the menu bar or with ⌃⌥P. Resuming continues the interrupted turn. This works typed or spoken. While a card is up, your words answer the card instead.
+**Commands.** An utterance that is only “stop” (or “cancel”) cancels a running turn at once, without waiting for the voice model. “Go ahead” (or “continue”) resumes a step that is waiting for you. “Pause” pauses: the running turn stops as with “stop”, the voice session closes and the microphone is off until you resume from the menu bar or with ⌃⌥P. Resuming only turns listening back on; the stopped turn stays stopped. This works typed or spoken. While a card is up, your words answer the card instead.
 
 ## Background work
 
-Long work with nothing to show on screen goes to Claude Code's background subagents, such as research or a big batch of file edits. They are told not to use `say` or the hands, and they cannot start subagents of their own. Each one ends its final message with a `SAY:` line to speak and a `SHOW:` line to display. The overlay shows running tasks as yellow pills, and the voice reads the report when one finishes. The main session does all screen work itself, because there is one screen and one pair of hands.
+Long work with nothing to show on screen goes to Claude Code's background subagents, such as research or a big batch of file edits. They are told not to use `say` or the hands, and they cannot start subagents of their own. Each one ends its final message with a `SAY:` line to speak and a `SHOW:` line to display. The overlay shows running tasks as yellow pills, and the voice reads the report when one finishes. The main session does all screen work itself, because there is one screen and one pair of hands. Codex has no background tasks yet: its subagents are turned off, and everything runs in the turn.
 
 ## The executor contract
 
@@ -173,7 +176,21 @@ How the Claude Code adapter fills it in:
 
 The session settings allow the hands tools, and deny Claude Code's built-in computer use (the hands are ours) and `AskUserQuestion` (you could not answer it from a card; Claude asks with `say` instead). The folders you pass to `lookma` go into `permissions.additionalDirectories`, so starting asks no trust question per folder.
 
-**Adding an executor.** Write `core/executors/<name>/index.mjs`, give your agent `say` and the hands tools from `core/tools.mjs` (an MCP server like `channel.mjs` is the easiest way) and forward each call to `ctx.hands`. Then start with `LOOKMA_EXECUTOR=<name>`. Codex is next.
+How the Codex adapter fills it in:
+
+| Contract | Codex |
+|---|---|
+| `start` | Writes a session folder (`~/.lookma/sessions/codex/`: `home/`, holding only a link to your `auth.json`, and an empty `work/`), starts `codex app-server` with that home, and starts one thread for the whole run, with `executor.md` as its developer instructions. |
+| `prompt` | `turn/start`, or `turn/steer` while a Codex turn runs, so a correction lands in that turn. |
+| `connect` | The socket of `mcp.mjs`, the MCP server in the thread's config that gives Codex `say` and the hands tools. |
+| `cancel` | `turn/interrupt`. The next prompt waits until Codex reports the turn ended. |
+| `answer` | The reply to Codex's approval request: `accept` or `decline`. |
+| `step`, `turnStart`, `turnEnd` | `item/started`, `turn/started` and `turn/completed` notifications. |
+| `say` | The `say` tool. |
+
+Besides its own shell, file edits and web search, Codex gets only Lookma's tools: its own home keeps your Codex MCP servers, plugins and settings out, and Lookma turns off its connectors, plugins, computer and browser use, subagents, memories and image generation. Its commands run in the workspace-write sandbox, which may write only in the folders you pass to `lookma` (plus its `work/` folder and tmp), with no network; anything beyond that is a card.
+
+**Adding an executor.** Write `core/executors/<name>/index.mjs`. Give your agent `say` and the hands tools: if it takes MCP servers, have it spawn a script that calls `serve()` from `core/executors/mcp-bridge.mjs` (as `codex/mcp.mjs` does). That server connects to `/ws/executor`; in your `connect`, hand its messages to `serveTools` from `core/executors/tool-link.mjs`, which forwards each call to `ctx.hands`. Put what your agent needs into `checks.mjs` next to it, so `lookma doctor` and the start check it. Then start with `LOOKMA_EXECUTOR=<name>`.
 
 ## Local only
 
@@ -190,5 +207,6 @@ There are no tokens or accounts beyond that.
 |---|---|
 | `~/.lookma/apps.json` | Per-app grants, e.g. `{ "Maps": true, "Notes": false }`. Read on every step, so a hand edit takes effect at once. |
 | `~/.lookma/sessions/lookma/` | The generated Claude Code session folder, rewritten on every start. |
+| `~/.lookma/sessions/codex/` | The Codex session folder: `home/` (Codex's home, with a link to your login) and `work/` (its working folder). |
 | `app/build/Lookma.app` | The app, built from `app/Sources/` by `app/build.sh`. |
 | `.env` | Your settings and `OPENAI_API_KEY`. Real environment variables win. |

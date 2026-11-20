@@ -1,6 +1,7 @@
 // lookma doctor [--fix]: checks what Lookma needs and prints a fix for each problem. It changes
 // nothing; --fix only opens the System Settings pane of the first missing permission. The same
-// checks are `lookma start`'s preflight, so a missing piece gets the same words from both.
+// checks are `lookma start`'s preflight, so a missing piece gets the same words from both. An
+// executor adds its own in core/executors/<name>/checks.mjs, with the helpers exported here.
 // Permissions belong to the app, which is launched with `open` (macOS ties them to its signature),
 // so they are read from the app itself: from the running core, which holds the app's hello, or
 // else from a separate instance started with LOOKMA_CHECK=<file>, which writes them and exits.
@@ -13,7 +14,8 @@ import { isStale } from './app-build.mjs'
 
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 // Node's minimum is the one in package.json's engines.
-const NEEDS = { macos: '15', node: PKG.engines.node.replace(/^>=/, ''), claude: '2.1.312' }
+const NEEDS = { macos: '15', node: PKG.engines.node.replace(/^>=/, '') }
+const EXECUTORS = path.join(ROOT, 'core', 'executors')
 const BUILD_SH = path.join(ROOT, 'app', 'build.sh')
 const PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_'
 const PERMISSIONS = [
@@ -25,17 +27,17 @@ const PERMISSIONS = [
 // A check returns a finding, or a list of them: { level, text, fix: [lines] }. A missing
 // permission also carries `settings`, the pane --fix opens.
 const finding = level => (text, fix = []) => ({ level, text, fix: [fix].flat() })
-const ok = finding('ok')
-const warn = finding('warn')
-const fail = finding('fail')
+export const ok = finding('ok')
+export const warn = finding('warn')
+export const fail = finding('fail')
 const note = finding('note')
 
-function sh(cmd, args, opts = {}) {
+export function sh(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 10000, ...opts })
   return { ok: !r.error && r.status === 0, out: `${r.stdout || ''}`.trim(), err: `${r.stderr || ''}`.trim() }
 }
 
-function atLeast(version, min) {
+export function atLeast(version, min) {
   const a = version.split('.').map(Number)
   const b = min.split('.').map(Number)
   for (let i = 0; i < b.length; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]
@@ -62,26 +64,6 @@ function checkPackages() {
   return fail('npm packages are not installed', `cd ${ROOT} && npm install`)
 }
 
-function checkTmux() {
-  const tmux = sh('tmux', ['-V'])
-  return tmux.ok ? ok(tmux.out) : fail('tmux is not installed (Claude Code runs in it)', 'brew install tmux')
-}
-
-function checkClaude() {
-  const v = sh('claude', ['--version'])
-  if (!v.ok) return fail('Claude Code (claude) is not on PATH', 'npm install -g @anthropic-ai/claude-code')
-  const version = v.out.match(/\d+\.\d+\.\d+/)?.[0] || v.out
-  if (!atLeast(version, NEEDS.claude)) return fail(`Claude Code ${version}: Lookma needs ${NEEDS.claude} or later`, 'claude update')
-  // Reads the stored login; makes no model call.
-  let auth = null
-  try {
-    auth = JSON.parse(sh('claude', ['auth', 'status', '--json']).out)
-  } catch {}
-  if (auth?.loggedIn) return ok(`Claude Code ${version}, logged in${auth.authMethod ? ` (${auth.authMethod})` : ''}`)
-  if (auth) return fail(`Claude Code ${version} is not logged in`, 'claude auth login')
-  return warn(`Claude Code ${version}; could not check the login`, 'Run claude once and log in if it asks.')
-}
-
 function checkSwiftc() {
   // Ask xcode-select first: running the swiftc shim without the tools pops up an installer.
   const dev = sh('xcode-select', ['-p'])
@@ -93,14 +75,22 @@ function checkSwiftc() {
   return fail('swiftc does not run', (swift.err || swift.out).split('\n')[0] || 'xcode-select --install')
 }
 
+// The executor's own checks, from its checks.mjs; an adapter may have none. An unknown
+// LOOKMA_EXECUTOR fails here, in words, before the core would import it.
+async function executorChecks(name) {
+  const names = fs.readdirSync(EXECUTORS).filter(d => fs.existsSync(path.join(EXECUTORS, d, 'index.mjs')))
+  if (!names.includes(name)) return [() => fail(`LOOKMA_EXECUTOR=${name}: no such executor`, `Use one of: ${names.join(', ')}`)]
+  return fs.existsSync(path.join(EXECUTORS, name, 'checks.mjs')) ? (await import(`./executors/${name}/checks.mjs`)).checks : []
+}
+
 // To run Lookma, and to build its app.
-const TO_RUN = [checkMacos, checkNode, checkPackages, checkTmux, checkClaude]
+const toRun = async config => [checkMacos, checkNode, checkPackages, ...(await executorChecks(config.executor))]
 const TO_BUILD = [checkSwiftc]
 
 // `lookma start` checks what it needs, building or not, and throws the first failure as the doctor
 // words it. Warnings do not stop it.
-export function preflight({ build }) {
-  for (const check of [...TO_RUN, ...(build ? TO_BUILD : [])]) {
+export async function preflight(config, { build }) {
+  for (const check of [...(await toRun(config)), ...(build ? TO_BUILD : [])]) {
     const f = check()
     if (f.level === 'fail') throw new Error([f.text, ...f.fix.map(l => `  ${l}`), 'Run lookma doctor for a full check.'].join('\n'))
   }
@@ -203,7 +193,7 @@ export async function doctor(config, { fix = false } = {}) {
     }
   }
 
-  for (const check of [...TO_RUN, ...TO_BUILD]) report(check())
+  for (const check of [...(await toRun(config)), ...TO_BUILD]) report(check())
   report(checkVoice(config))
   const state = await readCore(config.port)
   report(checkCore(state, config.port))

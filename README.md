@@ -13,7 +13,7 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-FF805C"></a>
   <img alt="macOS 15 or later" src="https://img.shields.io/badge/macOS-15%2B-555">
   <img alt="Node.js 20 or later" src="https://img.shields.io/badge/node-20%2B-555">
-  <img alt="Works with Claude Code" src="https://img.shields.io/badge/works%20with-Claude%20Code-555">
+  <img alt="Works with Claude Code or Codex" src="https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex-555">
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@
 
 Most AI agents work where you can't see them: in the background, in a cloud browser, in a virtual machine. Lookma works on your screen.
 
-Lookma is a free, open-source app for your Mac. Just say what you want, in any language, and watch an AI do it in your real apps, on your own screen. It shows every step, and it waits for your yes.
+Lookma is a free, open-source app for your Mac. Just say what you want, in any language, and watch an AI do it in your real apps, on your own screen. It shows every step, and it waits for your yes. The work is done by the coding agent you already have: Claude Code or Codex.
 
 
 <p align="center">
@@ -88,7 +88,7 @@ While you type, it never grabs your window. It waits until you pause, or say “
 
 ## Quick start
 
-You need macOS 15+, Node.js 20+, tmux and Claude Code ([details](#requirements)).
+You need macOS 15+, Node.js 20+, and Claude Code with tmux or Codex CLI ([details](#requirements)).
 
 **1. Install**
 
@@ -111,7 +111,7 @@ lookma doctor
 lookma ~/Projects
 ```
 
-Then just say “turn on dark mode”.
+Then just say “turn on dark mode”. To work with Codex instead of Claude Code, start it with `LOOKMA_EXECUTOR=codex lookma ~/Projects`, or set `LOOKMA_EXECUTOR=codex` in `.env`.
 
 > [!NOTE]
 > Voice needs an OpenAI API key: `cp .env.example .env` and set `OPENAI_API_KEY`. Without one, Lookma still works by typing (menu bar → **Type a Request…**).
@@ -129,7 +129,7 @@ Then just say “turn on dark mode”.
   | Microphone | your voice | on the first start with voice on |
 
   After you switch on Screen Recording, macOS may want the app reopened: press Ctrl-C and run `lookma` again.
-- **The startup card.** Every start, Claude Code warns that a development channel is loaded; that is how Lookma talks to it. The warning arrives as a card: say “yes, I approve”, or click **Approve**. Decline, and Claude Code exits.
+- **The startup card** (Claude Code only). Every start, Claude Code warns that a development channel is loaded; that is how Lookma talks to it. The warning arrives as a card: say “yes, I approve”, or click **Approve**. Decline, and Claude Code exits.
 - **One card per app.** The first time it touches an app you get “Allow controlling Notes?”. The answer is kept in `~/.lookma/apps.json`.
 - **Signing.** The build signs with your Apple Development or Developer ID certificate if you have one (click **Always Allow** if macOS asks), and ad hoc otherwise. macOS ties the Accessibility and Screen Recording grants to that signature, so with ad hoc signing you grant them again after every rebuild. An old entry can look switched on and do nothing: remove it with the minus button, then start again.
 
@@ -137,14 +137,21 @@ Then just say “turn on dark mode”.
 
 ### Requirements
 
+Always:
+
 | | |
 |---|---|
 | **macOS 15** or later | the main display |
 | **Xcode Command Line Tools** | `xcode-select --install`, for `swiftc` (full Xcode is not needed) |
 | **Node.js 20** or later | `brew install node` |
-| **tmux** | `brew install tmux` |
-| **[Claude Code](https://github.com/anthropics/claude-code)** 2.1.312 or later | on your `PATH`, logged in with your claude.ai account |
 | **OpenAI API key** | optional, for voice |
+
+And one agent:
+
+| Agent | What it needs |
+|---|---|
+| **[Claude Code](https://github.com/anthropics/claude-code)** (the default) | 2.1.312 or later on your `PATH`, logged in with your claude.ai account, and **tmux** (`brew install tmux`) |
+| **[Codex CLI](https://github.com/openai/codex)** | 0.163.0 or later on your `PATH`, logged in with your ChatGPT account (`codex login`). Choose it with `LOOKMA_EXECUTOR=codex`. |
 
 ## Using it
 
@@ -159,7 +166,7 @@ Then just say “turn on dark mode”.
 | **Let it carry on** | “Go ahead”, or click **Go ahead** on the yellow tab, or pause for 3 s. |
 | **Check in** | “How’s it going?” |
 | **Pause** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd>, **Pause** in the menu bar, or say “pause”. The task stops, the voice disconnects and the microphone turns off until you resume. |
-| **Resume** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> again, or **Resume**. It listens again, and the task picks up where it stopped. |
+| **Resume** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> again, or **Resume**. It listens again. The stopped task stays stopped; say “keep going” to carry on. |
 | **Type instead** | **Type a Request…** in the menu bar. Enter sends, Escape closes. |
 | **Quit** | **Quit** in the menu bar, or Ctrl-C in the terminal that started it. |
 
@@ -167,7 +174,7 @@ Then just say “turn on dark mode”.
 
 **The menu bar seal** fills its ring while you talk, shows a pause sign while paused, and dims when the app has lost the core.
 
-**Watch the agent itself** with `tmux attach -t lookma` (detach with Ctrl-b d). You can answer its prompts there too; the card closes by itself.
+**Watch the agent itself.** Claude Code runs in tmux: `tmux attach -t lookma` (detach with Ctrl-b d). You can answer its prompts there too; the card closes by itself. Codex logs its steps, cards and messages in the terminal that started Lookma.
 
 **From a script**, post your request to the core's `/api/tell` ([protocol](docs/protocol.md#overlay--core)).
 
@@ -178,7 +185,7 @@ Then just say “turn on dark mode”.
   <img src="docs/images/architecture.svg" width="100%" alt="You talk to the overlay in Lookma.app, which streams your microphone to OpenAI Realtime while it listens. The overlay passes your words to the core on 127.0.0.1. The core prompts Claude Code, the swappable executor, which calls back with hands steps. The core runs each step through the app's hands in your real apps.">
 </picture>
 
-The voice does no work: it passes your exact words to the core, which hands them to Claude Code. Claude touches the screen only through six *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act**. Files, shell commands and web searches use Claude's normal tools and show up as status lines.
+The voice does no work: it passes your exact words to the core, which hands them to the agent, Claude Code or Codex. The agent touches the screen only through six *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act**. Files, shell commands and web searches use the agent's own tools and show up as status lines.
 
 ### A yes means yes
 
@@ -196,10 +203,10 @@ More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals a
 - **Local.** The core listens on 127.0.0.1 only and refuses connections from web pages. No accounts, no telemetry, no servers of ours.
 - **The microphone is on while Lookma runs and is not paused**, and macOS shows its microphone indicator. Its audio streams to OpenAI the whole time, so it hears the room: pause (⌃⌥P or the menu bar) when you want privacy. Paused, the voice session is closed and nothing is sent.
 - **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_NO_VOICE=1`, nothing goes to OpenAI and the microphone stays off.
-- **Claude Code uses your Claude plan**, as usual. Its model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
+- **Claude Code uses your Claude plan, Codex your ChatGPT plan**, as usual. The agent's model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
 - **Nothing else leaves your Mac.** Local state is in `~/.lookma/`.
 
-**Safety.** It drives your real computer with your permissions. You allow each app once, and Claude Code's permission prompts come to you as cards. Claude is told to ask before anything irreversible or outward-facing (sending, posting, paying, deleting) that goes beyond what you said, but that is an instruction to the model, not an enforced gate. Text on screen can mislead the model, so watch it on anything that matters. For more cards, set `LOOKMA_PERMISSION_MODE=default`.
+**Safety.** It drives your real computer with your permissions. You allow each app once, and the agent's permission prompts come to you as cards. The agent is told to ask before anything irreversible or outward-facing (sending, posting, paying, deleting) that goes beyond what you said, but that is an instruction to the model, not an enforced gate. Text on screen can mislead the model, so watch it on anything that matters. Codex's commands run in its sandbox: they may write only in the folders you passed, with no network, and anything more asks you with a card. For more cards with Claude Code, set `LOOKMA_PERMISSION_MODE=default`.
 
 ## Configuration
 
@@ -209,9 +216,12 @@ Set these in your shell or in `.env` at the repo root. Real environment variable
 |---|---|---|
 | `OPENAI_API_KEY` | | Turns on voice. |
 | `LOOKMA_NO_VOICE` | | `1`: text only. Nothing is sent to OpenAI. |
-| `LOOKMA_MODEL` | `sonnet` | Claude Code model (`--model`), e.g. `opus`. |
-| `LOOKMA_PERMISSION_MODE` | `auto` | Claude Code permission mode; `default` gives more cards. |
-| `LOOKMA_CLAUDE_FLAGS` | | Extra flags for `claude`, separated by spaces. |
+| `LOOKMA_EXECUTOR` | `claude` | The agent: `claude` (Claude Code) or `codex` (Codex CLI). |
+| `LOOKMA_MODEL` | `sonnet` | Claude Code only: the model (`--model`), e.g. `opus`. |
+| `LOOKMA_PERMISSION_MODE` | `auto` | Claude Code only: the permission mode; `default` gives more cards. |
+| `LOOKMA_CLAUDE_FLAGS` | | Claude Code only: extra flags for `claude`, separated by spaces. |
+| `LOOKMA_CODEX_MODEL` | Codex's default | Codex only: the model. |
+| `LOOKMA_CODEX_FAST` | | Codex only. `1`: the Fast speed tier, quicker and uses more of your ChatGPT plan. |
 | `LOOKMA_REALTIME_MODEL` | `gpt-realtime-2.1` | The voice model. |
 | `LOOKMA_VOICE` | `marin` | The voice. |
 | `LOOKMA_TRANSCRIBE_MODEL` | `gpt-4o-transcribe` | Writes down what you say, for captions and the approval check. |
@@ -220,8 +230,7 @@ Set these in your shell or in `.env` at the repo root. Real environment variable
 | `LOOKMA_VOICE_MAX_TOKENS` | `200` | The longest a spoken reply can be, in tokens. |
 | `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
 | `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |
-| `LOOKMA_EXEC_SESSION` | `lookma` | The tmux session that runs Claude Code. |
-| `LOOKMA_EXECUTOR` | `claude` | The adapter in `core/executors/` to use. |
+| `LOOKMA_EXEC_SESSION` | `lookma` | Claude Code only: the tmux session that runs it. |
 | `LOOKMA_SIGN_IDENTITY` | your first signing identity, else ad hoc | Code signing for the app build; `-` forces ad hoc. Environment only. |
 | `LOOKMA_NO_APP` | | `1`: do not launch the app (for development). |
 
@@ -232,9 +241,10 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 - **macOS only, main display only.**
 - **No drag-and-drop or right-click menus yet.** The hands see, click, type, press keys, scroll and open apps, URLs and files.
 - **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking, plus about 350 ms per step so you see the target first.
-- **The startup card, every time.** Lookma reaches Claude Code through a development channel (a Claude Code research preview that needs a claude.ai login).
+- **With Claude Code, the startup card every time.** Lookma reaches Claude Code through a development channel (a Claude Code research preview that needs a claude.ai login).
 - **Experimental:** terminal-only dialogs are read from the tmux pane, so a Claude Code update that redraws them can break this (checked against 2.1.314 and 2.1.329). Voice approval understands English and Chinese; in other languages, click.
-- **One at a time:** one port, one tmux session.
+- **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
+- **One at a time:** one port, one agent session.
 - **It hears the room.** It stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Pause when that matters.
 
 ## Swapping the executor
@@ -247,18 +257,17 @@ export function create(ctx)  // ctx: { emit(event), hands(tool, args), config, l
       connect?(ws), hook?(body) }
 ```
 
-It emits `status`, `turnStart` / `turnEnd`, `step`, `say`, `task` and `approval` / `approvalGone`. On-screen steps are not part of the contract: the agent calls the hands tools, and the adapter forwards each call to `ctx.hands`. Pick one with `LOOKMA_EXECUTOR`. Codex is next. The full contract is in [docs/protocol.md](docs/protocol.md#executor-contract).
+It emits `status`, `turnStart` / `turnEnd`, `step`, `say`, `task` and `approval` / `approvalGone`. On-screen steps are not part of the contract: the agent calls the hands tools, and the adapter forwards each call to `ctx.hands`. Two ship today, `claude` and `codex`; pick one with `LOOKMA_EXECUTOR`. The full contract is in [docs/protocol.md](docs/protocol.md#executor-contract).
 
 ## Roadmap
 
-Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with one of each. Next, in order:
+Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with two agents, Claude Code and Codex, and one voice. Next, in order:
 
-1. **Codex as an executor**, next to Claude Code, through the same adapter contract.
-2. **A voice provider interface**, so the voice is a plug-in like the agent is.
-3. **Gemini Live** as a second voice.
-4. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
-5. **Drag and drop, and right-click menus** for the hands.
-6. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
+1. **A voice provider interface**, so the voice is a plug-in like the agent is.
+2. **Gemini Live** as a second voice.
+3. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
+4. **Drag and drop, and right-click menus** for the hands.
+5. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
 
 Adapters for other agents (Gemini CLI, Aider, OpenCode, …) are very welcome. See [Swapping the executor](#swapping-the-executor) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -268,13 +277,13 @@ Issues and pull requests are welcome. Keep changes small, and when you change ho
 
 ```sh
 npm run check      # syntax check
-npm test           # pipeline vs a fake app, dialog parsing, voice consent, turn filtering; no models called
+npm test           # pipeline vs a fake app, dialog parsing, the Codex adapter vs a stand-in, voice consent, turn filtering; no models called
 npm run test:e2e   # a real Claude Code session on your plan (port 8791, tmux session lookma-test)
 ```
 
 The diagrams are drawn by `node docs/images/src/draw.mjs`, in a light and a dark version each.
 
-Built on [Claude Code](https://github.com/anthropics/claude-code), the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime), the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [ws](https://github.com/websockets/ws), [zod](https://zod.dev) and [tmux](https://github.com/tmux/tmux).
+Built on [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime), the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [ws](https://github.com/websockets/ws), [zod](https://zod.dev) and [tmux](https://github.com/tmux/tmux).
 
 ## License
 
