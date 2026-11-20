@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Haiku 4.5
+ ▝▝   ▝▝   ~/src/example/playground/termkeys/scratch/b
+
+
+❯ /model
+  ⎿  Set model to Haiku 4.5 for this session only
+
+❯ Reply with a numbered list of exactly four fruits, formatted as "1. Apple" etc, and nothing else. Do not use tools.
+
+⏺ 1. Apple
+  2. Banana
+  3. Orange
+  4. Strawberry
+
+✻ Churned for 2s · done 9:24 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                        ctrl+g to edit in Vim · ✔ Update installed · /restart to apply
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ❯ 1. pick me
+    2. or me
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

@@ -1,0 +1,286 @@
+<p align="center">
+  <img src="brand/seal.svg" width="148" alt="Hands, the Lookma seal, balancing a coral ring on its nose">
+</p>
+
+<h1 align="center">Lookma</h1>
+
+<p align="center">
+  <b>Look ma, no hands. 🦭</b><br>
+  The AI agent that actually uses your Mac, right where you can watch.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-FF805C"></a>
+  <img alt="macOS 15 or later" src="https://img.shields.io/badge/macOS-15%2B-555">
+  <img alt="Node.js 20 or later" src="https://img.shields.io/badge/node-20%2B-555">
+  <img alt="Works with Claude Code" src="https://img.shields.io/badge/works%20with-Claude%20Code-555">
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/bike-dark.svg">
+    <img src="brand/bike.svg" width="100%" alt="A person on a stationary bike says 'Hey Lookma, visualize this data for me', and Lookma builds a chart on the living-room TV while they keep pedaling.">
+  </picture>
+  <br><sub>Talk to it from across the room.</sub>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/demo-dark.svg">
+    <img src="brand/demo.svg" width="100%" alt="Animated demo: a spoken request appears as a caption, a coral ring and a ghost cursor move across two apps on a Mac desktop, an approval card pops up and is approved by voice, and the task finishes.">
+  </picture>
+</p>
+
+Most AI agents work where you can't see them: in the background, in a cloud browser, in a virtual machine. Lookma works on your screen.
+
+Lookma is a free, open-source app for your Mac. Just say what you want, in any language, and watch an AI do it in your real apps, on your own screen. It shows every step, and it waits for your yes.
+
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#using-it">Using it</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#privacy-and-costs">Privacy</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#limitations">Limitations</a>
+</p>
+
+## Why Lookma
+
+<table>
+<tr>
+<td width="33%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/feature-see-dark.svg">
+  <img src="brand/feature-see.svg" width="100%" alt="A coral ring and a ghost cursor land on a button a moment before it is clicked, with a caption naming the step.">
+</picture>
+
+**You see every step.**
+Your real apps, on your screen. A coral ring and a ghost cursor land on each target a beat before it acts.
+</td>
+<td width="33%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/feature-say-dark.svg">
+  <img src="brand/feature-say.svg" width="100%" alt="An approval card on screen, and a speech bubble saying yes, I approve.">
+</picture>
+
+**You say yes out loud.**
+Anything that needs your OK pops up a card. Say “yes, I approve”. A lone “ok” never counts.
+</td>
+<td width="33%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/feature-aside-dark.svg">
+  <img src="brand/feature-aside.svg" width="100%" alt="A person typing in one window while the ring waits politely in another.">
+</picture>
+
+**It steps aside.**
+While you type, it never grabs your window. It waits until you pause, or say “go ahead”.
+</td>
+</tr>
+</table>
+
+## What you see
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/overlay-anatomy-dark.svg">
+  <img src="docs/images/overlay-anatomy.svg" width="100%" alt="The overlay, annotated: a coral ring and a ghost cursor on a search field with a step label under it, an approval card, the capsule with your words, what it is doing and its status, the menu bar icon, and the yellow tab that appears while you type.">
+</picture>
+
+## Quick start
+
+You need macOS 15+, Node.js 20+, tmux and Claude Code ([details](#requirements)).
+
+**1. Install**
+
+```sh
+git clone https://github.com/liuyoshio/lookma
+cd lookma
+npm install
+npm link
+```
+
+**2. Check** that everything is in place. Each problem comes with its fix.
+
+```sh
+lookma doctor
+```
+
+**3. Start**, with the folders it may work in.
+
+```sh
+lookma ~/Projects
+```
+
+Then just say “turn on dark mode”.
+
+> [!NOTE]
+> Voice needs an OpenAI API key: `cp .env.example .env` and set `OPENAI_API_KEY`. Without one, Lookma still works by typing (menu bar → **Type a Request…**).
+
+<details>
+<summary><b>The first start</b>: the build, three permissions and one card</summary>
+
+- **The build.** The first start compiles `Lookma.app` from source into `app/build/` with `swiftc`. It rebuilds whenever its sources change, for example after you pull.
+- **Permissions.** macOS asks for three. They belong to Lookma, not to your terminal. `lookma doctor` says what is missing, and `lookma doctor --fix` opens the right pane.
+
+  | Permission | For | Asked |
+  |---|---|---|
+  | Accessibility | reading the UI, clicking, typing | on the first start |
+  | Screen Recording | screenshots of the app it works in | on the first start |
+  | Microphone | your voice | on the first start with voice on |
+
+  After you switch on Screen Recording, macOS may want the app reopened: press Ctrl-C and run `lookma` again.
+- **The startup card.** Every start, Claude Code warns that a development channel is loaded; that is how Lookma talks to it. The warning arrives as a card: say “yes, I approve”, or click **Approve**. Decline, and Claude Code exits.
+- **One card per app.** The first time it touches an app you get “Allow controlling Notes?”. The answer is kept in `~/.lookma/apps.json`.
+- **Signing.** The build signs with your Apple Development or Developer ID certificate if you have one (click **Always Allow** if macOS asks), and ad hoc otherwise. macOS ties the Accessibility and Screen Recording grants to that signature, so with ad hoc signing you grant them again after every rebuild. An old entry can look switched on and do nothing: remove it with the minus button, then start again.
+
+</details>
+
+### Requirements
+
+| | |
+|---|---|
+| **macOS 15** or later | the main display |
+| **Xcode Command Line Tools** | `xcode-select --install`, for `swiftc` (full Xcode is not needed) |
+| **Node.js 20** or later | `brew install node` |
+| **tmux** | `brew install tmux` |
+| **[Claude Code](https://github.com/anthropics/claude-code)** 2.1.312 or later | on your `PATH`, logged in with your claude.ai account |
+| **OpenAI API key** | optional, for voice |
+
+## Using it
+
+| To | Do this |
+|---|---|
+| **Talk** | Just talk. While Lookma runs it listens; pause from the menu bar or <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd>. It answers only what is meant for it, not people talking to each other, the TV or noise. |
+| **Ask** | Say it: “Find three ramen places near the ferry and put them in a new note.” |
+| **Approve** | Say “yes, I approve”, or click **Approve**. |
+| **Decline** | “No” or “cancel”, or click **Decline**. |
+| **Change your mind** | Just say so, even mid-task. |
+| **Stop** | “Stop.” |
+| **Let it carry on** | “Go ahead”, or click **Go ahead** on the yellow tab, or pause for 3 s. |
+| **Check in** | “How’s it going?” |
+| **Pause** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd>, **Pause** in the menu bar, or say “pause”. The task stops, the voice disconnects and the microphone turns off until you resume. |
+| **Resume** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> again, or **Resume**. It listens again, and the task picks up where it stopped. |
+| **Type instead** | **Type a Request…** in the menu bar. Enter sends, Escape closes. |
+| **Quit** | **Quit** in the menu bar, or Ctrl-C in the terminal that started it. |
+
+**One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you. Talk over it to interrupt.
+
+**The menu bar seal** fills its ring while you talk, shows a pause sign while paused, and dims when the app has lost the core.
+
+**Watch the agent itself** with `tmux attach -t lookma` (detach with Ctrl-b d). You can answer its prompts there too; the card closes by itself.
+
+**From a script**, post your request to the core's `/api/tell` ([protocol](docs/protocol.md#overlay--core)).
+
+## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img src="docs/images/architecture.svg" width="100%" alt="You talk to the overlay in Lookma.app, which streams your microphone to OpenAI Realtime while it listens. The overlay passes your words to the core on 127.0.0.1. The core prompts Claude Code, the swappable executor, which calls back with hands steps. The core runs each step through the app's hands in your real apps.">
+</picture>
+
+The voice does no work: it passes your exact words to the core, which hands them to Claude Code. Claude touches the screen only through six *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act**. Files, shell commands and web searches use Claude's normal tools and show up as status lines.
+
+### A yes means yes
+
+The voice model on its own approves far too easily. So a spoken yes counts only when it is explicit (“yes, I approve”, never a lone “ok” or “approve?”), said at least 1 s after the card appeared, not the assistant's own voice, and confirmed by a separate transcript.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/consent-chart-dark.svg">
+  <img src="docs/images/consent-chart.svg" width="100%" alt="Bar chart. The voice model alone approved a lone approve-question 15 of 15 times, a go-ahead said 0.3 seconds after the card 11 of 16 times, and its own leaked voice 4 of 12 times. With Lookma's consent gate, 0 of 169 must-not cases were approved.">
+</picture>
+
+More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals and voice consent drawn out, and [the protocol](docs/protocol.md) between the pieces.
+
+## Privacy and costs
+
+- **Local.** The core listens on 127.0.0.1 only and refuses connections from web pages. No accounts, no telemetry, no servers of ours.
+- **The microphone is on while Lookma runs and is not paused**, and macOS shows its microphone indicator. Its audio streams to OpenAI the whole time, so it hears the room: pause (⌃⌥P or the menu bar) when you want privacy. Paused, the voice session is closed and nothing is sent.
+- **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_NO_VOICE=1`, nothing goes to OpenAI and the microphone stays off.
+- **Claude Code uses your Claude plan**, as usual. Its model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
+- **Nothing else leaves your Mac.** Local state is in `~/.lookma/`.
+
+**Safety.** It drives your real computer with your permissions. You allow each app once, and Claude Code's permission prompts come to you as cards. Claude is told to ask before anything irreversible or outward-facing (sending, posting, paying, deleting) that goes beyond what you said, but that is an instruction to the model, not an enforced gate. Text on screen can mislead the model, so watch it on anything that matters. For more cards, set `LOOKMA_PERMISSION_MODE=default`.
+
+## Configuration
+
+Set these in your shell or in `.env` at the repo root. Real environment variables win.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `OPENAI_API_KEY` | | Turns on voice. |
+| `LOOKMA_NO_VOICE` | | `1`: text only. Nothing is sent to OpenAI. |
+| `LOOKMA_MODEL` | `sonnet` | Claude Code model (`--model`), e.g. `opus`. |
+| `LOOKMA_PERMISSION_MODE` | `auto` | Claude Code permission mode; `default` gives more cards. |
+| `LOOKMA_CLAUDE_FLAGS` | | Extra flags for `claude`, separated by spaces. |
+| `LOOKMA_REALTIME_MODEL` | `gpt-realtime-2.1` | The voice model. |
+| `LOOKMA_VOICE` | `marin` | The voice. |
+| `LOOKMA_TRANSCRIBE_MODEL` | `gpt-4o-transcribe` | Writes down what you say, for captions and the approval check. |
+| `LOOKMA_VOICE_LANGUAGE` | detected | The language you speak, as an ISO code (`en`, `zh`, `ja`), for a better transcript. |
+| `LOOKMA_VOICE_NOISE` | `far_field` | Microphone noise reduction: `far_field` for a room, `near_field` for a headset. |
+| `LOOKMA_VOICE_MAX_TOKENS` | `200` | The longest a spoken reply can be, in tokens. |
+| `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
+| `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |
+| `LOOKMA_EXEC_SESSION` | `lookma` | The tmux session that runs Claude Code. |
+| `LOOKMA_EXECUTOR` | `claude` | The adapter in `core/executors/` to use. |
+| `LOOKMA_SIGN_IDENTITY` | your first signing identity, else ad hoc | Code signing for the app build; `-` forces ad hoc. Environment only. |
+| `LOOKMA_NO_APP` | | `1`: do not launch the app (for development). |
+
+Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }`), read on every step. How the voice and the agent behave is plain text in `prompts/butler.md` (read for every new voice session) and `prompts/executor.md` (read on the next start).
+
+## Limitations
+
+- **macOS only, main display only.**
+- **No drag-and-drop or right-click menus yet.** The hands see, click, type, press keys, scroll and open apps, URLs and files.
+- **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking, plus about 350 ms per step so you see the target first.
+- **The startup card, every time.** Lookma reaches Claude Code through a development channel (a Claude Code research preview that needs a claude.ai login).
+- **Experimental:** terminal-only dialogs are read from the tmux pane, so a Claude Code update that redraws them can break this (checked against 2.1.314 and 2.1.329). Voice approval understands English and Chinese; in other languages, click.
+- **One at a time:** one port, one tmux session.
+- **It hears the room.** It stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Pause when that matters.
+
+## Swapping the executor
+
+The agent is anything behind a small adapter in `core/executors/<name>/index.mjs`:
+
+```js
+export function create(ctx)  // ctx: { emit(event), hands(tool, args), config, log }
+  → { start({ dirs }), prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
+      connect?(ws), hook?(body) }
+```
+
+It emits `status`, `turnStart` / `turnEnd`, `step`, `say`, `task` and `approval` / `approvalGone`. On-screen steps are not part of the contract: the agent calls the hands tools, and the adapter forwards each call to `ctx.hands`. Pick one with `LOOKMA_EXECUTOR`. Codex is next. The full contract is in [docs/protocol.md](docs/protocol.md#executor-contract).
+
+## Roadmap
+
+Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with one of each. Next, in order:
+
+1. **Codex as an executor**, next to Claude Code, through the same adapter contract.
+2. **A voice provider interface**, so the voice is a plug-in like the agent is.
+3. **Gemini Live** as a second voice.
+4. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
+5. **Drag and drop, and right-click menus** for the hands.
+6. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
+
+Adapters for other agents (Gemini CLI, Aider, OpenCode, …) are very welcome. See [Swapping the executor](#swapping-the-executor) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Contributing
+
+Issues and pull requests are welcome. Keep changes small, and when you change how the pieces talk, update [docs/protocol.md](docs/protocol.md) in the same change.
+
+```sh
+npm run check      # syntax check
+npm test           # pipeline vs a fake app, dialog parsing, voice consent, turn filtering; no models called
+npm run test:e2e   # a real Claude Code session on your plan (port 8791, tmux session lookma-test)
+```
+
+The diagrams are drawn by `node docs/images/src/draw.mjs`, in a light and a dark version each.
+
+Built on [Claude Code](https://github.com/anthropics/claude-code), the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime), the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [ws](https://github.com/websockets/ws), [zod](https://zod.dev) and [tmux](https://github.com/tmux/tmux).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+<p align="center">
+  <img src="brand/seal.svg" width="56" alt=""><br>
+  <sub>Hands has no hands. Its one rule: <b>no approval, no seal.</b></sub>
+</p>

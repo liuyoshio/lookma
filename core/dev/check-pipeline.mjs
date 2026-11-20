@@ -1,0 +1,436 @@
+#!/usr/bin/env node
+// Checks the core against the fake app and a stub executor (no Claude):
+// server rules, snapshot coalescing, routing, unknown messages, the hands pipeline (grant, busy vs
+// idle, waiting plus go ahead, stale element, bad args, scroll, open, cancel, one step at a time),
+// pause and resume, and quit.
+//   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import WebSocket from 'ws'
+import { loadConfig } from '../config.mjs'
+import { createCore } from '../core.mjs'
+import { TOOL_NAMES } from '../hands.mjs'
+import { startServer } from '../server.mjs'
+import { HANDS } from '../tools.mjs'
+import { mintVoiceKey } from '../voice-key.mjs'
+import { startFakeApp } from './fake-app.mjs'
+
+const PORT = Number(process.argv[2] || 8792)
+const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'lookma-check-'))
+process.env.LOOKMA_PORT = String(PORT)
+process.env.LOOKMA_DATA = DATA
+
+let failures = 0
+function check(name, ok, detail = '') {
+  if (!ok) failures++
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`)
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+async function until(pred, ms = 3000) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(10)) {
+    const v = pred()
+    if (v) return v
+  }
+  return null
+}
+const settle = p => p.then(v => ({ ok: true, v }), e => ({ ok: false, e }))
+
+// ---------------------------------------------------------------- setup
+
+// The stub keeps the ctx the core gives an executor: emit its events, and call the hands as the
+// agent's tool calls would.
+const calls = []
+let emit, hands
+function stubExecutor(ctx) {
+  ;({ emit, hands } = ctx)
+  const rec = name => (...args) => calls.push({ name, args })
+  return {
+    start: async () => (ctx.emit({ type: 'status', status: 'ready' }), { name: 'stub' }),
+    prompt: rec('prompt'),
+    cancel: rec('cancel'),
+    answer: rec('answer'),
+    stop: async () => rec('stop')(),
+  }
+}
+
+const config = loadConfig()
+const quiet = () => {}
+const logs = [] // the core's log lines
+const log = (...args) => logs.push(args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
+// Quit in the app's menu bar: what cli.mjs's shutdown does, without process.exit.
+let quitDone = false
+async function shutdown() {
+  await core.stop()
+  server.close()
+  quitDone = true
+}
+const core = await createCore(config, { log, createExecutor: stubExecutor, onQuit: shutdown })
+const server = await startServer({ config, core, log: quiet })
+await core.startExecutor([])
+fs.writeFileSync(config.appsFile, JSON.stringify({ Notes: true, Finder: true }))
+
+const app = startFakeApp({ port: PORT, idle: 10 })
+await app.ready
+
+const overlay = new WebSocket(`ws://127.0.0.1:${PORT}/ws/overlay`, { origin: `http://127.0.0.1:${PORT}` })
+const states = []
+const events = []
+overlay.on('message', raw => {
+  const m = JSON.parse(raw)
+  ;(m.type === 'state' ? states : events).push(m)
+})
+await new Promise(r => overlay.on('open', r))
+const last = () => states[states.length - 1]
+const tellOverlay = msg => overlay.send(JSON.stringify(msg))
+await until(() => last()?.attention?.idle === 10)
+
+const post = (p, body, type = 'application/json') =>
+  fetch(`http://127.0.0.1:${PORT}${p}`, { method: 'POST', headers: { 'Content-Type': type }, body })
+
+// ---------------------------------------------------------------- server rules
+
+{
+  const r = await post('/api/tell', 'hello', 'text/plain')
+  check('POST without application/json is refused', r.status === 415, `status ${r.status}`)
+  const opened = origin =>
+    new Promise(resolve => {
+      const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/overlay`, origin ? { origin } : {})
+      ws.on('open', () => (ws.close(), resolve(true)))
+      ws.on('error', () => resolve(false))
+    })
+  check('websocket from a foreign origin is refused', !(await opened('https://example.com')))
+  check('websocket from our own origin is accepted', await opened(`http://localhost:${PORT}`))
+  check('websocket without an origin is accepted', await opened(null))
+  const s = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json()
+  check('GET /api/state is a full snapshot', ['executor', 'turn', 'focus', 'attention', 'cards', 'tasks'].every(k => k in s), Object.keys(s).join(','))
+}
+
+// ---------------------------------------------------------------- coalescing
+
+{
+  await sleep(50)
+  const before = states.length
+  for (let i = 0; i < 30; i++) core.store.update(s => (s.attention = { ...s.attention }))
+  await sleep(80)
+  check('30 changes in one frame give one snapshot', states.length - before === 1, `${states.length - before} snapshots`)
+}
+
+// ---------------------------------------------------------------- routing
+
+{
+  const r = await post('/api/tell', JSON.stringify({ text: 'open slack' }))
+  check('POST /api/tell starts a turn and prompts', r.ok && JSON.stringify(calls.at(-1)) === '{"name":"prompt","args":["open slack",{"steer":false}]}' && !!(await until(() => last().turn?.phase === 'working')), `status ${r.status}`)
+  await until(() => last().executor.status === 'busy')
+  check('executor shows busy during a turn', last().executor.status === 'busy')
+  tellOverlay({ type: 'tell', text: 'actually open notes', source: 'voice' })
+  await until(() => calls.at(-1)?.args[0] === 'actually open notes')
+  check('tell during a turn steers', JSON.stringify(calls.at(-1)?.args) === '["actually open notes",{"steer":true}]' && !!(await until(() => last().turn.sent === 'actually open notes')))
+  emit({ type: 'step', title: 'Read notes.txt' })
+  check('a step updates turn.status', !!(await until(() => last().turn.status === 'Read notes.txt')))
+  emit({ type: 'say', speech: 'On it.' })
+  check('say reaches the overlay, display and kind filled in', !!(await until(() => events.find(e => e.type === 'say' && e.speech === 'On it.' && e.display === 'On it.' && e.kind === 'info'))))
+  emit({ type: 'task', id: 'a1', title: 'Sum receipts', status: 'running' })
+  emit({ type: 'task', id: 'a1', status: 'done', result: { speech: 'Twelve thousand yen.', display: '¥12,000' } })
+  check('a finished task sends a report', !!(await until(() => events.find(e => e.type === 'report' && e.taskId === 'a1' && e.display === '¥12,000'))))
+  check('the task row is done', !!(await until(() => last().tasks.find(t => t.id === 'a1')?.status === 'done')))
+  emit({ type: 'approval', id: 'ap1', title: 'Allow Bash?', detail: 'ls' })
+  await until(() => last().cards.some(c => c.id === 'ap1'))
+  const { cards } = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json()
+  check('a card is id, title, detail, source and createdAt, nothing else', JSON.stringify(Object.keys(cards.find(c => c.id === 'ap1')).sort()) === '["createdAt","detail","id","source","title"]', JSON.stringify(cards))
+  tellOverlay({ type: 'answer', cardId: 'ap1', allow: true, via: 'voice' })
+  await until(() => calls.at(-1)?.name === 'answer')
+  check('answering an executor card goes to the executor', JSON.stringify(calls.at(-1)?.args) === '["ap1",true]' && !!(await until(() => !last().cards.some(c => c.id === 'ap1'))))
+  emit({ type: 'approval', id: 'ap2', title: 'x' })
+  await until(() => last().cards.some(c => c.id === 'ap2'))
+  emit({ type: 'approvalGone', id: 'ap2' })
+  check('approvalGone removes the card', !!(await until(() => !last().cards.some(c => c.id === 'ap2'))))
+  emit({ type: 'turnEnd', ok: true })
+  check('turnEnd ends the turn', !!(await until(() => last().turn.phase === 'done')))
+}
+
+// ---------------------------------------------------------------- unknown messages
+
+{
+  const unknown = from => logs.filter(l => l === `unknown ${from} message type "nope", ignored`).length
+  emit({ type: 'nope' })
+  emit({ type: 'nope' })
+  tellOverlay({ type: 'nope' })
+  tellOverlay({ type: 'nope' })
+  app.send({ type: 'nope' })
+  app.send({ type: 'nope' })
+  await until(() => unknown('overlay') && unknown('app'))
+  check('an unknown executor event is logged once', unknown('executor') === 1, logs.filter(l => /unknown/.test(l)).join('; '))
+  check('an unknown overlay or app message type is logged once', unknown('overlay') === 1 && unknown('app') === 1)
+}
+
+// ---------------------------------------------------------------- hands
+
+const opsSince = n => app.ops.slice(n).map(o => o.op)
+
+check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL_NAMES.join() === HANDS.map(t => t.name).join(), `${TOOL_NAMES} vs ${HANDS.map(t => t.name)}`)
+
+{
+  // Grant: yes, persisted.
+  fs.writeFileSync(config.appsFile, JSON.stringify({ Notes: true }))
+  const p = settle(hands('see', { label: 'Look at the screen' }))
+  const card = await until(() => last().cards.find(c => c.source === 'core'))
+  check('first touch of an app raises a core card', card?.title === 'Allow controlling Finder?', card?.title)
+  tellOverlay({ type: 'answer', cardId: card?.id, allow: true, via: 'click' })
+  const r = await p
+  check('grant yes: see returns image and element text', r.ok && r.v.image?.length > 100 && /App: Finder/.test(r.v.text) && /e\d+ button "Back"/.test(r.v.text))
+  check('grant yes is saved in apps.json', JSON.parse(fs.readFileSync(config.appsFile, 'utf8')).Finder === true)
+}
+
+{
+  // Grant: no.
+  const p = settle(hands('see', { label: 'Look at Slack', app: 'Slack' }))
+  const card = await until(() => last().cards.find(c => c.source === 'core'))
+  tellOverlay({ type: 'answer', cardId: card?.id, allow: false, via: 'voice' })
+  const r = await p
+  check('grant no: the step fails with a readable error', !r.ok && /did not allow controlling Slack/.test(r.e.message), r.e?.message)
+  check('grant no is saved', JSON.parse(fs.readFileSync(config.appsFile, 'utf8')).Slack === false)
+  const n = states.length
+  const again = await settle(hands('see', { label: 'Look at Slack', app: 'Slack' }))
+  await sleep(50)
+  check('a saved no fails at once, without a card', !again.ok && !states.slice(n).some(s => s.cards.length))
+}
+
+{
+  // Idle: bring the target forward, mark ~350 ms, then act.
+  app.setIdle(10)
+  await until(() => !last().attention.busy)
+  const n = app.ops.length
+  const r = await settle(hands('see', { label: 'Look at Notes', app: 'Notes' }))
+  const ops = app.ops.slice(n)
+  const resolveAt = ops.find(o => o.op === 'resolve')?.at
+  const seeAt = ops.find(o => o.op === 'see')?.at
+  check('idle: see of a background app brings it forward', r.ok && JSON.stringify(opsSince(n).slice(0, 3)) === '["resolve","front","see"]', opsSince(n).join(','))
+  check('idle: ~350 ms between resolve and act', seeAt - resolveAt >= 340, `${seeAt - resolveAt} ms`)
+  check('idle: focus is done and not background', !!(await until(() => last().focus?.phase === 'done' && last().focus.background === false && last().focus.app === 'Notes')))
+  const id = app.elementIds().find(Boolean)
+  const c = await settle(hands('click', { label: 'Press New Note', element: id }))
+  check('click on a pressable element uses AX press', c.ok && app.ops.at(-2)?.op === 'press' && /Frontmost: Notes/.test(c.v.text), c.v?.text || c.e?.message)
+}
+
+{
+  // Busy: see works in the background; type waits until the user stops.
+  app.setIdle(0)
+  await until(() => last().attention.busy)
+  const n = app.ops.length
+  const r = await settle(hands('see', { label: 'Look at Finder', app: 'Finder' }))
+  check('busy: see proceeds in the background without front', r.ok && !opsSince(n).includes('front') && last().focus.background === true, opsSince(n).join(','))
+
+  const m = app.ops.length
+  const p = settle(hands('type', { label: 'Type the title', text: 'hello' }))
+  const waiting = await until(() => last().focus?.phase === 'waiting' && last().focus.action === 'type')
+  await sleep(300)
+  check('busy: type waits with focus.phase waiting', !!waiting && !opsSince(m).includes('type'), opsSince(m).join(','))
+  app.setIdle(5)
+  const t = await p
+  check('busy: type goes ahead once the user is idle', t.ok && opsSince(m).includes('type') && /Typed 5 characters/.test(t.v.text), t.v?.text || t.e?.message)
+}
+
+{
+  // Waiting plus go ahead.
+  app.setIdle(0)
+  await until(() => last().attention.busy)
+  const m = app.ops.length
+  const p = settle(hands('key', { label: 'New tab', combo: 'cmd+t' }))
+  await until(() => last().focus?.phase === 'waiting' && last().focus.action === 'key')
+  tellOverlay({ type: 'goAhead' })
+  const r = await p
+  check('waiting plus go ahead: "go ahead" lets the step act while busy', r.ok && opsSince(m).includes('key'), r.v?.text || r.e?.message)
+}
+
+{
+  // Stale element.
+  app.setIdle(10)
+  await until(() => !last().attention.busy)
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const old = app.elementIds()[0]
+  await hands('see', { label: 'Look again', app: 'Finder' })
+  const r = await settle(hands('click', { label: 'Press Back', element: old }))
+  check('stale element: a readable error that says to call see again', !r.ok && /call see again/.test(r.e.message), r.e?.message)
+}
+
+{
+  // One step at a time.
+  const n = app.ops.length
+  await Promise.all([hands('see', { label: 'A', app: 'Finder' }), hands('see', { label: 'B', app: 'Notes' })])
+  const seq = opsSince(n).filter(op => op === 'resolve' || op === 'see').join(',')
+  check('two calls run one after the other, not interleaved', seq === 'resolve,see,resolve,see', seq)
+}
+
+{
+  // Open an app from the Dock.
+  fs.writeFileSync(config.appsFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(config.appsFile, 'utf8')), 'Google Chrome': true }))
+  const n = app.ops.length
+  const r = await settle(hands('open', { label: 'Open Chrome', app: 'Google Chrome' }))
+  check('open app: resolve the Dock item, then click it', r.ok && JSON.stringify(app.ops.slice(n, n + 2).map(o => [o.op, Object.keys(o.args)[0]])) === '[["resolve","dock"],["click","point"]]' && /Frontmost: Google Chrome/.test(r.v.text), r.v?.text || r.e?.message)
+}
+
+{
+  // Bad args fail with a readable error before anything reaches the app.
+  const n = app.ops.length
+  const bad = [
+    ['click', {}, /click needs an element id or a point/],
+    ['scroll', { direction: 'sideways' }, /scroll needs a direction/],
+    ['type', {}, /type needs text/],
+    ['key', {}, /key needs a combo/],
+    ['open', {}, /open needs an app, a url or a path/],
+    ['drag', {}, /Unknown hands tool: drag/],
+  ]
+  const wrong = []
+  for (const [tool, args, msg] of bad) {
+    const r = await settle(hands(tool, { label: 'x', ...args }))
+    if (r.ok || !msg.test(r.e.message)) wrong.push(`${tool}: ${r.ok ? 'ok' : r.e.message}`)
+  }
+  check('bad args: a readable error per tool, and nothing sent to the app', wrong.length === 0 && app.ops.length === n, wrong.join('; ') || opsSince(n).join(','))
+}
+
+{
+  // Scroll: at an element, at a point, or in the app of the last step.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const scrolled = async args => {
+    const n = app.ops.length
+    const r = await settle(hands('scroll', { label: 'Scroll', ...args }))
+    return { r, resolve: app.ops.slice(n).find(o => o.op === 'resolve')?.args, scroll: app.ops.slice(n).find(o => o.op === 'scroll')?.args }
+  }
+  const el = await scrolled({ element: app.elementIds()[0], direction: 'down' })
+  check('scroll at an element: at its point, 3 steps by default', el.r.ok && el.resolve?.element === app.elementIds()[0] && el.scroll?.amount === 3 && el.scroll.direction === 'down' && Array.isArray(el.scroll.point) && /Scrolled down in Finder/.test(el.r.v.text), el.r.v?.text || el.r.e?.message)
+  const pt = await scrolled({ point: [100, 50], direction: 'up', amount: 5 })
+  check('scroll at a point of the screenshot', pt.r.ok && JSON.stringify(pt.resolve?.point) === '[100,50]' && pt.scroll?.amount === 5, pt.r.v?.text || pt.r.e?.message)
+  const cur = await scrolled({ direction: 'left' })
+  check('scroll with no target: in the app of the last step', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left', JSON.stringify(cur.resolve))
+}
+
+{
+  // Open a url or a path: nothing to resolve; the system opens it in its app.
+  const n = app.ops.length
+  const u = await settle(hands('open', { label: 'Open the site', url: 'https://example.com' }))
+  check('open url: no resolve, the system opens it', u.ok && app.ops[n]?.op === 'open' && app.ops[n].args.url === 'https://example.com' && /Opened https:\/\/example.com in Google Chrome/.test(u.v.text), u.v?.text || u.e?.message)
+  const m = app.ops.length
+  const p = await settle(hands('open', { label: 'Open the folder', path: '/tmp' }))
+  check('open path: the system opens it', p.ok && app.ops[m]?.op === 'open' && app.ops[m].args.path === '/tmp' && /Opened \/tmp in Finder/.test(p.v.text), p.v?.text || p.e?.message)
+}
+
+{
+  // Cancel while waiting, and while a grant card is up.
+  tellOverlay({ type: 'tell', text: 'type something', source: 'voice' })
+  await until(() => last().turn?.phase === 'working')
+  app.setIdle(0)
+  await until(() => last().attention.busy)
+  const p = settle(hands('type', { label: 'Type', text: 'x' }))
+  const q = settle(hands('see', { label: 'queued', app: 'Finder' }))
+  await until(() => last().focus?.phase === 'waiting')
+  tellOverlay({ type: 'cancel' })
+  const [r, r2] = await Promise.all([p, q])
+  check('cancel: the waiting step fails with "Cancelled"', !r.ok && /Cancelled/.test(r.e.message), r.e?.message)
+  check('cancel: queued steps are dropped too', !r2.ok && /Cancelled/.test(r2.e.message))
+  check('cancel: executor cancelled and turn cancelled', calls.some(c => c.name === 'cancel') && !!(await until(() => last().turn.phase === 'cancelled')))
+
+  app.setIdle(10)
+  fs.writeFileSync(config.appsFile, JSON.stringify({ Finder: true }))
+  const g = settle(hands('see', { label: 'Look at Notes', app: 'Notes' }))
+  await until(() => last().cards.some(c => c.source === 'core'))
+  tellOverlay({ type: 'cancel' })
+  const b = await g
+  check('cancel: a pending grant card is withdrawn', !b.ok && /Cancelled/.test(b.e.message) && !!(await until(() => !last().cards.some(c => c.source === 'core'))), b.e?.message)
+  check('cancel: a cancelled grant is not saved', !('Notes' in JSON.parse(fs.readFileSync(config.appsFile, 'utf8'))))
+}
+
+// ---------------------------------------------------------------- pause, resume
+
+let app2
+{
+  check('on connect the app is told whether the core is paused', JSON.stringify(app.notices[0]) === '{"type":"paused","paused":false}', JSON.stringify(app.notices[0]))
+
+  // Pause while a step waits for the front and another is queued: the turn stops as with "stop".
+  app.setIdle(0)
+  await until(() => last().attention.busy)
+  tellOverlay({ type: 'tell', text: 'write the summary', source: 'voice' })
+  await until(() => last().turn?.phase === 'working' && last().turn.sent === 'write the summary')
+  const count = name => calls.filter(c => c.name === name).length
+  const cancels = count('cancel')
+  const p = settle(hands('type', { label: 'Type', text: 'x' }))
+  const q = settle(hands('see', { label: 'queued', app: 'Finder' }))
+  await until(() => last().focus?.phase === 'waiting')
+  tellOverlay({ type: 'pause' })
+  const [r, r2] = await Promise.all([p, q])
+  check('pause: the waiting step fails and the queued one is dropped', !r.ok && /Cancelled/.test(r.e.message) && !r2.ok && /Cancelled/.test(r2.e.message), r.e?.message)
+  check('pause: the executor is cancelled and the turn too', count('cancel') === cancels + 1 && !!(await until(() => last().turn.phase === 'cancelled')))
+  check('pause: paused is in the snapshot', !!(await until(() => last().paused === true)))
+  check('pause: the app is told', !!(await until(() => JSON.stringify(app.notices.at(-1)) === '{"type":"paused","paused":true}')))
+
+  // While paused: no hands, no new work.
+  app.setIdle(10)
+  const n = app.ops.length
+  const h = await settle(hands('see', { label: 'Look', app: 'Finder' }))
+  check('paused: the hands refuse a step without touching the app', !h.ok && /paused/.test(h.e.message) && app.ops.length === n, h.e?.message)
+  const t = await post('/api/tell', JSON.stringify({ text: 'open notes' }))
+  check('paused: a tell is refused, saying how to resume', t.status === 409 && /Resume from the menu bar/.test((await t.json()).error), `status ${t.status}`)
+
+  // An app that connects while paused learns it at once.
+  app.close()
+  app2 = startFakeApp({ port: PORT, idle: 10 })
+  await app2.ready
+  check('an app connecting while paused is told so', !!(await until(() => JSON.stringify(app2.notices[0]) === '{"type":"paused","paused":true}')), JSON.stringify(app2.notices[0]))
+
+  // Resume from the app (the menu bar or ⌃⌥P): the interrupted turn goes on.
+  const prompts = count('prompt')
+  app2.send({ type: 'resume' })
+  check('resume: paused clears and the app is told', !!(await until(() => last().paused === false)) && !!(await until(() => JSON.stringify(app2.notices.at(-1)) === '{"type":"paused","paused":false}')))
+  await until(() => count('prompt') > prompts)
+  check('resume: the turn pause interrupted is told to continue', count('prompt') === prompts + 1 && calls.filter(c => c.name === 'prompt').at(-1).args[0] === 'Continue where you left off.' && !!(await until(() => last().turn?.phase === 'working' && last().turn.sent === 'Continue where you left off.')))
+  emit({ type: 'turnEnd', ok: true })
+  await until(() => last().turn.phase === 'done')
+
+  // Pause with no turn working, then resume: nothing is cancelled or told.
+  const before = calls.length
+  tellOverlay({ type: 'pause' })
+  await until(() => last().paused === true)
+  tellOverlay({ type: 'pause' }) // already paused: nothing changes
+  app2.send({ type: 'resume' })
+  await until(() => last().paused === false)
+  await sleep(50)
+  check('pause and resume with no turn working: nothing is cancelled or told', calls.length === before, calls.slice(before).map(c => c.name).join(','))
+}
+
+// Voice key: without voice or a key, a clear error with its HTTP status and no network call.
+{
+  const off = await settle(mintVoiceKey({ ...config, voice: { ...config.voice, enabled: false } }))
+  const noKey = await settle(mintVoiceKey({ ...config, voice: { ...config.voice, enabled: true, apiKey: '' } }))
+  check('voice key: voice off or no key is a 503 with a reason', off.e?.status === 503 && /voice is off/.test(off.e.message) && noKey.e?.status === 503 && /OPENAI_API_KEY/.test(noKey.e.message))
+}
+
+// Minting one calls the user's OpenAI account, so only with LOOKMA_LIVE_TESTS=1. Never printed.
+if (process.env.LOOKMA_LIVE_TESTS === '1') {
+  const r = await post('/api/voice-key', '{}')
+  const body = await r.json()
+  const exists = f => fs.existsSync(path.join(config.root, 'prompts', f))
+  if (exists('butler.md') && exists('butler-tools.json')) {
+    check('voice key minted', r.status === 200 && typeof body.value === 'string' && body.value.length > 10 && !!body.expiresAt, `status ${r.status} ${body.error || ''}`)
+  } else {
+    check('voice key fails clearly while prompts are missing', r.status >= 400 && /prompts\/butler/.test(body.error || ''), `status ${r.status}: ${body.error}`)
+  }
+}
+
+// ---------------------------------------------------------------- quit
+
+{
+  app2.send({ type: 'quit' })
+  await until(() => quitDone)
+  const listening = await fetch(`http://127.0.0.1:${PORT}/api/state`).then(() => true, () => false)
+  check('quit from the app: the core runs its shutdown', quitDone)
+  check('quit: the app is told to quit and the executor stops', app2.notices.at(-1)?.type === 'quit' && calls.at(-1)?.name === 'stop', `${JSON.stringify(app2.notices.at(-1))} ${calls.at(-1)?.name}`)
+  check('quit: the server stops listening', !listening)
+}
+
+// ---------------------------------------------------------------- done
+
+overlay.close()
+app2.close()
+fs.rmSync(DATA, { recursive: true, force: true })
+console.log(failures ? `${failures} FAILED` : 'all passed')
+process.exit(failures ? 1 : 0)

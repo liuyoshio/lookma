@@ -1,0 +1,45 @@
+[
+  {
+    "type": "function",
+    "name": "do",
+    "description": "Do what the user asked: look things up, read files, operate the computer or apps, fill in forms, make documents. Also for additions and changes of mind about the work in progress. You do the work yourself; your progress and results come back as updates from your work. Call it silently, with nothing said before or after.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "What to do, in the user's language, with their names, numbers and dates exact"
+        }
+      },
+      "required": [
+        "task"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "status",
+    "description": "Check how the work is going: the current request, what is happening on screen, pending approvals and background tasks. Use it when the user asks how it's going.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "type": "function",
+    "name": "answer",
+    "description": "Answer the pending approval request. allow=true only right after the user explicitly approved with a yes and an approval word (\"yes, I approve\", \"yes, go ahead\", \"yes, do it\", \"OK, do it\", \"approved, do it\", \"I approve\"). allow=false after a clear no. For anything else (a lone approve or go ahead, hesitation, a question, ok/yeah/sure, unclear audio) do not call this; ask again. An error result means nothing was approved.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "boolean",
+          "description": "true approves, false declines"
+        }
+      },
+      "required": [
+        "allow"
+      ]
+    }
+  }
+]

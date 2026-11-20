@@ -1,0 +1,170 @@
+// What the user's words are allowed to do. Pure functions, no DOM, so they can be
+// tested in Node against recorded transcripts (overlay/dev/consent-check.mjs).
+//
+// Which turns get an answer (worthAnswering). Always listening, the server's VAD ends a turn at
+// every pause, for speech and noise alike. The page asks for a reply only when the turn's
+// transcript could be said to the butler: not silence, not hesitation alone ("um", "hmm"), not a
+// lone short fragment ("Tja", "you"), which is how noise and far-off speech come out. Short real
+// answers and commands ("stop", "no", "yes") are kept. With no transcript in time, the turn
+// is answered anyway: the model heard the audio itself.
+//
+// Approvals, from the voice-consent experiments (data in overlay/dev/fixtures/voice-consent). The spoken protocol is
+// "yes, I approve", in English. A voiced approval (allow=true) is sent only when
+// all of these hold:
+//   1. the butler model called answer(allow=true); it heard the audio itself;
+//   2. the user turn that led to the call started at least MIN_CARD_MS after the card
+//      was rendered: nobody approves a card they have not seen, and a "go ahead" meant
+//      for something else when the card popped up does not count;
+//   3. it cannot be the butler's own voice: an answer said over the butler (barge-in)
+//      counts, because users answer as soon as they see the card, unless what the
+//      butler was saying itself contains an approval phrase ("say yes, I approve"):
+//      then its voice leaking into the mic would sound like the user approving. The
+//      butler is told to ask with just "Approve?", so this rarely bites;
+//   4. that turn's own transcript is an explicit approval (isExplicitApproval):
+//      a. only words from the lists below: anything unknown, in any language, fails
+//         closed ("wait", "don't", "not yet", "approve?", a garbled transcript);
+//      b. no question mark;
+//      c. an approval word that is not alone: with a yes-word ("yes, I approve",
+//         "OK, do it"), with a second approval phrase ("approved, do it"),
+//         or in the first person ("I approve"). A lone "approve" or "go ahead"
+//         is also how people ask back, and when the voice barely rises neither
+//         the model nor the transcriber hears the question.
+// The model (audio) and the transcriber (text) are two independent ears; both must hear
+// an explicit approval.
+//
+// Declines get the same checks 2-4, with an explicit "no" instead (isExplicitDecline):
+// a wrong "no" is not free either. It interrupts Claude's turn, and on a startup card it
+// shuts Claude Code down (seen live: the echo "Sure.", heard over the butler's question,
+// declined the development-channel card). Anything unclear asks again.
+
+export const MIN_CARD_MS = 1000
+export const TRANSCRIPT_WAIT_MS = 3000
+
+// Approval phrases. FIRST_PERSON ones are complete on their own.
+const APPROVAL = ['approve', 'approved', 'go ahead', 'do it']
+const FIRST_PERSON = ['i approve']
+// Yes-words make a lone approval phrase an answer. They never approve on their own.
+const YES = ['yes', 'yeah', 'yep', 'ok', 'okay', 'sure', 'alright', 'all right']
+// Allowed around the others; they count for nothing.
+const FILLER = ['please', 'it', 'that', 'this', 'now', 'then', 'just', 'so', 'and', 'right']
+
+// Decline phrases: the whole utterance must be made of these and fillers.
+const DECLINE = ['no', 'nope', 'decline', 'declined', 'deny', "don't", 'do not', 'cancel', 'reject', 'not now',
+  'no thanks', 'no thank you']
+
+const sortLongestFirst = list => list.sort((a, b) => b[0].length - a[0].length) // "approved" before "approve"
+const APPROVE_TABLE = sortLongestFirst([
+  ...APPROVAL.map(p => [p, 'approval']),
+  ...FIRST_PERSON.map(p => [p, 'first']),
+  ...YES.map(p => [p, 'yes']),
+  ...FILLER.map(p => [p, 'filler']),
+])
+const DECLINE_TABLE = sortLongestFirst([...DECLINE.map(p => [p, 'decline']), ...FILLER.map(p => [p, 'filler'])])
+const LATIN = /[a-z0-9']/
+
+// Counts per kind when every word of the utterance is in the table; null when any word is
+// not (unknown words, in any language, fail closed) or when it is a question.
+function classify(text, table) {
+  if (typeof text !== 'string' || /\?/.test(text)) return null
+  const s = text.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}'\s]/gu, ' ').replace(/\s+/g, ' ').trim()
+  const n = {}
+  let i = 0
+  while (i < s.length) {
+    if (s[i] === ' ') { i++; continue }
+    const hit = table.find(([p]) => s.startsWith(p, i) && !(LATIN.test(p.at(-1)) && LATIN.test(s[i + p.length] ?? '')))
+    if (!hit) return null
+    n[hit[1]] = (n[hit[1]] || 0) + 1
+    i += hit[0].length
+  }
+  return n
+}
+
+// Words of an utterance, lowercased; CJK text becomes single characters.
+export const words = text => (text || '').toLowerCase().replace(/[’`]/g, "'")
+  .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu, ' $& ')
+  .split(/[^\p{L}\p{N}']+/u).filter(Boolean)
+
+/** Rule 3: true when the butler's words contain an approval phrase its echo could pass for. */
+export function voicesApproval(butlerSaid) {
+  const t = (butlerSaid || '').toLowerCase()
+  const w = new Set(words(t))
+  const approval = w.has('approve') || w.has('approved') || /\bgo ahead\b|\bdo it\b/.test(t)
+  return approval && ['yes', 'yeah', 'yep', 'ok', 'okay', 'sure', 'alright', 'i'].some(y => w.has(y))
+}
+
+/** True when the whole utterance is an explicit approval (rule 4). */
+export function isExplicitApproval(text) {
+  const n = classify(text, APPROVE_TABLE)
+  return !!n && (n.first > 0 || (n.approval > 0 && (n.yes > 0 || n.approval > 1)))
+}
+
+/** True when the whole utterance is an explicit no ("no", "cancel", "don't"). */
+export function isExplicitDecline(text) {
+  const n = classify(text, DECLINE_TABLE)
+  return !!n && n.decline > 0
+}
+
+// What the butler is told on a refusal. Generic on purpose: it reads its tool results
+// aloud, so the cause (and the user's words) stay in `why`, for logs only.
+const NOT_YET = 'Nothing was sent: the user has not answered this request yet. Ask them, then wait for the answer.'
+const ASK_AGAIN = 'Nothing was approved. If the user asked something, answer it. Then ask again in a few words ending with "Approve?". Do not say the approval phrase yourself: it is on the card.'
+
+/**
+ * Decide whether a voiced answer to a card may be sent.
+ * @param {object}  a
+ * @param {boolean} a.allow      what the butler wants to answer
+ * @param {number}  a.shownAt    when the overlay rendered the card (ms)
+ * @param {object}  [a.turn]     the user turn that led to the call:
+ *                               { startedAt: ms (speech_started arrival), overButler: boolean, transcript: string|null }
+ * @returns {{ ok: true } | { ok: false, why: string, reason: string }}
+ *          `why` is for logs; `reason` goes back to the butler as the tool's error.
+ */
+export function judgeAnswer({ allow, shownAt, turn }) {
+  if (!turn || !(turn.startedAt > shownAt)) return { ok: false, why: 'no answer yet', reason: NOT_YET }
+  const why =
+    turn.startedAt - shownAt < MIN_CARD_MS ? 'card too new' :
+    turn.overButler && voicesApproval(turn.butlerSaid) ? 'said over the butler voicing an approval' :
+    turn.transcript == null ? 'no transcript' :
+    !(allow ? isExplicitApproval : isExplicitDecline)(turn.transcript) ? 'not explicit' : ''
+  return why ? { ok: false, why, reason: ASK_AGAIN } : { ok: true }
+}
+
+// Short control words that act at once, without waiting for the butler.
+const norm = s => s.toLowerCase().replace(/[.,!\s]+/g, ' ').trim()
+const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|please|now|alright) )*`
+const STOP = new RegExp(String.raw`^${LEAD}(stop|stop it|stop that|cancel|cancel that|cancel it|abort)(?: please)?$`)
+const GO = new RegExp(String.raw`^${LEAD}(go ahead|continue|go on|carry on|keep going)(?: please)?$`)
+const PAUSE = new RegExp(String.raw`^${LEAD}(pause|pause listening)(?: please)?$`)
+
+/**
+ * A whole utterance that is just "stop", "go ahead" or "pause" becomes a command.
+ * With a card up, words answer the card instead. There is no spoken resume: paused, the mic is off.
+ * @returns {'cancel' | 'goAhead' | 'pause' | null}
+ */
+export function commandFor(text, state) {
+  const t = norm(text || '')
+  if (!t || state?.cards?.length) return null
+  if (STOP.test(t) && state?.turn?.phase === 'working') return 'cancel'
+  if (GO.test(t) && state?.focus?.phase === 'waiting') return 'goAhead'
+  if (PAUSE.test(t) && !state?.paused) return 'pause'
+  return null
+}
+
+// ------------------------------------------------------------ which turns get an answer
+
+export const TURN_WAIT_MS = 2500 // a turn whose transcript has not come by then is answered anyway
+
+// Hesitation: a turn of only these is not a request.
+const HESITATION = new Set(['um', 'umm', 'uh', 'uhh', 'uhm', 'er', 'erm', 'eh', 'ah', 'oh', 'hm', 'hmm', 'mm', 'mmm', 'mhm', 'huh'])
+// Real one-word turns short enough to pass for noise: answers, commands, questions.
+const SHORT = new Set(['yes', 'yeah', 'yep', 'yup', 'no', 'nope', 'nah', 'ok', 'okay', 'sure', 'fine', 'stop', 'wait', 'go', 'next',
+  'back', 'undo', 'done', 'skip', 'deny', 'help', 'more', 'hi', 'hey', 'what', 'why', 'how', 'who', 'one', 'two', 'six', 'ten'])
+
+/** Whether a heard turn gets a reply. null: no transcript (yet), so the model's own ears decide. */
+export function worthAnswering(transcript) {
+  if (transcript == null) return true
+  const w = words(transcript).filter(x => !HESITATION.has(x))
+  if (w.length !== 1) return w.length > 1 // nothing, or only hesitation: no reply
+  const [x] = w
+  return SHORT.has(x) || /^\d+$/.test(x) || x.length > (/\p{Script=Latin}/u.test(x) ? 4 : 1)
+}

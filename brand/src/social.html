@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lookma social card</title>
+<style>
+  :root { --coral:#FF805C; --deep:#E9603A; --ink:#1B1B1F; --paper:#F7F2EC; --muted:#6E6762;
+          --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif; }
+  * { margin:0; padding:0; box-sizing:border-box }
+  html, body { width:1280px; height:640px; overflow:hidden; background:var(--paper); font-family:var(--sans); color:var(--ink) }
+  .card { position:relative; width:1280px; height:640px }
+  .text { position:absolute; left:104px; top:0; bottom:0; display:flex; flex-direction:column; justify-content:center; gap:0 }
+  .name { font-size:148px; font-weight:800; letter-spacing:-0.05em; line-height:1; margin-left:-6px }
+  .tag { margin-top:26px; font-size:50px; font-weight:700; letter-spacing:-0.025em; color:var(--deep) }
+  .line { margin-top:22px; font-size:31px; font-weight:500; letter-spacing:-0.01em; color:var(--muted) }
+  .disc { position:absolute; left:655px; top:30px; width:580px; height:580px; border-radius:50%; background:#FBE3D9 }
+  .seal { position:absolute; right:80px; top:36px; width:560px; height:560px }
+</style></head>
+<body><div class="card">
+  <div class="disc"></div>
+  <img class="seal" src="seal.svg" alt="">
+  <div class="text">
+    <div class="name">Lookma</div>
+    <div class="tag">Look ma, no hands.</div>
+    <div class="line">The AI agent that actually uses your Mac,<br>right where you can watch.</div>
+  </div>
+</div></body></html>

@@ -1,0 +1,40 @@
+
+❯ Write a numbered list from 1 to 30, each item one short sentence about the sea, format "N. sentence". No tools.
+
+⏺ 1. The sea covers more than seventy percent of Earth's surface.
+  2. Waves are created by wind passing over the water.
+  3. Salt in the ocean comes from minerals dissolved over millions of years.
+  4. Coral reefs support more marine life than any other ocean habitat.
+  5. Dolphins are highly intelligent marine mammals.
+  6. The deepest part of the ocean is the Mariana Trench.
+  7. Tides are caused by the moon's gravitational pull.
+  8. Sharks have existed in the ocean for over 400 million years.
+  9. Phytoplankton produce about half of Earth's oxygen.
+  10. The ocean absorbs carbon dioxide from the atmosphere.
+  11. Sea turtles migrate thousands of miles across the ocean.
+  12. Kelp forests grow along cold-water coastlines.
+  13. The Gulf Stream carries warm water across the Atlantic Ocean.
+  14. Bioluminescent creatures glow in the deep sea darkness.
+  15. Jellyfish have lived in oceans for over 500 million years.
+  16. Ocean currents transport nutrients and heat around the globe.
+  17. Whales migrate seasonally between feeding and breeding grounds.
+  18. The ocean produces three billion tons of food annually.
+  19. Sea stars can regenerate lost arms over time.
+  20. Volcanic activity creates underwater mountain ranges called ridges.
+  21. Seagrass meadows are home to countless marine species.
+  22. The ocean floor contains more mountains than all land mountains.
+  23. Plastic pollution is harming marine ecosystems worldwide.
+  24. Seahorses are unique fish that mate for life.
+  25. The ocean's pressure increases significantly with depth.
+  26. Mangrove forests protect coastlines from storms and erosion.
+  27. Fish schools move together using complex communication.
+  28. The ocean's pH is becoming more acidic due to carbon dioxide.
+  29. Pearl formation begins when irritants enter an oyster shell.
+  30. Humans have explored only five percent of the ocean.
+
+✻ Crunched for 6s · done 9:25 AM
+                                                                                ✔ Update installed · /restart to apply
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

@@ -1,0 +1,40 @@
+▝▜██████▀  Haiku 5.5
+ ▝▝   ▝▝   ~/src/example/playground/termkeys/scratch/a
+
+
+❯ Trial 1: run the bash command ls /tmp once and reply with only the number of entries. No other tools.
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ 327
+
+✻ Baked for 10s · done 9:31 AM
+
+❯ Trial 2: run the bash command ls /tmp once and reply with only the number of entries. No other tools.
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ 327
+
+✻ Cogitated for 3s · done 9:31 AM
+
+❯ Run the bash command ls /tmp once and reply with only the number of entries.
+
+  Listing 1 directory… (ctrl+o to expand)
+  ⎿  $ ls /tmp
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ List entries in /tmp
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ ls /tmp
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, allow reading from /private/tmp from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend
+

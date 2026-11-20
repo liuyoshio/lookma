@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+<title>Lookma</title>
+<defs><clipPath id="c"><rect width="32" height="32"/></clipPath></defs>
+<g clip-path="url(#c)">
+<path d="M-0.5 36.4L4.4 19.3A10 10 0 0 1 24 21.4L25 39.3A13 13 0 1 1 -0.5 36.4Z" fill="#FF805C"/>
+<circle cx="12" cy="25" r="2" fill="#FFC6B2"/>
+<circle cx="16" cy="25" r="2" fill="#FFC6B2"/>
+<ellipse cx="14" cy="23" rx="1.6" ry="1.1" fill="#1B1B1F"/>
+<circle cx="10" cy="20" r="2" fill="#1B1B1F"/>
+<circle cx="18" cy="20" r="2" fill="#1B1B1F"/>
+<circle cx="10.8" cy="19.2" r="0.7" fill="#FFFFFF"/>
+<circle cx="18.8" cy="19.2" r="0.7" fill="#FFFFFF"/>
+<circle cx="22" cy="8" r="4.5" fill="none" stroke="#FF805C" stroke-width="3"/>
+</g>
+</svg>

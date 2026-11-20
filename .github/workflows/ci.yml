@@ -1,0 +1,46 @@
+# Lookma is macOS only, and so is CI: package.json declares "os": ["darwin"], which makes
+# npm ci refuse other platforms. No secrets: nothing here calls OpenAI or Claude.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  app:
+    name: Swift app
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: swiftc --version
+      - name: Build Lookma.app, signed ad hoc
+        run: app/build.sh
+        env:
+          LOOKMA_SIGN_IDENTITY: '-'

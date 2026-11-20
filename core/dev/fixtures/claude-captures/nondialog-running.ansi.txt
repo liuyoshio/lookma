@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.314[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mHaiku 4.5[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m~/src/example/playground/termkeys/scratch/b[39m
+
+
+[38;5;246m[48;5;237m❯[39m [38;5;231m/model[39m
+[38;5;246m[49m  ⎿  [39mSet model to [38;5;153mHaiku 4.5[39m for this session only
+
+[38;5;246m[48;5;237m❯ [38;5;231mReply with a numbered list of exactly four fruits, formatted as "1. Apple" etc, and nothing else. Do not use tools.[39m
+
+[38;5;231m[49m⏺[39m 1. Apple
+  2. Banana
+  3. Orange
+  4. Strawberry
+
+[38;5;246m✻[39m [38;5;246mChurned for 2s · done 9:24 AM[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mWrite a numbered list from 1 to 30, each item one short sentence about the sea, format "N. sentence". No tools.[39m
+
+
+[49m
+
+
+
+
+
+
+
+
+
+
+
+[38;5;174m✶[39m [38;5;174mFlutte[38;5;216mrin[38;5;174mg… [38;5;246m(2s · [38;5;249mthinking[38;5;246m)[39m
+[38;5;246m  ⎿  Tip: Use ctrl+v to paste images from your clipboard[39m
+                                                 [38;5;246mCtrl+Y to paste deleted text ·[39m [38;5;114m✔ Update installed · /restart to apply[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on · esc to interrupt[39m

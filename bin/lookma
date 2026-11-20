@@ -1,0 +1,6 @@
+#!/bin/sh
+# The lookma command. Everything is in core/cli.mjs (see lookma --help); this only finds Node, so
+# that a missing one gets a message instead of "node: command not found".
+command -v node >/dev/null || { echo "lookma: needs Node.js (brew install node)" >&2; exit 1; }
+ROOT=$(dirname "$(dirname "$(realpath "$0")")")
+exec node "$ROOT/core/cli.mjs" "$@"

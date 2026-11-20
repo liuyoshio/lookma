@@ -1,0 +1,60 @@
+{
+  "name": "lookma",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Talk to your Mac. Watch it work. A voice-driven agent that operates your real screen in plain sight.",
+  "keywords": [
+    "macos",
+    "voice",
+    "agent",
+    "computer-use",
+    "accessibility",
+    "overlay",
+    "automation",
+    "claude-code",
+    "realtime"
+  ],
+  "license": "MIT",
+  "author": "Jiawei Liu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuyoshio/lookma.git"
+  },
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=20.15"
+  },
+  "bin": {
+    "lookma": "bin/lookma"
+  },
+  "files": [
+    "bin/",
+    "core/",
+    "app/Sources/",
+    "app/Resources/",
+    "app/build.sh",
+    "app/Info.plist",
+    "overlay/",
+    "!overlay/dev/shots/",
+    "!overlay/dev/.chrome/",
+    "prompts/",
+    "docs/protocol.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "start": "node core/cli.mjs start",
+    "check": "for f in core/*.mjs core/executors/*/*.mjs core/dev/*.mjs overlay/*.js overlay/dev/*.mjs; do node --check $f || exit 1; done",
+    "test": "node core/dev/check-pipeline.mjs && node core/dev/check-claude.mjs && node overlay/dev/consent-check.mjs",
+    "test:overlay": "node overlay/dev/voice-check.mjs && node overlay/dev/shoot.mjs",
+    "test:e2e": "node core/dev/e2e.mjs",
+    "fake-app": "node core/dev/fake-app.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ws": "^8.23.0",
+    "zod": "^4.0.0"
+  }
+}

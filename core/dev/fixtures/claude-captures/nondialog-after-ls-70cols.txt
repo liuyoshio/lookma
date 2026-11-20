@@ -1,0 +1,30 @@
+❯ Closed D: run the bash command ls /tmp, wait for its result, then
+  run ls /tmp again as a second, separate call (not in parallel).
+  Reply with only the two counts. No other tools.
+
+  Listed 2 directories
+
+⏺ 327
+  327
+
+✻ Cooked for 5s · done 9:52 AM
+
+❯ Closed C: run the bash command ls /tmp once and reply with only the
+  number of entries. No other tools.
+
+  Listed 1 directory
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ Narrow: run the bash command ls /tmp once and reply with only the
+  number of entries. No other tools.
+
+  Listed 1 directory
+
+⏺ 327
+
+✻ Baked for 8s · done 9:52 AM
+
+──────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

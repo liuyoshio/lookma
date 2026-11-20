@@ -1,0 +1,26 @@
+# The style the code already has. JS: two spaces, single quotes, no semicolons
+# (EditorConfig has no setting for semicolons). Swift: four spaces.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{js,mjs}]
+quote_type = single
+
+[*.swift]
+indent_size = 4
+
+# Info.plist is indented with tabs, as Xcode writes it.
+[*.plist]
+indent_style = tab
+
+# Recorded terminal screens and voice runs stay byte for byte as captured.
+[**/fixtures/**]
+trim_trailing_whitespace = false
+insert_final_newline = unset

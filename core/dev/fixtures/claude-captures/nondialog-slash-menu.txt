@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.314
+▝▜██████▀  Haiku 4.5
+ ▝▝   ▝▝   ~/src/example/playground/termkeys/scratch/b
+
+
+❯ /model
+  ⎿  Set model to Haiku 4.5 for this session only
+
+❯ Reply with a numbered list of exactly four fruits, formatted as "1. Apple" etc, and nothing else. Do not use tools.
+
+⏺ 1. Apple
+  2. Banana
+  3. Orange
+  4. Strawberry
+
+✻ Churned for 2s · done 9:24 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ❯ /add-dir                                     Add a new working directory
+    /agents                                      Manage agent configurations
+    /clear                                       Clear conversation history and free up context
+    /compact                                     Clear conversation history but keep a summary in context
+    /config                                      Open config panel
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

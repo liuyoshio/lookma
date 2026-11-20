@@ -1,0 +1,203 @@
+/* Lookma overlay. A transparent page over the whole main display, click-through
+   except the approval card (the app makes only the posted hitRects clickable).
+   One material (dark glass, no real blur), one motion curve, one accent:
+   coral marks the agent's hands (ring, ghost cursor, press ripple, label);
+   yellow marks the two exceptions to "visible": background work, and the user being busy. */
+
+:root {
+  --s: 1;                                /* ?scale= for TV distance */
+  --acc: 255 128 92;                     /* coral: the agent's marks, nothing else */
+  --acc-hi: 255 190 168;
+  --yel: 255 214 10;                     /* yellow: background tasks, user-busy hint */
+  --yel-hi: 255 228 140;
+  --ok: 52 199 89;
+  --sys: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --out: cubic-bezier(.16, 1, .3, 1);
+}
+* { box-sizing: border-box }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden }
+body { font: 13px/1.4 var(--sys); color: rgba(255, 255, 255, .92); -webkit-font-smoothing: antialiased; -webkit-user-select: none; user-select: none; cursor: default }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer }
+[hidden] { display: none !important }
+
+#ov { position: fixed; inset: 0; pointer-events: none; font-size: calc(13px * var(--s)); z-index: 10 }
+
+.glass {
+  background: rgba(28, 28, 33, .955);
+  border: .5px solid rgba(255, 255, 255, .17);
+  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .16), 0 18px 50px -14px rgba(0, 0, 0, .6), 0 3px 10px rgba(0, 0, 0, .22);
+}
+
+/* ---------------------------------------------------------------- focus ring
+   Placed once per step; glides between targets; breathes for 2 s, then holds. */
+#ring {
+  position: absolute; left: 0; top: 0; width: 10px; height: 10px; border-radius: 10px; opacity: 0;
+  box-shadow: 0 0 0 calc(1px * var(--s)) rgba(255, 255, 255, .75), 0 0 0 calc(3px * var(--s)) rgb(var(--acc)), 0 0 0 calc(7.5px * var(--s)) rgb(var(--acc) / .16);
+  transition: transform .55s var(--ease), width .55s var(--ease), height .55s var(--ease), border-radius .55s var(--ease), opacity .35s ease;
+}
+#ring.snap { transition: opacity .35s ease }
+#ring.on { opacity: 1 }
+#ring::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; opacity: .35;
+  box-shadow: 0 0 calc(22px * var(--s)) calc(4px * var(--s)) rgb(var(--acc) / .5);
+}
+#ring.breathe::before { animation: breathe 1s ease-in-out 2 }
+@keyframes breathe { 50% { opacity: .9 } }
+
+/* label hanging off the ring */
+#flabel {
+  position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: .5em; height: 2.15em;
+  padding: 0 .9em 0 .7em; border-radius: 1.075em; font-size: .94em; white-space: nowrap; opacity: 0;
+  transition: transform .55s var(--ease), opacity .3s;
+}
+#flabel.on { opacity: 1 }
+#flabel .dot { width: .46em; height: .46em; border-radius: 50%; background: rgb(var(--acc)); box-shadow: 0 0 0 .2em rgb(var(--acc) / .25) }
+#flabel .tx { color: rgba(255, 255, 255, .94); max-width: 34em; overflow: hidden; text-overflow: ellipsis }
+
+/* ghost cursor (the agent's hand) and its press ripple */
+#ghost {
+  position: absolute; left: 0; top: 0; width: calc(20px * var(--s)); height: calc(28px * var(--s)); opacity: 0;
+  transform-origin: 10% 7%; transition: opacity .3s;
+  filter: drop-shadow(0 0 5px rgb(var(--acc) / .65)) drop-shadow(0 2px 2px rgba(0, 0, 0, .3));
+}
+#ghost.on { opacity: 1 }
+#ghost path { fill: #fff; stroke: rgb(var(--acc)); stroke-width: 1.6; stroke-linejoin: round }
+#ripple {
+  position: absolute; left: 0; top: 0; width: calc(40px * var(--s)); height: calc(40px * var(--s));
+  border-radius: 50%; border: calc(2px * var(--s)) solid rgb(var(--acc)); opacity: 0;
+}
+
+/* ---------------------------------------------------------------- edge hint (user busy) */
+#edge {
+  position: absolute; right: 0; top: 40%; display: flex; align-items: center; gap: .6em; height: 2.9em;
+  padding: 0 .55em 0 .8em; border-radius: 1.45em 0 0 1.45em; border-right: 0; font-size: .95em; white-space: nowrap;
+  transform: translateX(110%); transition: transform .6s var(--ease), top .55s var(--ease);
+}
+#edge.left { right: auto; left: 0; border-radius: 0 1.45em 1.45em 0; border-left: 0; border-right: .5px solid rgba(255, 255, 255, .17); transform: translateX(-110%); padding: 0 .55em 0 .8em }
+#edge.on { transform: none }
+#edge .chev { width: .8em; height: .8em; fill: none; stroke: rgba(255, 255, 255, .6); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round }
+#edge.left .chev { order: 9; transform: scaleX(-1) } /* the chevron always points inward */
+#edge .dot { width: .5em; height: .5em; border-radius: 50%; background: rgb(var(--yel)); box-shadow: 0 0 0 .2em rgb(var(--yel) / .2) }
+#edge .tx { color: rgba(255, 255, 255, .9); max-width: 26em; overflow: hidden; text-overflow: ellipsis }
+#edge:not(.waiting) .e-btn { display: none }
+#edge:not(.waiting) { padding-right: 1.1em }
+#edge.left:not(.waiting) { padding: 0 .9em 0 1.1em }
+.e-btn { height: 2.1em; padding: 0 .9em; border-radius: 1.05em; font-weight: 600; color: #1d1d1f; background: rgba(255, 255, 255, .92); pointer-events: auto }
+.e-btn:active { transform: scale(.95) }
+
+/* ---------------------------------------------------------------- bottom stack */
+#stack {
+  position: absolute; left: 50%; bottom: 104px; transform: translateX(-50%); width: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: calc(10px * var(--s));
+}
+#stack > * { flex: none }
+
+/* the turn capsule: grows and shrinks like the Dynamic Island */
+#cap { position: relative; overflow: hidden; border-radius: 999px; width: 2.86em; height: 2.86em;
+  transition: width .5s var(--ease), height .5s var(--ease), border-radius .5s var(--ease),
+    opacity .35s var(--ease), transform .35s var(--ease) }
+/* Paused: nothing on screen (the menu bar seal shows it). Idle but listening: the small capsule stays. */
+#cap.hidden { opacity: 0; transform: scale(.8) }
+#capIn { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: max-content; max-width: 44em;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .75em; padding: .82em 1.3em .9em .9em }
+#cap.min #capIn { padding: .62em }
+#cap.min .rows { display: none }
+.rows { min-width: 0 }
+.rows > div:empty { display: none }
+
+/* voice glyph: five bars; they move only while someone is talking */
+.vg { width: 1.62em; height: 1.62em; display: flex; align-items: center; justify-content: center; gap: .13em }
+.vg i { display: block; width: .17em; height: .2em; border-radius: .1em; background: #fff; opacity: .92; transition: height .3s var(--ease), opacity .3s, background-color .3s }
+.vg.idle i { opacity: .42 }
+.vg.thinking i { height: .34em; opacity: .7 }
+.vg.thinking i:nth-child(3) { height: .5em }
+.vg.off i { background: transparent; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .45) }
+.vg.listening i { animation: vgLis var(--d) ease-in-out infinite alternate }
+.vg.listening i:nth-child(1) { --d: .82s; --h: .5em }
+.vg.listening i:nth-child(2) { --d: .62s; --h: .95em; animation-delay: -.21s }
+.vg.listening i:nth-child(3) { --d: .9s; --h: 1.22em; animation-delay: -.47s }
+.vg.listening i:nth-child(4) { --d: .7s; --h: .78em; animation-delay: -.12s }
+.vg.listening i:nth-child(5) { --d: .86s; --h: .42em; animation-delay: -.33s }
+@keyframes vgLis { from { height: .2em } to { height: var(--h) } }
+.vg.speaking i { animation: vgSpk 1.15s ease-in-out infinite; animation-delay: calc(var(--i) * -.16s) }
+@keyframes vgSpk { 0%, 100% { height: .28em } 50% { height: 1.08em } }
+.vg.paused i { width: .2em; height: .72em; border-radius: .07em; opacity: .7 }  /* two still bars: a pause sign */
+.vg.paused i:nth-child(odd) { width: 0; opacity: 0 }
+
+/* rows: the user's line, the text sent to the executor, the status line */
+.r-prev { font-size: .9em; line-height: 1.4; color: rgba(255, 255, 255, .38); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40em; margin-bottom: .15em }
+.r-user { font-size: 1.16em; line-height: 1.4; font-weight: 500; letter-spacing: .005em; color: rgba(255, 255, 255, .97); padding-top: .05em }
+.r-user.ph { color: rgba(255, 255, 255, .5); font-weight: 400 }
+.r-sent { display: flex; align-items: flex-start; gap: .55em; margin-top: .34em; font-size: .95em; line-height: 1.5; color: rgba(255, 255, 255, .72) }
+.r-user:empty + .r-sent { margin-top: 0 }
+.r-sent .k { flex: none; margin-top: .18em; height: 1.45em; line-height: 1.45em; padding: 0 .45em; border-radius: .4em; font-size: .8em; color: rgba(255, 255, 255, .5); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .2) }
+.r-sent .k.fix { color: #fff; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .45); background: rgba(255, 255, 255, .12) }
+.r-status { display: flex; align-items: center; gap: .6em; margin-top: .62em; padding-top: .6em; border-top: .5px solid rgba(255, 255, 255, .13); font-size: .98em; color: rgba(255, 255, 255, .9) }
+.r-user:empty + .r-sent:empty + .r-status { margin-top: 0; padding-top: 0; border-top: 0 }
+.r-status .tx { min-width: 0 }
+.r-status .meta { margin-left: auto; padding-left: 1.4em; flex: none; font-size: .8em; color: rgba(255, 255, 255, .4); font-variant-numeric: tabular-nums }
+.r-status.done .tx, .r-status.said .tx { color: #fff; font-weight: 500 }
+.r-status.think .tx { color: rgba(255, 255, 255, .55) }
+.r-status.paused { margin-top: .15em; padding-top: 0; border-top: 0; font-size: .9em }
+.r-status.paused .tx { color: rgba(255, 255, 255, .55) }
+
+.ic { flex: none; width: 1em; height: 1em; border-radius: 50%; display: grid; place-items: center }
+.ic.spin { border: 1.5px solid rgb(var(--acc) / .28); border-top-color: rgb(var(--acc)); animation: spin .9s linear infinite }
+@keyframes spin { to { transform: rotate(360deg) } }
+.ic.done { background: rgb(var(--ok)) }
+.ic.done::after { content: ""; width: .42em; height: .22em; border-left: .12em solid #fff; border-bottom: .12em solid #fff; transform: translateY(-.05em) rotate(-45deg) }
+.ic.wait { box-shadow: inset 0 0 0 .14em rgba(255, 255, 255, .85) }
+.ic.no, .ic.fail { background: rgba(255, 255, 255, .3) }
+.ic.no::after, .ic.fail::after { content: ""; width: .42em; height: .12em; background: #fff; border-radius: .06em }
+.ic.fail { background: rgb(255 69 58 / .85) }
+.ic.dim { background: rgba(255, 255, 255, .18) }
+.ic.said { background: rgba(255, 255, 255, .16) }
+.ic.said::after { content: ""; width: .4em; height: .4em; border-radius: 50%; background: #fff }
+
+.enter { animation: rowIn .4s var(--out) }
+@keyframes rowIn { from { opacity: 0; transform: translateY(.3em) } to { opacity: 1; transform: none } }
+.snapin { animation: snapIn .6s var(--out) }
+@keyframes snapIn { 0% { opacity: 0 } 20% { opacity: 1; color: #fff } 100% { opacity: 1 } }
+
+/* ---------------------------------------------------------------- background tasks (yellow) */
+#tasks { display: flex; flex-direction: column; align-items: center; gap: calc(6px * var(--s)) }
+#tasks:empty { display: none }
+.task { display: flex; align-items: center; gap: .55em; height: 2.2em; padding: 0 1em 0 .8em; border-radius: 1.1em; font-size: .92em; white-space: nowrap;
+  background: rgba(28, 28, 33, .955); border: .5px solid rgb(var(--yel) / .35); box-shadow: 0 8px 24px -10px rgba(0, 0, 0, .6) }
+.task .dot { width: .5em; height: .5em; border-radius: 50%; background: rgb(var(--yel)) }
+.task.done .dot { background: rgb(var(--ok)) }
+.task.failed .dot { background: rgb(255 69 58) }
+.task .ti { color: rgb(var(--yel-hi)); font-weight: 600 }
+.task .tx { color: rgba(255, 255, 255, .82); max-width: 34em; overflow: hidden; text-overflow: ellipsis }
+
+/* ---------------------------------------------------------------- approval card */
+#card { width: 27em; border-radius: 1.3em; padding: 1em 1.1em 1em; pointer-events: auto }
+.k-head { display: flex; align-items: center; gap: .45em; font-size: .82em; color: rgba(255, 255, 255, .55) }
+.k-head .dot { width: .5em; height: .5em; border-radius: 50%; background: rgba(255, 255, 255, .85) }
+.k-more { margin-left: auto }
+.k-q { margin-top: .38em; font-size: 1.16em; font-weight: 600; line-height: 1.35; letter-spacing: .005em; overflow-wrap: anywhere }
+.k-d { margin-top: .6em; font-family: var(--mono); font-size: .8em; line-height: 1.55; color: rgba(255, 255, 255, .74); background: rgba(0, 0, 0, .28);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .08); border-radius: .6em; padding: .55em .75em; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9.5em; overflow: hidden }
+.k-d:empty { display: none }
+.k-act { display: flex; align-items: center; gap: .5em; margin-top: .9em }
+.k-hint { flex: 1; min-width: 0; display: flex; align-items: center; gap: .45em; font-size: .88em; color: rgba(255, 255, 255, .55) }
+.k-hint svg { flex: none; width: 1.05em; height: 1.05em; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round }
+.k-hint span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.k-hint .q { color: #fff; font-weight: 600 }
+.k-hint.heard { color: rgba(255, 255, 255, .85) }
+.k-btn { flex: none; height: 2.25em; padding: 0 1.1em; border-radius: .7em; font-size: .95em; font-weight: 500; color: rgba(255, 255, 255, .92);
+  background: rgba(255, 255, 255, .13); display: inline-flex; align-items: center; gap: .4em; transition: transform .16s var(--ease), background-color .25s, opacity .3s, filter .2s }
+.k-btn.primary { background: rgba(255, 255, 255, .94); color: #1d1d1f; font-weight: 600 }
+#card:not(.answered) .k-btn:hover { filter: brightness(1.12) }
+#card:not(.answered) .k-btn:active { transform: scale(.94) }
+#card.answered .k-btn { pointer-events: none }
+.k-btn.chosen::before { content: ""; width: .5em; height: .26em; border-left: .13em solid currentColor; border-bottom: .13em solid currentColor; transform: translateY(-.08em) rotate(-45deg); margin-right: .1em }
+.k-btn.faded { opacity: .3 }
+
+/* ---------------------------------------------------------------- typed input */
+#typed { width: 30em; border-radius: 1.2em; padding: .35em; pointer-events: auto }
+#typed input { width: 100%; height: 2.3em; border: 0; outline: 0; border-radius: .9em; padding: 0 .8em; font: inherit; font-size: 1em;
+  color: #fff; background: rgba(0, 0, 0, .25); -webkit-user-select: text; user-select: text }
+#typed input::placeholder { color: rgba(255, 255, 255, .4) }

@@ -1,0 +1,40 @@
+
+
+❯ Closed A: run the bash command ls /tmp once and reply with only the number of entries. No other tools.
+
+  Listed 1 directory
+
+⏺ 327
+
+✻ Baked for 2s · done 9:51 AM
+
+❯ Closed B: make two separate Bash tool calls in one message, both exactly ls /tmp with the same description "List
+  /tmp", then reply with only the two counts. No other tools.
+
+  Listed 2 directories
+
+⏺ 327
+  327
+
+✻ Worked for 2s · done 9:51 AM
+
+❯ Closed D: run the bash command ls /tmp, wait for its result, then run ls /tmp again as a second, separate call (not
+  in parallel). Reply with only the two counts. No other tools.
+
+⏺ Listing /tmp
+  ⎿  $ ls /tmp
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ List /tmp
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ ls /tmp
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, allow reading from /private/tmp from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

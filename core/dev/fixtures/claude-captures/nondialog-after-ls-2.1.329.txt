@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.329
+▝▜██████▀  Haiku 5.5
+ ▝▝   ▝▝   ~/src/example/playground/termkeys/scratch/a
+
+
+❯ Trial 1: run the bash command ls /tmp once and reply with only the number of entries. No other tools.
+
+  Listed 1 directory
+
+⏺ 327
+
+✻ Crunched for 10s · done 9:45 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

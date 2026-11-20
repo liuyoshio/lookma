@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<title>Hands, the Lookma seal</title>
+<path d="M0 -14C21 -22 48 -21 60 -3C61 10 42 19 24 17C12 16 0 14 0 14Z" fill="#E9603A" transform="translate(213 464) rotate(160)"/>
+<path d="M0 -14C21 -22 48 -21 60 -3C61 10 42 19 24 17C12 16 0 14 0 14Z" fill="#E9603A" transform="translate(269 468) rotate(22)"/>
+<path d="M143.9 318.8L230.4 169.8A84 84 0 0 1 288.5 129.3L326.4 122.6A38 38 0 0 1 368.7 147L381.9 183.2A84 84 0 0 1 384.9 230.9L346.2 398.7A110 110 0 1 1 143.9 318.8Z" fill="#FF805C"/>
+<ellipse cx="253" cy="392" rx="64" ry="78" transform="rotate(18 253 392)" fill="#FFC6B2"/>
+<path d="M0 -16C30 -27 74 -35 99 -16C114 -4 107 17 85 24C61 31 27 23 0 16A16 16 0 0 1 0 -16Z" fill="#E9603A" transform="translate(177 328) rotate(-146)"/>
+<path d="M0 -16C30 -27 74 -35 99 -16C114 -4 107 17 85 24C61 31 27 23 0 16A16 16 0 0 1 0 -16Z" fill="#E9603A" transform="translate(337 312) rotate(-32)"/>
+<g transform="translate(303 212) rotate(30)">
+  <circle cx="-14" cy="-55" r="17" fill="#FFC6B2"/>
+  <circle cx="14" cy="-55" r="17" fill="#FFC6B2"/>
+  <g fill="none" stroke="#1B1B1F" stroke-linecap="round">
+    <path d="M-31 -61L-49 -67M-31 -51L-50 -49M31 -61L49 -67M31 -51L50 -49" stroke-width="3.2"/>
+    <path d="M-19 -47Q-9.5 -37 0 -46Q9.5 -37 19 -47" stroke-width="3.4"/>
+  </g>
+  <ellipse cx="0" cy="-69" rx="10.5" ry="7.5" fill="#1B1B1F"/>
+  <circle cx="-40" cy="-17" r="11.5" fill="#1B1B1F"/>
+  <circle cx="40" cy="-17" r="11.5" fill="#1B1B1F"/>
+  <circle cx="-36.5" cy="-21" r="3.8" fill="#FFFFFF"/>
+  <circle cx="43.5" cy="-21" r="3.8" fill="#FFFFFF"/>
+</g>
+<circle cx="352" cy="64.6" r="40" fill="none" stroke="#FF805C" stroke-width="21"/>
+</svg>
