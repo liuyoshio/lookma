@@ -181,7 +181,7 @@ Core → app requests, and the app's replies:
 
 | op | args | result |
 |---|---|---|
-| `see` | `{ app? }` (default: frontmost) | `{ image (png base64), shot: { w, h, rect }, app, window: { title, rect }, elements: [{ id, role, text, rect }] }` |
+| `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, window: { title, rect }, elements: [{ id, role, text, states, rect }], cut, unlabeled, image?, shot? }` |
 | `resolve` | `{ element } \| { point:[x,y] } \| { dock: appName } \| { app }` | `{ app, rect, point, frontmost, pressable }` |
 | `front` | `{ app }` | `{}` (best effort: the ops that post input check the front themselves) |
 | `press` | `{ element }` | AX press: `{}` |
@@ -192,6 +192,10 @@ Core → app requests, and the app's replies:
 | `open` | `{ url } \| { path }` | `{ app }` |
 
 Element ids come from the last `see` and stay valid until the next one. A stale id is an error: "call see again".
+
+`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. `states` holds only what is set, from `disabled`, `selected` and `focused`. `cut` says why the walk stopped early (`'elements'` at 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) and `shot: { w, h, rect }` come only with `screenshot: true`. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
+
+A `point` is in the pixels of the last screenshot taken, which a `see` without one does not replace. `resolve { point }` refuses it when there is none, or when the window it was taken of has moved or closed since.
 
 `scroll` moves `pages` (above 0) of the visible area at the point: the nearest scroll area or web area there, cut to its window, or else the window. A page is 90% of that length, so the last line stays in view, sent as pixel wheel events of at most 100 px. The op returns once it has read the area's scroll bar on that axis again, 200 ms after the last event: `position` is where it is now, from 0 (top or left) to 1, and `moved` says whether it changed. Both are null when the area has no scroll bar to read (typical for Chromium content).
 
@@ -204,10 +208,11 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
 3. **Attention.** Visible by default: if the user is not busy (idle ≥ 3 s), bring the target forward. If they are busy:
    - steps that can act in the background (AX `press`, `see`) proceed with `background: true` and an edge hint;
    - steps that need the front (`type`, `key`, a coordinate `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
-4. **Mark.** Set `focus` (label, rect, point). Wait about 350 ms so the ring and ghost cursor arrive before anything happens.
+4. **Mark.** Set `focus` (label, rect, point). Before an act, wait about 350 ms so the ring and ghost cursor arrive before anything happens. `see` acts on nothing, so it does not wait.
 5. **Act** through the app, then set `focus.phase` to `done` or `failed`.
-6. **Return** to the executor:
-   - `see` → the image plus the element list as text;
+6. **Observe** (`see` only): the `see` op, with `screenshot` when the call asks for it.
+7. **Return** to the executor:
+   - `see` → the element list as text, after the facts that say whether it is enough: a screenshot or "No screenshot", a list cut short, how many elements have no label. The image comes only when asked for;
    - every other tool → one line saying what happened and what is frontmost now. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put.
 
 ## Plug-ins
@@ -288,7 +293,7 @@ GUI steps are not in the contract. They arrive as hands tool calls through the t
 - bridge → host: `{ type: 'call', id, tool, args }`;
 - host → bridge: `{ type: 'res', id, ok, result | error }`: `{ text, image? }` (a `say` is `{ text: 'said' }`), or the error the agent reads.
 
-The bridge returns `see`'s screenshot as an MCP image, and an error as a tool error.
+The bridge returns `see`'s screenshot, when it took one, as an MCP image, and an error as a tool error.
 
 **Conformance.** `core/dev/check-executors.mjs` runs one list of scenarios over every executor with a `dev/fake-agent.mjs`, a script that speaks the agent's protocol in place of its binary: ready, prompts, tools through the bridge, cards allowed, declined and withdrawn, steering, a stop and its stragglers, a correction told just before a stop, a stop that never resolves, the agent dying, and `close`.
 

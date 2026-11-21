@@ -65,7 +65,7 @@ The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Ea
 
 1. **Resolve** the target to an app, a rect and a point:
    - an element id from the last `see`. Ids stay valid until the next `see`; a stale id is an error.
-   - a point in the last screenshot's pixels. The app maps it back to screen points.
+   - a point in the last screenshot's pixels. The app maps it back to screen points, and refuses it once that window has moved.
    - a Dock icon: opening an app means pressing its Dock icon, as a person would.
    - the app itself, for `see`, `type`, `key`, and `scroll` with no element or point.
 2. **Grant.** The first time the hands touch an app, the core raises its own card (“Allow controlling Maps?”). The answer is kept in `~/.lookma/apps.json`. A no ends the step with an error that the agent reads.
@@ -78,9 +78,9 @@ The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Ea
    | `see`, and `click` on an element that supports an AX press | Runs in the background. |
    | `type`, `key`, `scroll`, `open`, and `click` at a point or on an element without an AX press | Waits until you pause for 3 s, or until you say “go ahead”. The tab says it is waiting. |
 
-4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. The core waits about 350 ms so the marks arrive before anything happens.
+4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. Before an action, the core waits about 350 ms so the marks arrive before anything happens. `see` only looks, so it does not wait.
 5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason.
-6. **Return** to the agent. `see` returns the screenshot plus a text list of elements (id, role, text). Every other tool returns one line: what happened and which app is frontmost now.
+6. **Return** to the agent. `see` returns a text list of elements (id, role, text, and states such as selected or disabled), headed by the facts that tell the agent whether the list is enough: whether it was cut short, and how many elements have no label. It adds a screenshot only when the call asks for one (`screenshot: true`): for a canvas, a map or unlabeled icons. Every other tool returns one line: what happened and which app is frontmost now.
 
 Screenshots contain only the target app's windows, its menus and popups included. The overlay and anything covering the app are left out. The long edge is at most 1280 px.
 

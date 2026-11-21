@@ -155,7 +155,7 @@ private func frameworks(_ app: NSRunningApplication) -> [String] {
 }
 
 /// Sets the attributes on first contact. Returns true when the app builds its tree lazily and was
-/// just switched on, so the caller should give it a moment (measured: 0.6 to 2.6 s).
+/// just switched on, so the caller should wait for webTreeBuilt (measured: 0.6 to 2.6 s).
 func enableAX(_ app: NSRunningApplication) -> Bool {
     let pid = app.processIdentifier
     axLock.lock()
@@ -176,6 +176,24 @@ func enableAX(_ app: NSRunningApplication) -> Bool {
     }
     turnedOn[pid] = set
     return electron || chromium
+}
+
+/// Whether a web area with content is under `root`: the sign that a Chromium or Electron app has
+/// built its tree. Breadth first and bounded, since the tree is another app's.
+func webTreeBuilt(_ root: AXUIElement) -> Bool {
+    var queue = [root]
+    var i = 0
+    while i < queue.count && i < 1000 {
+        let e = queue[i]
+        i += 1
+        let kids = (axGet(e, "AXChildren") as? [AXUIElement]) ?? []
+        if axString(e, "AXRole") == "AXWebArea" {
+            if !kids.isEmpty { return true }
+        } else {
+            queue += kids
+        }
+    }
+    return false
 }
 
 func restoreAX() {

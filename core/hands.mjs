@@ -1,5 +1,7 @@
 // The hands pipeline. Every GUI tool call from the executor runs the same steps, one call at a time:
 //   resolve → grant → attention → mark (~350 ms) → act → return
+// see acts on nothing, so it has no mark wait and only looks:
+//   resolve → grant → attention → observe → return
 // See docs/protocol.md, "The hands pipeline". What differs per tool is in the table below; step()
 // runs it and knows no tool by name.
 import { cancelled, clip, sleep } from './util.mjs'
@@ -17,15 +19,24 @@ function need(cond, msg) {
 // since an action can change that.
 const line = done => async (a, r, res, frontmost) => ({ text: `${done(a, r, res)} Frontmost: ${await frontmost()}.` })
 
-// The result of see: the screenshot, and its elements as lines the agent can pick ids from.
+// The result of see: the facts the agent needs to judge whether the list is enough (a screenshot or
+// not, a list cut short, elements with no label), then the elements as lines it can pick ids from.
+// Whether to ask for a screenshot is the agent's call; nothing here guesses it.
 function seen(res) {
-  const win = res.window?.title ? ` — window "${clip(res.window.title, 80)}"` : ''
+  const win = res.window.title ? ` — window "${clip(res.window.title, 80)}"` : ''
   const lines = [
     `App: ${res.app}${win}.`,
-    `Screenshot: ${res.shot?.w}x${res.shot?.h} px. A point you click is in these pixels.`,
-    'Elements (ids are valid until the next see):',
-    ...(res.elements || []).map(e => `${e.id} ${e.role}${e.text ? ` "${clip(e.text, 80)}"` : ''}`),
+    res.image ? `Screenshot: ${res.shot.w}x${res.shot.h} px. A point you click is in these pixels.` : 'No screenshot; call see with screenshot: true if what you need is not in this list.',
   ]
+  if (res.cut) {
+    const why = res.cut === 'elements' ? `List cut at ${res.elements.length} elements` : "List cut: the app's tree is too large to read fully"
+    lines.push(`${why}. Scroll for the rest${res.image ? '' : ', or call see with screenshot: true'}.`)
+  }
+  if (res.unlabeled) lines.push(`${res.unlabeled} element${res.unlabeled === 1 ? ' has' : 's have'} no label.`)
+  lines.push(
+    'Elements (ids are valid until the next see):',
+    ...res.elements.map(e => `${e.id} ${e.role}${e.text ? ` "${clip(e.text, 80)}"` : ''}${e.states.map(s => ` (${s})`).join('')}`),
+  )
   return { text: lines.join('\n'), image: res.image }
 }
 
@@ -47,14 +58,16 @@ function scrolled(a, r, res) {
 //                          `current` is the app of the last step; type, key and scroll go there.
 //   front(args, r)         whether acting needs the front, so it waits while the user is busy
 //   raise                  false when acting brings the app forward itself (default true)
-//   act(args, r)           the app op and its args
+//   act(args, r)           the app op and its args; none for see
+//   observe                true when the step returns the app's elements (see), with a screenshot
+//                          when the call says screenshot: true
 //   result(args, r, res, frontmost)  what the executor gets back
 // A tool whose args decide which of two specs runs (open) is a function from the args to the spec.
 const TOOLS = {
   see: {
     target: a => ({ app: a.app || null }),
     front: () => false,
-    act: (a, r) => ['see', { app: r.app }],
+    observe: true,
     result: (a, r, res) => seen(res),
   },
   click: {
@@ -149,6 +162,7 @@ export function createHands({ store, app, grants, ask, log }) {
   }
 
   async function step(tool, args, signal) {
+    need(args.screenshot === undefined || typeof args.screenshot === 'boolean', 'screenshot must be true or false.')
     const spec = typeof TOOLS[tool] === 'function' ? TOOLS[tool](args) : TOOLS[tool]
     const target = spec.target(args, store.data.focus?.app ?? null)
 
@@ -181,16 +195,21 @@ export function createHands({ store, app, grants, ask, log }) {
       }
       if (!background && r && !r.frontmost && spec.raise !== false) await app.request('front', { app: r.app })
 
-      // 4. Mark.
-      await sleep(MARK_MS, signal)
-
-      // 5. Act.
-      setFocus({ phase: 'acting' })
-      const [op, opArgs] = spec.act(args, r)
-      const res = await app.request(op, opArgs)
+      // 4. Mark, so the ring and ghost arrive before something happens to the app, and 5. act.
+      // A step with no act has nothing to wait for; its ring is drawn all the same.
+      let res
+      if (spec.act) {
+        await sleep(MARK_MS, signal)
+        setFocus({ phase: 'acting' })
+        const [op, opArgs] = spec.act(args, r)
+        res = await app.request(op, opArgs)
+      }
       setFocus({ phase: 'done' })
 
-      // 6. Return.
+      // 6. Observe: the one place the core asks for the see op.
+      if (spec.observe) res = await app.request('see', { app: r.app, screenshot: args.screenshot === true })
+
+      // 7. Return.
       return await spec.result(args, r, res, frontmost)
     } catch (err) {
       setFocus({ phase: 'failed' })

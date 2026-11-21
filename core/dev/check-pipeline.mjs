@@ -2,9 +2,9 @@
 // Checks the core against the fake app and a stub executor adapter, with this script as its tools
 // bridge on /ws/executor: server rules, snapshot coalescing, routing (with the outbox's say and
 // report entries, and the executor's cards), the overlay's requests and their acks, unknown
-// messages, the hands pipeline (grant, busy vs idle,
-// waiting plus go ahead, stale element, bad args, scroll, open, stop, one step at a time), pause
-// and resume, and quit.
+// messages, the hands pipeline (grant, see with and without a screenshot, busy vs idle, the mark
+// wait only before an act, waiting plus go ahead, stale element, bad args, scroll, open, stop, one
+// step at a time), pause and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
 import fs from 'node:fs'
 import os from 'node:os'
@@ -203,14 +203,17 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   check('first touch of an app raises a core card', card?.title === 'Allow controlling Finder?', card?.title)
   tellOverlay({ type: 'answer', cardId: card?.id, allow: true, via: 'click' })
   const r = await p
-  check('grant yes: see returns image and element text', r.ok && r.v.image?.length > 100 && /App: Finder/.test(r.v.text) && /e\d+ button "Back"/.test(r.v.text))
+  check('grant yes: see returns the element text, states and facts, and no image unless asked', r.ok && !r.v.image && /App: Finder/.test(r.v.text) && /No screenshot/.test(r.v.text) && /e\d+ button "Back"\n/.test(r.v.text) && /e\d+ row "report.pdf" \(selected\)/.test(r.v.text) && /1 element has no label/.test(r.v.text), r.v?.text || r.e?.message)
   check('grant yes is saved in apps.json', JSON.parse(fs.readFileSync(config.appsFile, 'utf8')).Finder === true)
+  const n = app.ops.length
+  const s = await settle(hands('see', { label: 'Look closer', screenshot: true }))
+  check('see with screenshot: true asks the app for one and returns the image', s.ok && app.ops.slice(n).find(o => o.op === 'see')?.args.screenshot === true && s.v.image?.length > 100 && /Screenshot: 640x400 px/.test(s.v.text), s.v?.text || s.e?.message)
 }
 
 {
   // Grant: no.
   const p = settle(hands('see', { label: 'Look at Slack', app: 'Slack' }))
-  const card = await until(() => last().cards.find(c => c.source === 'core'))
+  const card = await until(() => last().cards.find(c => c.title === 'Allow controlling Slack?')) // see is quick: the last snapshot may still show Finder's
   tellOverlay({ type: 'answer', cardId: card?.id, allow: false, via: 'voice' })
   const r = await p
   check('grant no: the step fails with a readable error', !r.ok && /did not allow controlling Slack/.test(r.e.message), r.e?.message)
@@ -231,11 +234,14 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const resolveAt = ops.find(o => o.op === 'resolve')?.at
   const seeAt = ops.find(o => o.op === 'see')?.at
   check('idle: see of a background app brings it forward', r.ok && JSON.stringify(opsSince(n).slice(0, 3)) === '["resolve","front","see"]', opsSince(n).join(','))
-  check('idle: ~350 ms between resolve and act', seeAt - resolveAt >= 340, `${seeAt - resolveAt} ms`)
+  check('idle: see has no mark wait: it only looks', seeAt - resolveAt < 340, `${seeAt - resolveAt} ms`)
   check('idle: focus is done and not background', !!(await until(() => last().focus?.phase === 'done' && last().focus.background === false && last().focus.app === 'Notes')))
   const id = app.elementIds().find(Boolean)
+  const m = app.ops.length
   const c = await settle(hands('click', { label: 'Press New Note', element: id }))
+  const at = op => app.ops.slice(m).find(o => o.op === op)?.at
   check('click on a pressable element uses AX press', c.ok && app.ops.at(-2)?.op === 'press' && /Frontmost: Notes/.test(c.v.text), c.v?.text || c.e?.message)
+  check('idle: ~350 ms between resolve and an act', at('press') - at('resolve') >= 340, `${at('press') - at('resolve')} ms`)
 }
 
 {
@@ -244,7 +250,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   await until(() => last().attention.busy)
   const n = app.ops.length
   const r = await settle(hands('see', { label: 'Look at Finder', app: 'Finder' }))
-  check('busy: see proceeds in the background without front', r.ok && !opsSince(n).includes('front') && last().focus.background === true, opsSince(n).join(','))
+  check('busy: see proceeds in the background without front', r.ok && !opsSince(n).includes('front') && !!(await until(() => last().focus.app === 'Finder' && last().focus.background === true)), opsSince(n).join(','))
 
   const m = app.ops.length
   const p = settle(hands('type', { label: 'Type the title', text: 'hello' }))
@@ -306,6 +312,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
     ['scroll', { direction: 'down', pages: 0 }, /scroll pages must be a number above 0 and at most 10/],
     ['scroll', { direction: 'down', pages: 11 }, /scroll pages must be/],
     ['scroll', { direction: 'down', pages: '2' }, /scroll pages must be/],
+    ['see', { screenshot: 'yes' }, /screenshot must be true or false/],
     ['type', {}, /type needs text/],
     ['key', {}, /key needs a combo/],
     ['open', {}, /open needs an app, a url or a path/],
@@ -321,7 +328,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 
 {
   // Scroll: at an element, at a point, or in the app of the last step.
-  await hands('see', { label: 'Look', app: 'Finder' })
+  await hands('see', { label: 'Look', app: 'Finder', screenshot: true })
   const scrolled = async args => {
     const n = app.ops.length
     const r = await settle(hands('scroll', { label: 'Scroll', ...args }))

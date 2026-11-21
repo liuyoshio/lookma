@@ -37,7 +37,9 @@ private func isFront(_ pid: pid_t?) -> Bool { pid != nil && frontPid() == pid }
 
 func runOp(_ op: String, _ args: [String: Any]) async throws -> [String: Any] {
     switch op {
-    case "see": return try await see(text(args, "app"))
+    case "see":
+        guard let shot = args["screenshot"] as? Bool else { throw HandsError("see needs screenshot: true or false.") }
+        return try await see(text(args, "app"), screenshot: shot)
     case "resolve": return try resolve(args)
     case "front": return try await front(text(args, "app"))
     case "press": return try press(args)
@@ -61,7 +63,11 @@ private func resolve(_ args: [String: Any]) throws -> [String: Any] {
     }
     if args["point"] != nil && !(args["point"] is NSNull) {
         let p = try point(args["point"])
-        guard let s = lastShot else { throw HandsError("No screenshot yet; call see first.") }
+        guard let s = lastShot else { throw HandsError("No screenshot yet; call see with screenshot: true.") }
+        // A point is in the picture's pixels: once the window moves, it names another place.
+        guard axFrame(s.window) == s.frame else {
+            throw HandsError("The window moved or closed since the screenshot; call see with screenshot: true for a new one.")
+        }
         let q = CGPoint(x: s.rect.minX + p.x * s.rect.width / CGFloat(s.w), y: s.rect.minY + p.y * s.rect.height / CGFloat(s.h))
         guard s.rect.insetBy(dx: -1, dy: -1).contains(q) else { throw HandsError("That point is outside the last screenshot (\(s.w)x\(s.h)).") }
         target = Target(pid: s.pid, name: s.app)

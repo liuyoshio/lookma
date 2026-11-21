@@ -10,7 +10,7 @@ import WebSocket from 'ws'
 
 const SCREEN = { w: 1440, h: 900, scale: 2 }
 const APPS = {
-  Finder: { window: { title: 'Downloads', rect: { x: 200, y: 120, w: 900, h: 560 } }, controls: [['button', 'Back'], ['textfield', 'Search'], ['row', 'report.pdf'], ['row', 'notes.txt']] },
+  Finder: { window: { title: 'Downloads', rect: { x: 200, y: 120, w: 900, h: 560 } }, controls: [['button', 'Back'], ['textfield', 'Search'], ['row', 'report.pdf', ['selected']], ['row', 'notes.txt'], ['button', '']] },
   Slack: { window: { title: 'general', rect: { x: 80, y: 60, w: 1200, h: 800 } }, controls: [['row', '#general'], ['row', '#random'], ['textarea', 'Message #general'], ['button', 'Send']] },
   'Google Chrome': { window: { title: 'New Tab', rect: { x: 0, y: 38, w: 1440, h: 820 } }, controls: [['textfield', 'Address and search bar'], ['button', 'New Tab'], ['link', 'Gmail']] },
   Notes: { window: { title: 'Notes', rect: { x: 300, y: 150, w: 800, h: 600 } }, controls: [['button', 'New Note'], ['textarea', 'Note body']] },
@@ -48,8 +48,8 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
   let idleNow = idle
   let frontApp = front
   let nextId = 0
-  let elements = new Map() // id -> { id, role, text, rect, app } from the last see
-  let shot = null // { w, h, rect } of the last see
+  let elements = new Map() // id -> { id, role, text, states, rect, app } from the last see
+  let shot = null // { w, h, rect } of the last screenshot
   const scrolledTo = {} // app -> vertical scroll position, 0 to 1
 
   function resolve(args) {
@@ -59,7 +59,7 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
       return { app: e.app, rect: e.rect, point: center(e.rect), frontmost: e.app === frontApp, pressable: e.role === 'button' || e.role === 'row' || e.role === 'link' }
     }
     if (args.point) {
-      if (!shot) throw new Error('No screenshot yet; call see first.')
+      if (!shot) throw new Error('No screenshot yet; call see with screenshot: true.')
       const p = [Math.round(shot.rect.x + (args.point[0] * shot.rect.w) / shot.w), Math.round(shot.rect.y + (args.point[1] * shot.rect.h) / shot.h)]
       return { app: frontApp, rect: { x: p[0] - 10, y: p[1] - 10, w: 20, h: 20 }, point: p, frontmost: true, pressable: false }
     }
@@ -74,23 +74,21 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
     return { app, rect, point: center(rect), frontmost: app === frontApp, pressable: false }
   }
 
+  // A screenshot only when asked for; every control here is actionable, so one with no text counts as unlabeled.
   function see(args) {
     const app = args.app || frontApp
     const { window, controls } = APPS[app]
     const r = window.rect
     elements = new Map()
-    controls.forEach(([role, text], i) => {
+    controls.forEach(([role, text, states = []], i) => {
       const id = `e${++nextId}`
-      elements.set(id, { id, role, text, rect: { x: r.x + 20, y: r.y + 40 + i * 40, w: 200, h: 28 }, app })
+      elements.set(id, { id, role, text, states, rect: { x: r.x + 20, y: r.y + 40 + i * 40, w: 200, h: 28 }, app })
     })
+    const list = [...elements.values()].map(({ id, role, text, states, rect }) => ({ id, role, text, states, rect }))
+    const res = { app, window, elements: list, cut: null, unlabeled: list.filter(e => !e.text).length }
+    if (!args.screenshot) return res
     shot = { w: 640, h: 400, rect: r }
-    return {
-      image: IMAGE,
-      shot,
-      app,
-      window,
-      elements: [...elements.values()].map(({ id, role, text, rect }) => ({ id, role, text, rect })),
-    }
+    return { ...res, image: IMAGE, shot }
   }
 
   const handlers = {

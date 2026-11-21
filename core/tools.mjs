@@ -7,7 +7,7 @@ const tool = (name, description, properties, required) => ({ name, description, 
 
 const label = { type: 'string', description: 'What this step does, in a few words in the language of the user\'s latest message, e.g. "Open #general". Shown on screen at the target.' }
 const element = { type: 'string', description: 'An element id from the last see.' }
-const point = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[x, y] in the pixels of the last see screenshot.' }
+const point = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[x, y] in the pixels of the last screenshot (see with screenshot: true).' }
 
 export const SAY = tool('say', 'Say one short sentence to the user, spoken and shown as a caption. The only way the user hears you.', {
   speech: { type: 'string', description: 'The sentence to speak, in the language of the user\'s latest message, with numbers written as spoken.' },
@@ -16,9 +16,10 @@ export const SAY = tool('say', 'Say one short sentence to the user, spoken and s
 }, ['speech'])
 
 export const HANDS = [
-  tool('see', 'Look at an app: a screenshot plus its elements with ids. Defaults to the frontmost app. Call it before acting and again after the screen changes.', {
+  tool('see', 'List an app\'s elements with ids, and states such as (selected) or (disabled). Defaults to the frontmost app. Call it before acting and again after the screen changes.', {
     label,
     app: { type: 'string', description: 'App name, e.g. "Slack". Omit for the frontmost app.' },
+    screenshot: { type: 'boolean', description: 'Also return a screenshot of the app. Ask only when the element list is not enough: a canvas, a map, unlabeled icons, or a list that says it was cut. Default false.' },
   }, ['label']),
   tool('click', 'Click an element by id (preferred), or a point in the last screenshot.', { label, element, point }, ['label']),
   tool('type', 'Type text into the focused field of the app you are working in.', {
