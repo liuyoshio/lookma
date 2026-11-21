@@ -37,6 +37,7 @@ export default {
   title: 'Claude Code',
   settings: {
     model: { default: 'sonnet', help: 'the Claude Code model, e.g. opus' },
+    effort: { default: '', help: "Claude Code's reasoning effort: low, medium, high, xhigh or max; empty, the model's default" },
     permissionMode: { default: 'auto', help: "Claude Code's permission mode; default gives more cards" },
     flags: { default: '', help: 'extra flags for claude, separated by spaces' },
   },

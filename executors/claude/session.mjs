@@ -88,6 +88,7 @@ export function queryOptions({ options, tools, instructions, env, work, dirs, re
     // Claude Code's own system prompt, which teaches its tools, then Lookma's.
     systemPrompt: { type: 'preset', preset: 'claude_code', append: instructions + BACKGROUND },
     model: options.model,
+    ...(options.effort && { effort: options.effort }),
     permissionMode: options.permissionMode,
     canUseTool,
     hooks,

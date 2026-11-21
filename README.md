@@ -255,7 +255,8 @@ The agent and the voice are plug-ins (folders in `executors/` and `voices/`), an
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LOOKMA_CLAUDE_MODEL` | `sonnet` | The model (`--model`), e.g. `opus`. |
+| `LOOKMA_CLAUDE_MODEL` | `sonnet` | The model (`--model`), e.g. `opus`, or `haiku` for faster everyday steps. |
+| `LOOKMA_CLAUDE_EFFORT` | the model's default | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. Lower is faster. |
 | `LOOKMA_CLAUDE_PERMISSION_MODE` | `auto` | The permission mode; `default` gives more cards. |
 | `LOOKMA_CLAUDE_FLAGS` | | Extra flags for `claude`, separated by spaces. |
 

@@ -27,7 +27,7 @@ const thrown = fn => {
   const all = await manifests()
   const names = Object.fromEntries(all.map(p => [`${p.kind}/${p.name}`, p.settings.map(s => s.name).join(' ')]))
   const want = {
-    'executors/claude': 'LOOKMA_CLAUDE_MODEL LOOKMA_CLAUDE_PERMISSION_MODE LOOKMA_CLAUDE_FLAGS',
+    'executors/claude': 'LOOKMA_CLAUDE_MODEL LOOKMA_CLAUDE_EFFORT LOOKMA_CLAUDE_PERMISSION_MODE LOOKMA_CLAUDE_FLAGS',
     'executors/codex': 'LOOKMA_CODEX_MODEL LOOKMA_CODEX_FAST CODEX_HOME',
     'voices/openai': 'OPENAI_API_KEY LOOKMA_OPENAI_MODEL LOOKMA_OPENAI_VOICE LOOKMA_OPENAI_TRANSCRIBE_MODEL LOOKMA_OPENAI_MAX_TOKENS',
   }
