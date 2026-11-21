@@ -137,7 +137,7 @@ The talk mode only picks where it rests: `key` (the default) rests `off`, `alway
 
 **What was meant for it.** Every committed turn reaches the floor, and the voice itself judges whether it was meant for Lookma: speech from people talking to each other, a TV or a cough gets its `pass` tool, and the turn is dropped from the conversation with nothing said. No filter on the transcript decides this; the model hears the audio. Holding fn removes the question altogether.
 
-**A colleague, not a butler.** The voice answers like a capable colleague sitting next to you: a few words to say what it is doing (“OK, opening Maps”), then quiet until there is news, in your language and in the first person. Anything it promises to do goes to the agent in the same reply (`do`); a question about progress is answered from `status`, never from memory; and it gives no result before one came back. A reply is capped at `LOOKMA_OPENAI_MAX_TOKENS` (about 200).
+**A colleague, not a butler.** The voice answers like a capable colleague sitting next to you: a few words to say what it is doing (“OK, opening Maps”), then quiet until there is news, in your language and in the first person. Anything it promises to do goes to the agent in the same reply (`do`); a question about progress is answered from `status`, never from memory; and it gives no result before one came back. Brevity comes from its instructions; `LOOKMA_OPENAI_MAX_TOKENS` (1000, audio included) is only a safety net, since a cap the model reaches cuts it off mid-word.
 
 **Language.** Set `LOOKMA_VOICE_LANGUAGE` (an ISO code such as `en` or `zh`) and the transcriber is told the language you speak. There is no transcription prompt: it makes the transcriber drop question marks, and the approval check relies on them.
 

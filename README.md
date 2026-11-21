@@ -274,8 +274,8 @@ The agent and the voice are plug-ins (folders in `executors/` and `voices/`), an
 | `OPENAI_API_KEY` | | Turns on voice. Without it you type instead. |
 | `LOOKMA_OPENAI_MODEL` | `gpt-realtime-2.1` | The voice model. |
 | `LOOKMA_OPENAI_VOICE` | `marin` | The voice it speaks with. |
-| `LOOKMA_OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-transcribe` | Writes down what you say, for captions and the approval check. |
-| `LOOKMA_OPENAI_MAX_TOKENS` | `200` | The longest a spoken reply can be, in tokens. |
+| `LOOKMA_OPENAI_TRANSCRIBE_MODEL` | `gpt-realtime-whisper` | Writes down what you say, for captions and the approval check. |
+| `LOOKMA_OPENAI_MAX_TOKENS` | `1000` | A safety net on one reply, in tokens, its audio included. Replies are kept short by the voice's instructions. |
 
 Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }`), read on every step. How the voice and the agent behave is plain text in `prompts/butler.md` (read for every new voice session) and `prompts/executor.md` (read on the next start).
 

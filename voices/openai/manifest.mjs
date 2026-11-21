@@ -6,7 +6,7 @@ export default {
     apiKey: { default: '', env: 'OPENAI_API_KEY', secret: true, required: true, help: 'turns on voice; without it you type instead' },
     model: { default: 'gpt-realtime-2.1', help: 'the voice model' },
     voice: { default: 'marin', help: 'the voice it speaks with' },
-    transcribeModel: { default: 'gpt-4o-transcribe', help: 'writes down what you say, for captions and the approval check' },
-    maxTokens: { default: 200, help: 'the longest a spoken reply can be, in tokens' },
+    transcribeModel: { default: 'gpt-realtime-whisper', help: 'writes down what you say, for captions and the approval check' },
+    maxTokens: { default: 1000, help: 'a safety net on one reply, in tokens, its audio included; the prompt keeps replies short' },
   },
 }

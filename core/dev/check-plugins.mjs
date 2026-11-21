@@ -40,7 +40,7 @@ const thrown = fn => {
 {
   const openai = await load('voices', 'openai', {})
   const o = openai.options
-  check('defaults, and an unset required setting is missing', o.model === 'gpt-realtime-2.1' && o.voice === 'marin' && o.transcribeModel === 'gpt-4o-transcribe' && o.maxTokens === 200 && openai.missing.join() === 'OPENAI_API_KEY', JSON.stringify({ o, missing: openai.missing }))
+  check('defaults, and an unset required setting is missing', o.model === 'gpt-realtime-2.1' && o.voice === 'marin' && o.transcribeModel === 'gpt-realtime-whisper' && o.maxTokens === 1000 && openai.missing.join() === 'OPENAI_API_KEY', JSON.stringify({ o, missing: openai.missing }))
   const set = await load('voices', 'openai', { OPENAI_API_KEY: 'sk-test', LOOKMA_OPENAI_MAX_TOKENS: '150', LOOKMA_OPENAI_VOICE: '' })
   check('values are typed, an empty one is unset', set.options.maxTokens === 150 && set.options.voice === 'marin' && set.missing.length === 0)
   const shown = describe(set)
