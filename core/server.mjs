@@ -35,7 +35,7 @@ function readBody(req) {
 function serveStatic(res, dir, pathname) {
   const file = path.join(dir, path.normalize(pathname === '/' ? '/index.html' : pathname))
   if (!file.startsWith(dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
-    return json(res, 404, { error: fs.existsSync(dir) ? 'not found' : 'overlay/ is missing' })
+    return json(res, 404, { error: fs.existsSync(dir) ? 'not found' : `${path.basename(dir)}/ is missing` })
   }
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' })
   fs.createReadStream(file).pipe(res)
@@ -44,6 +44,9 @@ function serveStatic(res, dir, pathname) {
 export function startServer({ config, core, log }) {
   const origins = new Set([`http://127.0.0.1:${config.port}`, `http://localhost:${config.port}`])
   const overlayDir = path.join(config.root, 'overlay')
+  // A voice provider's page half, beside the overlay: /voices/<name>/page.js and /voices/<name>/page/*.
+  // Nothing else of its folder is served.
+  const voicePage = /^\/voices\/([a-z0-9-]+)\/page(\.js|\/.+)$/
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 })
   // The three sockets (docs/protocol.md), each with the core's entry point for it.
   const sockets = { '/ws/overlay': core.connectOverlay, '/ws/app': core.connectApp, '/ws/executor': core.connectExecutor }
@@ -79,14 +82,20 @@ export function startServer({ config, core, log }) {
           return json(res, 409, { error: err.message })
         }
       }
-      if (route === 'POST /api/voice-key') {
+      if (route === 'POST /api/voice/grant') {
         try {
-          return json(res, 200, await core.voiceKey())
+          return json(res, 200, await core.voiceGrant())
         } catch (err) {
           return json(res, err.status || 500, { error: err.message })
         }
       }
-      if (req.method === 'GET') return serveStatic(res, overlayDir, decodeURIComponent(url.pathname))
+      const pathname = decodeURIComponent(url.pathname)
+      const page = req.method === 'GET' && pathname.match(voicePage)
+      if (page) {
+        const dir = path.join(config.root, 'voices', page[1])
+        return page[2] === '.js' ? serveStatic(res, dir, '/page.js') : serveStatic(res, path.join(dir, 'page'), page[2])
+      }
+      if (req.method === 'GET') return serveStatic(res, overlayDir, pathname)
       json(res, 404, { error: 'not found' })
     } catch (err) {
       log('http error', String(err?.stack || err))

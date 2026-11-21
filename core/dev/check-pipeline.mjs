@@ -14,7 +14,7 @@ import { createCore } from '../core.mjs'
 import { TOOL_NAMES } from '../hands.mjs'
 import { startServer } from '../server.mjs'
 import { HANDS } from '../tools.mjs'
-import { mintVoiceKey } from '../voice-key.mjs'
+import { createVoiceHost } from '../voice/host.mjs'
 import { startFakeApp } from './fake-app.mjs'
 
 const PORT = Number(process.argv[2] || 8792)
@@ -417,21 +417,21 @@ let app2
   check('pause and resume with no turn working: nothing is cancelled or told', calls.length === before, calls.slice(before).map(c => c.name).join(','))
 }
 
-// Voice key: without a voice, a clear error with its HTTP status and no network call.
+// Voice grant: without a voice, a clear error with its HTTP status and no network call.
 {
-  const off = await settle(mintVoiceKey({ ...config, voice: { ...config.voice, off: 'voice is off (LOOKMA_VOICE=off)' } }))
-  check('voice key: no voice is a 503 with the reason', off.e?.status === 503 && off.e.message === 'voice is off (LOOKMA_VOICE=off)', off.e?.message)
+  const off = await settle(createVoiceHost({ ...config, voice: { ...config.voice, off: 'voice is off (LOOKMA_VOICE=off)' } }, { log: quiet }).grant())
+  check('voice grant: no voice is a 503 with the reason', off.e?.status === 503 && off.e.message === 'voice is off (LOOKMA_VOICE=off)', off.e?.message)
 }
 
-// Minting one calls the user's OpenAI account, so only with LOOKMA_LIVE_TESTS=1. Never printed.
+// Minting one calls the voice provider's account (OpenAI's), so only with LOOKMA_LIVE_TESTS=1. Never printed.
 if (process.env.LOOKMA_LIVE_TESTS === '1') {
-  const r = await post('/api/voice-key', '{}')
+  const r = await post('/api/voice/grant', '{}')
   const body = await r.json()
   const exists = f => fs.existsSync(path.join(config.root, 'prompts', f))
   if (exists('butler.md') && exists('butler-tools.json')) {
-    check('voice key minted', r.status === 200 && typeof body.value === 'string' && body.value.length > 10 && !!body.expiresAt, `status ${r.status} ${body.error || ''}`)
+    check('voice grant minted', r.status === 200 && body.provider === config.voice.provider.name && typeof body.credential === 'string' && body.credential.length > 10 && !!body.startBy, `status ${r.status} ${body.error || ''}`)
   } else {
-    check('voice key fails clearly while prompts are missing', r.status >= 400 && /prompts\/butler/.test(body.error || ''), `status ${r.status}: ${body.error}`)
+    check('voice grant fails clearly while prompts are missing', r.status >= 400 && /prompts\/butler/.test(body.error || ''), `status ${r.status}: ${body.error}`)
   }
 }
 

@@ -1,4 +1,4 @@
-// Shared plumbing for the headless overlay checks (shoot.mjs, voice-check.mjs): the
+// Shared plumbing for the headless overlay checks (shoot.mjs, check-voices.mjs): the
 // mock core as a child process, and headless Chrome driven over CDP with its own
 // profile in overlay/dev/.chrome/<cdp port>, so checks can run side by side. Headless only;
 // no window ever opens.

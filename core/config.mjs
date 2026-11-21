@@ -121,7 +121,7 @@ export async function loadConfig(settings = {}) {
       // Why there is no voice, or null. The overlay then shows captions and takes typed requests.
       off: !provider ? 'voice is off (LOOKMA_VOICE=off)' : provider.missing.length ? `${provider.missing[0]} is not set (see .env.example)` : null,
       language: env.LOOKMA_VOICE_LANGUAGE || '', // ISO 639-1, e.g. zh; unset, the transcriber detects it
-      audio: oneOf('LOOKMA_AUDIO', ['room', 'headset']), // the setup in core/voice-key.mjs
+      audio: oneOf('LOOKMA_AUDIO', ['room', 'headset']), // the provider's mint.mjs sets the service up for it
     },
   }
 }

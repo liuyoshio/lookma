@@ -42,7 +42,7 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | 8790 | the core (default `LOOKMA_PORT`) |
 | 8791 | `npm run test:e2e` (tmux session `lookma-test`) |
 | 8792 | `core/dev/check-pipeline.mjs`, part of `npm test` |
-| 8795, 8796 | `overlay/dev/voice-check.mjs` (mock core, Chrome DevTools) |
+| 8795, 8796 | `overlay/dev/check-voices.mjs` (mock core, Chrome DevTools) |
 | 8797, 8798 | `overlay/dev/mock-core.mjs` and `shoot.mjs` (mock core, Chrome DevTools) |
 
 ## Test
@@ -50,12 +50,12 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | Command | Checks | Needs |
 |---|---|---|
 | `npm run check` | `node --check` on every script | Node |
-| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, the Claude adapter on recorded terminal screens, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome. tmux is optional: one check is skipped without it |
-| `node overlay/dev/voice-check.mjs` | the voice client, against a fake Realtime session | Google Chrome in `/Applications` (runs headless) |
+| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, the Claude adapter on recorded terminal screens, the session each voice provider asks for, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome. tmux is optional: one check is skipped without it |
+| `node overlay/dev/check-voices.mjs` | the voice client with each voice provider, against its fake service (`voices/<name>/dev/fake.mjs`) | Google Chrome in `/Applications` (runs headless) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:e2e` | a real Claude Code session with the fake app | tmux and a logged-in Claude Code; uses your Claude plan |
 
-Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice key on your OpenAI account; it never runs in CI.
+Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice grant (an OpenAI key) on your OpenAI account; it never runs in CI.
 
 ## Code conventions
 

@@ -291,13 +291,12 @@ It emits `status`, `turnStart` / `turnEnd`, `step`, `say`, `task` and `approval`
 
 ## Roadmap
 
-Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with two agents, Claude Code and Codex, and one voice. Next, in order:
+Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with two agents, Claude Code and Codex, and one voice, OpenAI Realtime, a plug-in in `voices/` like the agents are in `executors/` (its contract, in [docs/protocol.md](docs/protocol.md), is provisional until a second voice exists). Next, in order:
 
-1. **A voice provider interface**, so the voice is a plug-in like the agent is.
-2. **Gemini Live** as a second voice.
-3. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
-4. **Drag and drop, and right-click menus** for the hands.
-5. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
+1. **Gemini Live** as a second voice.
+2. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
+3. **Drag and drop, and right-click menus** for the hands.
+4. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
 
 Adapters for other agents (Gemini CLI, Aider, OpenCode, …) are very welcome. See [Swapping the executor](#swapping-the-executor) and [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Development harness for the overlay. Serves overlay/ and plays the core's side of
-// /ws/overlay (docs/protocol.md) from the script in scenario.mjs, against the fake
-// desktop in desk.js (open the page with ?backdrop=1 to see it).
+// Development harness for the overlay. Serves overlay/ (and each voice provider's page.js) and
+// plays the core's side of /ws/overlay (docs/protocol.md) from the script in scenario.mjs,
+// against the fake desktop in desk.js (open the page with ?backdrop=1 to see it). It has no
+// voice: POST /api/voice/grant is a 503 (check-voices.mjs fakes the grant in the page).
 //
 //   node overlay/dev/mock-core.mjs [--port 8797] [--speed 1] [--from <mark>] [--hold]
 //
@@ -30,6 +31,7 @@ import { scenario } from './scenario.mjs'
 import { createOutbox } from '../../core/outbox.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const VOICES = path.resolve(ROOT, '..', 'voices')
 const opts = parseArgs(process.argv.slice(2))
 const PORT = opts.port
 
@@ -309,7 +311,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`)
   if (req.method === 'POST' && !String(req.headers['content-type'] || '').startsWith('application/json')) return json(res, 415, { error: 'JSON only' })
   if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, state)
-  if (req.method === 'POST' && url.pathname === '/api/voice-key') return json(res, 503, { error: 'The mock core has no voice; open the page with ?voice=0.' })
+  if (req.method === 'POST' && url.pathname === '/api/voice/grant') return json(res, 503, { error: 'The mock core has no voice; open the page with ?voice=0.' })
   if (req.method === 'POST' && url.pathname === '/dev/restart') {
     const b = await readJson(req)
     startScenario({ from: b.from || null, hold: !!b.hold })
@@ -329,8 +331,11 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true })
   }
   if (req.method !== 'GET') return json(res, 404, { error: 'not found' })
-  const file = path.join(ROOT, url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname))
-  if (!file.startsWith(ROOT + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return json(res, 404, { error: 'not found' })
+  // The overlay at /, and a voice provider's page half at /voices/<name>/page.js, as the core serves them.
+  const voice = url.pathname.match(/^\/voices\/([a-z0-9-]+)\/page\.js$/)
+  const dir = voice ? VOICES : ROOT
+  const file = voice ? path.join(VOICES, voice[1], 'page.js') : path.join(ROOT, url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname))
+  if (!file.startsWith(dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return json(res, 404, { error: 'not found' })
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' })
   fs.createReadStream(file).pipe(res)
 })

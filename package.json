@@ -49,9 +49,9 @@
   ],
   "scripts": {
     "start": "node core/cli.mjs start",
-    "check": "for f in core/*.mjs core/executor/*.mjs core/dev/*.mjs executors/*/*.mjs voices/*/*.mjs overlay/*.js overlay/voice/*.js overlay/dev/*.mjs; do node --check $f || exit 1; done",
-    "test": "node core/dev/check-plugins.mjs && node core/dev/check-pipeline.mjs && node core/dev/check-outbox.mjs && node core/dev/check-claude.mjs && node core/dev/check-codex.mjs && node overlay/dev/consent-check.mjs && node overlay/dev/floor-check.mjs",
-    "test:overlay": "node overlay/dev/voice-check.mjs && node overlay/dev/shoot.mjs",
+    "check": "for f in core/*.mjs core/executor/*.mjs core/voice/*.mjs core/dev/*.mjs executors/*/*.mjs voices/*/*.mjs voices/*/*.js voices/*/dev/*.mjs overlay/*.js overlay/voice/*.js overlay/dev/*.mjs; do node --check $f || exit 1; done",
+    "test": "node core/dev/check-plugins.mjs && node core/dev/check-pipeline.mjs && node core/dev/check-outbox.mjs && node core/dev/check-claude.mjs && node core/dev/check-codex.mjs && node voices/openai/dev/check.mjs && node overlay/dev/consent-check.mjs && node overlay/dev/floor-check.mjs",
+    "test:overlay": "node overlay/dev/check-voices.mjs && node overlay/dev/shoot.mjs",
     "test:e2e": "node core/dev/e2e.mjs",
     "fake-app": "node core/dev/fake-app.mjs"
   },

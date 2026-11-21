@@ -1,11 +1,11 @@
 // The realtime voice client: the "butler". This file only assembles it:
-//   voice/session.js  - the Realtime session: key, microphone, WebRTC, reconnects, renewal, pause
-//   voice/realtime.js - the one translator: Realtime server events in, client events out
+//   voice/session.js  - the session: grant, microphone, the provider's connection, reconnects, renewal, pause
+//   voice/contract.js - what a voice provider (voices/<name>/page.js) emits and is sent: voice events, effects
 //   voice/floor.js    - who speaks and what is still owed (a pure reducer; its rules are there)
 //   voice/turns.js    - what is known about each user turn, for approvals and captions
 //   voice/butler.js   - the butler's tools (do, status, answer, control) and the wording of what it is told
 //
-// Always listening, full duplex, on one warm session. The server's VAD finds each turn and never
+// Always listening, full duplex, on one warm session. The provider finds each turn and never
 // replies by itself; every committed turn goes to the floor, which asks for a reply at once, and
 // the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
 // work wants said is the core's outbox: every snapshot hands it to the floor, which announces
@@ -18,7 +18,6 @@
 import { createSession } from './voice/session.js'
 import { createTurns } from './voice/turns.js'
 import { createButler, marked } from './voice/butler.js'
-import { toFloor, toClient } from './voice/realtime.js'
 import { initial, step, view, isIdle, wakeAt } from './voice/floor.js'
 
 /**
@@ -51,17 +50,16 @@ export function createVoice(o) {
     evidence: turns.evidence, onLine: o.onLine, log: o.log,
   })
   const available = () => session.status === 'connecting' || session.status === 'live'
-  const realtime = effect => toClient(effect, session.responses).forEach(session.send)
 
   // The floor's effects, and all this file knows about them.
   const EFFECTS = {
     tell(e) {
-      realtime({ type: 'tell', texts: e.entries.map(x => marked(x, e.earlier)) })
+      session.send({ type: 'tell', texts: e.entries.map(x => marked(x, e.earlier)) })
       if (e.earlier) o.log(`voice: the new session is told ${e.entries.length} earlier item(s)`)
     },
-    create: realtime,
-    drop: realtime,
-    output: realtime,
+    create: session.send,
+    drop: session.send,
+    output: session.send,
     run(e) {
       const live = session.guard()
       butler.run(e.calls, e.turn).then(results => live() && dispatch({ type: 'tools.done', eventId: e.eventId, results }))
@@ -89,9 +87,7 @@ export function createVoice(o) {
   // is here: wait for the transcript and admit only what worthAnswering (consent.js) keeps.
   const admit = ev => dispatch(ev)
 
-  function onEvent(raw) {
-    const ev = toFloor(raw)
-    if (!ev) return
+  function onEvent(ev) {
     turns.note(ev, Date.now(), !!state.slot?.audio)
     if (ev.type === 'error') o.log(`voice: ${ev.message}`)
     if (ev.type === 'turn.committed') admit(ev)

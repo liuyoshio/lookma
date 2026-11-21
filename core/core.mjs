@@ -1,8 +1,9 @@
 // The core: one place that decides. Holds turn, focus, attention, cards, tasks, the outbox and
 // paused; runs the hands pipeline; answers the overlay's requests (tell, answer, control: stop,
 // go ahead, pause) with one ack each, takes its receipts for the outbox, and the app's pause,
-// resume and quit; talks to one executor through its adapter. Transport is server.mjs's: it hands
-// each socket to an entry point.
+// resume and quit; talks to one executor through its adapter, and grants the overlay its voice
+// sessions through the voice host (voice/host.mjs). Transport is server.mjs's: it hands each
+// socket to an entry point.
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createLog, logUnknown, cancelled } from './util.mjs'
@@ -11,7 +12,7 @@ import { createAppLink } from './app-link.mjs'
 import { createGrants } from './grants.mjs'
 import { createHands } from './hands.mjs'
 import { createOutbox, RECEIPTS } from './outbox.mjs'
-import { mintVoiceKey } from './voice-key.mjs'
+import { createVoiceHost } from './voice/host.mjs'
 
 const MAX_TASKS = 8
 // The user counts as busy until this long after their last input; steps that need the front wait.
@@ -23,6 +24,7 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   let n = 0
   const nextId = prefix => `${prefix}${++n}`
   const outbox = createOutbox({ store, nextId })
+  const voice = createVoiceHost(config, { log })
 
   // A line for the user, spoken and shown as a caption: an outbox entry. display defaults to
   // speech, kind to info. Said during a turn, it is that turn's (turnId) and counts in turn.said.
@@ -319,8 +321,8 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   return {
     store,
     tell,
-    // Every voice session starts with a key: trimming here keeps its seed to the last KEEP_MS.
-    voiceKey: () => (outbox.prune(), mintVoiceKey(config)),
+    // Every voice session starts with a grant: trimming here keeps its seed to the last KEEP_MS.
+    voiceGrant: () => (outbox.prune(), voice.grant()),
 
     // The three sockets, each handed over by the server once accepted.
     connectOverlay(ws) {

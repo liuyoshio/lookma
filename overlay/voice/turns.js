@@ -1,7 +1,7 @@
 // What the voice knows about each user turn, by item id, for approvals (judgeAnswer in
 // consent.js) and captions: when its speech started, whether the butler was audible then and
 // what that reply was saying, and its transcript. Also what the butler said in each reply.
-// Fed voice events (voice/realtime.js); whether the butler is audible comes from the floor, its
+// Fed voice events (voice/contract.js); whether the butler is audible comes from the floor, its
 // one owner. Records die with the session (reset), so they need no cap.
 
 /** @param {{ log: (msg: string) => void }} o */

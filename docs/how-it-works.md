@@ -19,11 +19,11 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 
 | Piece | Where | What it does |
 |---|---|---|
-| Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and mints voice keys. |
+| Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and grants the voice its sessions. |
 | App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
 | Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
 | Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code running interactively in tmux, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
-| Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings; the session itself still lives in `core/voice-key.mjs` and `overlay/voice/`. |
+| Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings, `mint.mjs` runs in the core and mints a short-lived grant for each session, and `page.js` runs in the overlay and connects to the service. The rest of the voice (`overlay/voice/`) is the same for every provider. |
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
 | Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies and permissions. |
 
@@ -119,7 +119,7 @@ The decision is one small pure function, with its own tests. Speech that gets th
 
 **Language.** Set `LOOKMA_VOICE_LANGUAGE` (an ISO code such as `en` or `zh`) and the transcriber is told the language you speak. There is no transcription prompt: it makes the transcriber drop question marks, and the approval check relies on them.
 
-**Health.** If the session closes or fails, the overlay reconnects in the background. Before the Realtime session time limit, it opens a fresh one while nothing is going on, never in the middle of a turn, with its key minted ahead of time. A session that replaces an old one starts knowing what you were just told: the pending cards and the updates and reports of the last 5 minutes, marked as from earlier, with no reply. So “yes, I approve” still answers a card announced on the old session.
+**Health.** If the session closes or fails, the overlay reconnects in the background. Before the Realtime session time limit, it opens a fresh one while nothing is going on, never in the middle of a turn, with its grant (a short-lived key) minted ahead of time. A session that replaces an old one starts knowing what you were just told: the pending cards and the updates and reports of the last 5 minutes, marked as from earlier, with no reply. So “yes, I approve” still answers a card announced on the old session.
 
 ## Voice consent
 

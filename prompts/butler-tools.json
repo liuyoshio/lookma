@@ -1,6 +1,5 @@
 [
   {
-    "type": "function",
     "name": "do",
     "description": "Do what the user asked: look things up, read files, operate the computer or apps, fill in forms, make documents. Also for additions and changes of mind about the work in progress. You do the work yourself; your progress and results come back as updates from your work.",
     "parameters": {
@@ -17,7 +16,6 @@
     }
   },
   {
-    "type": "function",
     "name": "status",
     "description": "Check how the work is going: the current request, what is happening on screen, pending approvals and background tasks. Use it when the user asks how it's going.",
     "parameters": {
@@ -26,7 +24,6 @@
     }
   },
   {
-    "type": "function",
     "name": "answer",
     "description": "Answer the pending approval request, only as your instructions on approvals say: allow=true right after the user explicitly approved, allow=false after a clear no. For anything else do not call this; ask again. An error result means nothing was approved.",
     "parameters": {
@@ -43,7 +40,6 @@
     }
   },
   {
-    "type": "function",
     "name": "control",
     "description": "Stop the work, let it go ahead, or pause. For a bare \"stop\" (or \"cancel\"), a bare \"go ahead\" when no approval is pending, or a bare \"pause\". The result says whether it applied (for example nothing_running when nothing was running): say that in a few words.",
     "parameters": {
@@ -65,7 +61,6 @@
     }
   },
   {
-    "type": "function",
     "name": "pass",
     "description": "What you just heard was not meant for you: people talking to each other, a TV or video, noise, your own voice. Call it alone and say nothing.",
     "parameters": {
