@@ -3,8 +3,8 @@
 // docs/protocol.md with plausible rects and a placeholder PNG. Nothing on the real screen moves.
 //   node core/dev/fake-app.mjs [--port 8791] [--idle 10] [--front Finder]
 // As a module: startFakeApp({ port, idle, front }) → { ops, notices, setIdle, send, front, elementIds, failSee, ready, close }
-//   notices: what the core sent besides requests ({ type: 'paused' }, { type: 'talk' }, { type: 'quit' })
-//   send(msg): what the menu bar and hotkey send ({ type: 'pause' | 'resume' | 'quit' })
+//   notices: what the core sent besides requests ({ type: 'paused' }, { type: 'talk' }, { type: 'gestures' }, { type: 'quit' })
+//   send(msg): what the menu bar and hotkey send ({ type: 'pause' | 'resume' | 'quit' | 'talk' | 'gestures' })
 //   failSee(error): see throws that error from now on; null makes it work again
 import zlib from 'node:zlib'
 import WebSocket from 'ws'
@@ -161,7 +161,7 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
     const sock = new WebSocket(`ws://127.0.0.1:${port}/ws/app`)
     sock.on('open', () => {
       ws = sock
-      sock.send(JSON.stringify({ type: 'hello', version: 'fake-1', permissions: { accessibility: true, screen: true, microphone: true }, screen: SCREEN }))
+      sock.send(JSON.stringify({ type: 'hello', version: 'fake-1', permissions: { accessibility: true, screen: true, microphone: true, camera: true }, screen: SCREEN }))
       const beat = () => sock.readyState === 1 && sock.send(JSON.stringify({ type: 'attention', idle: idleNow }))
       beat()
       timer = setInterval(beat, 500)

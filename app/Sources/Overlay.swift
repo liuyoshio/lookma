@@ -3,7 +3,8 @@
 // rects the page posts (the card). Screen recordings show it (sharingType .readOnly); see() leaves
 // it out by capturing only the target app. The page owns the voice session and the microphone: it
 // is told the talk key's edges (key()) and posts back whether its voice is on, whether the
-// microphone is open and whether a hands-free conversation is.
+// microphone is open and whether a hands-free conversation is. With hand gestures on it also draws
+// the user's hand as a dot (hand()).
 import AppKit
 import WebKit
 
@@ -100,6 +101,16 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
     func key(_ edge: TalkEdge) {
         web.evaluateJavaScript("window.lookma?.key('\(edge.rawValue)')") { _, err in
             if let err { log("key \(edge.rawValue) failed: \(err.localizedDescription)") }
+        }
+    }
+
+    /// Your hand's dot, as fractions of the overlay from its top left, lit while pinched; nil hides
+    /// it. Every camera frame while a hand is in view (GestureOutput).
+    func hand(_ dot: (x: Double, y: Double, pinched: Bool)?) {
+        let size = panel.frame.size
+        let arg = dot.map { "{x:\(Int(($0.x * size.width).rounded())),y:\(Int(($0.y * size.height).rounded())),pinched:\($0.pinched)}" } ?? "null"
+        web.evaluateJavaScript("window.lookma?.hand(\(arg))") { _, err in
+            if let err { log("hand failed: \(err.localizedDescription)") }
         }
     }
 

@@ -121,13 +121,14 @@ Then hold <kbd>fn</kbd>, say “turn on dark mode” and let go. To work with Co
 <summary><b>The first start</b>: the build, three permissions and a card per app</summary>
 
 - **The build.** The first start compiles `Lookma.app` from source into `app/build/` with `swiftc`. It rebuilds whenever its sources change, for example after you pull.
-- **Permissions.** macOS asks for three. They belong to Lookma, not to your terminal. `lookma doctor` says what is missing, and `lookma doctor --fix` opens the right pane.
+- **Permissions.** macOS asks for three, and for the camera only if you turn on hand gestures. They belong to Lookma, not to your terminal. `lookma doctor` says what is missing, and `lookma doctor --fix` opens the right pane.
 
   | Permission | For | Asked |
   |---|---|---|
   | Accessibility | reading the UI, clicking, typing | on the first start |
   | Screen Recording | screenshots of the app it works in | on the first start |
   | Microphone | your voice | the first time you hold fn (with `--talk always`, on the first start) |
+  | Camera | hand gestures, if you turn them on | the first time you turn them on |
 
   After you switch on Screen Recording, macOS may want the app reopened: press Ctrl-C and run `lookma` again.
 - **One card per app.** The first time it touches an app you get “Allow controlling Notes?”. The answer is kept in `~/.lookma/apps.json`.
@@ -236,6 +237,7 @@ lookma config --agent codex      # print the settings in effect, and where each 
 | `--voice` | `LOOKMA_VOICE` | `openai` (default) or `off` |
 | `--audio` | `LOOKMA_AUDIO` | `room` (default) or `headset` |
 | `--talk` | `LOOKMA_TALK` | `key` (default) or `always` |
+| `--gestures` | `LOOKMA_GESTURES` | `off` (default) or `on` |
 
 The agent and the voice are plug-ins (folders in `executors/` and `voices/`), and each declares its own settings, named `LOOKMA_<PLUGIN>_<SETTING>`. `lookma --help` lists those of the agent and voice you selected, and `lookma doctor` shows the ones in effect and warns about any `LOOKMA_*` variable that Lookma does not read, such as a misspelled one.
 
@@ -246,6 +248,7 @@ The agent and the voice are plug-ins (folders in `executors/` and `voices/`), an
 | `LOOKMA_VOICE_LANGUAGE` | detected | The language you speak, as an ISO code (`en`, `zh`, `ja`), for a better transcript. |
 | `LOOKMA_AUDIO` | `room` | How you hear the voice: `room` (speakers) or `headset`. With a headset, talking over the voice cuts it off; in a room it finishes its sentence. Sets the microphone's noise reduction to match. |
 | `LOOKMA_TALK` | `key` | How you talk to the voice: `key` (it listens while you hold fn; a tap of fn keeps it listening, hands-free, until 20 s of quiet or another tap) or `always` (it listens whenever it is not paused). In both, holding fn gives you the floor and a tap stops the voice mid-sentence. The menu bar changes it for one run. |
+| `LOOKMA_GESTURES` | `off` | Hand gestures from the camera: `on` runs the camera while Lookma is not paused, and a dot follows your hand. Frames are processed on this Mac and never stored or sent. The menu bar changes it for one run. |
 | `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
 | `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |
 | `LOOKMA_SIGN_IDENTITY` | your first signing identity, else ad hoc | Code signing for the app build; `-` forces ad hoc. Environment only. |

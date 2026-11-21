@@ -1,12 +1,15 @@
 // The user's controls outside the overlay: a menu bar item and the global hotkey ⌃⌥P that toggles
-// pause. They only ask: the core decides whether it is paused and how the user talks (`talk`), and
-// the overlay page owns the voice session and says whether its voice is on, whether the
-// microphone is open and whether a hands-free conversation is. The icon and the menu show what
-// they last said.
+// pause. They only ask: the core decides whether it is paused, how the user talks (`talk`) and
+// whether hand gestures are on (`gestures`), and the overlay page owns the voice session and says
+// whether its voice is on, whether the microphone is open and whether a hands-free conversation
+// is. The icon and the menu show what they last said, and the camera's state (HandCamera).
 //
 //   Hold fn to Talk  ·  Tap to Stay Open      a hint, in key mode
 //   Start Conversation                        End Conversation while one is open; key mode only
 //   Listen: With the fn Key / Listen: Always  the talk mode, for this run (LOOKMA_TALK is the setting)
+//   Hand Gestures                             checked while on, for this run (LOOKMA_GESTURES is the
+//                                             setting); on, it says when the camera is refused
+//                                             (Allow Camera…, which opens System Settings) or missing
 //   Pause or Resume (⌃⌥P), Type a Request…, Quit
 //
 // The icon is Hands the seal (brand/menubar*.png, copied to app/Resources): a ball above it while
@@ -22,6 +25,7 @@ enum TalkMode: String { case key, always }
 final class StatusMenu: NSObject {
     var onToggle: () -> Void = {}
     var onTalk: (TalkMode) -> Void = { _ in }
+    var onGestures: (Bool) -> Void = { _ in }
     var onConversation: () -> Void = {}
     var onType: () -> Void = {}
     var onQuit: () -> Void = {}
@@ -31,6 +35,9 @@ final class StatusMenu: NSObject {
     /// The talk mode the core last said; nil until it has.
     var talk: TalkMode? = nil { didSet { refresh() } }
     var voice = PageVoice() { didSet { refresh() } }
+    /// Whether hand gestures are on, as the core last said; nil until it has.
+    var gestures: Bool? = nil { didSet { refresh() } }
+    var camera = CameraState.off { didSet { refresh() } }
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let seal = template("menubar")
@@ -41,6 +48,7 @@ final class StatusMenu: NSObject {
     private let keySeparator = NSMenuItem.separator()
     private let listenKey = NSMenuItem(title: "Listen: With the fn Key", action: #selector(talkChosen), keyEquivalent: "")
     private let listenAlways = NSMenuItem(title: "Listen: Always", action: #selector(talkChosen), keyEquivalent: "")
+    private let gesturesItem = NSMenuItem(title: "Hand Gestures", action: #selector(gesturesChosen), keyEquivalent: "")
     private let toggle = NSMenuItem(title: "Pause", action: #selector(toggleChosen), keyEquivalent: "")
     private let typeItem = NSMenuItem(title: "Type a Request…", action: #selector(typeChosen), keyEquivalent: "")
 
@@ -52,7 +60,7 @@ final class StatusMenu: NSObject {
         listenKey.representedObject = TalkMode.key
         listenAlways.representedObject = TalkMode.always
         hint.isEnabled = false
-        for i in [hint, conversation, keySeparator, listenKey, listenAlways, toggle, typeItem, .separator(), quit] {
+        for i in [hint, conversation, keySeparator, listenKey, listenAlways, gesturesItem, toggle, typeItem, .separator(), quit] {
             i.target = self
             menu.addItem(i)
         }
@@ -81,6 +89,10 @@ final class StatusMenu: NSObject {
             i.state = talk == (i.representedObject as? TalkMode) ? .on : .off
             i.isEnabled = connected
         }
+        let on = gestures == true
+        gesturesItem.state = on ? .on : .off
+        gesturesItem.title = !on ? "Hand Gestures" : camera == .denied ? "Hand Gestures: Allow Camera…" : camera == .unavailable ? "Hand Gestures: No Camera" : "Hand Gestures"
+        gesturesItem.isEnabled = connected && !(on && camera == .unavailable)
         // ⌃⌥P is a global Carbon hot key, not a key equivalent, so it is drawn as part of the title.
         toggle.attributedTitle = shortcutTitle(paused == true ? "Resume" : "Pause", "⌃⌥P")
         toggle.isEnabled = connected
@@ -89,6 +101,13 @@ final class StatusMenu: NSObject {
 
     @objc private func toggleChosen() { onToggle() }
     @objc private func talkChosen(_ sender: NSMenuItem) { onTalk(sender.representedObject as! TalkMode) }
+    @objc private func gesturesChosen() {
+        if gestures == true && camera == .denied {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!)
+        } else {
+            onGestures(gestures != true)
+        }
+    }
     @objc private func conversationChosen() { onConversation() }
     @objc private func typeChosen() { onType() }
     @objc private func quitChosen() { onQuit() }

@@ -10,6 +10,7 @@ import { connect } from './link.js'
 import { createVoice } from './voice.js'
 import { renderCapsule } from './capsule.js'
 import { renderMarks } from './marks.js'
+import { showHand } from './hand.js'
 import { initCard, renderCard } from './card.js'
 import { commandFor } from './consent.js'
 import { chime } from './sound.js'
@@ -208,14 +209,20 @@ addEventListener('keydown', e => {
   else if (e.key === 'Escape' && !typed.hidden) toggleTyping(false)
 })
 
-// For the app (evaluateJavaScript): "Type a Request…" in its menu bar item, and the talk key's
-// edges (and the menu's Start/End Conversation, 'toggle'), checked here where they enter. Each
-// returns nothing, so evaluateJavaScript has no result to convert.
+// For the app (evaluateJavaScript): "Type a Request…" in its menu bar item, the talk key's edges
+// (and the menu's Start/End Conversation, 'toggle'), and your hand's dot, checked here where they
+// enter. Each returns nothing, so evaluateJavaScript has no result to convert.
 const KEY_EDGES = ['down', 'up', 'cancel', 'toggle']
 function key(edge) {
   if (!KEY_EDGES.includes(edge)) throw new Error(`lookma.key: unknown edge ${JSON.stringify(edge)}`)
   voice.key(edge)
 }
-window.lookma = { toggleTyping, key }
+function hand(p) {
+  if (p !== null && !(Number.isFinite(p?.x) && Number.isFinite(p.y) && typeof p.pinched === 'boolean')) {
+    throw new Error(`lookma.hand: not null or { x, y, pinched }: ${JSON.stringify(p)}`)
+  }
+  showHand(p)
+}
+window.lookma = { toggleTyping, key, hand }
 
 render()

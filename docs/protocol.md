@@ -14,7 +14,7 @@ This page is normative. For a walkthrough of adding an agent or a voice, see [Wr
 Three WebSockets meet at the core: the overlay page on `/ws/overlay`, the app on `/ws/app`, and the agent's tools bridge on `/ws/executor`.
 
 - **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/api/state`, `/api/tell` and `/api/voice/grant`. Beside the overlay it serves the selected voice provider's page half, `/voices/<name>/page.js` (and `/voices/<name>/page/*`), and nothing else of that folder.
-- **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, the talk key (fn's edges, to the page) and the menu bar item (pause, resume, talk mode, conversation, type, quit), and makes no decisions.
+- **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, the talk key (fn's edges, to the page), hand gestures (the camera, with the hand's dot drawn by the page) and the menu bar item (pause, resume, talk mode, hand gestures, conversation, type, quit), and makes no decisions.
 - **overlay** (`overlay/`) is a page loaded by the app's full-screen, click-through WKWebView. It renders core state and runs the voice session. It also opens in a normal browser for development.
 - **executor adapter** (`executors/<name>/`) wraps one agent behind the [executor contract](#executor-contract), and the core's executor host (`core/executor/host.mjs`) is the only code that runs it. `claude` and `codex` ship.
 - **voice provider** (`voices/<name>/`) is one voice service behind the [voice provider contract](#voice-provider-contract): its `mint.mjs` runs in the core, under the voice host (`core/voice/host.mjs`), and its `page.js` in the overlay, under the voice session. `openai` ships.
@@ -142,19 +142,23 @@ The app calls the page with `evaluateJavaScript`; it returns nothing:
 ```js
 window.lookma.toggleTyping(true)                      // "Type a Request…"
 window.lookma.key('down' | 'up' | 'cancel' | 'toggle') // the talk key's edges; toggle: Start/End Conversation in the menu
+window.lookma.hand(null | { x, y, pinched })          // your hand's dot, in overlay points; null hides it
 ```
 
 The page ignores the key while no session is live, and throws on any other edge. The app sends the edges of fn alone (`app/Sources/TalkKey.swift`): `down` when fn goes down with no other modifier, `up` when it goes up, `cancel` when any other key or modifier goes down while it is held (a shortcut such as fn+arrow), then nothing until fn is up again. It has no clocks; telling a tap from a hold is the turn source's. It watches with NSEvent's global and local monitors, which observe and never consume, so fn keeps working as a modifier, and it ignores events this process posted (the hands). While macOS Secure Input is on (a password field, Terminal's Secure Keyboard Entry) no key events reach the app: a press there does nothing, and a release lost there is ended by the 60 s maximum hold.
+
+The page throws on a `hand` that is not `null` or finite `x`, `y` and a boolean `pinched`. While hand gestures run, the app sends the dot on every camera frame with a hand in view, and `null` when the hand goes or the camera stops. The dot is the hand's knuckles as the gesture engine (`app/Sources/Gesture.swift`) tracks them, mirrored, with the central 70% of the camera frame stretched to the whole display; `pinched` is the engine's debounced pinch. The page draws it (`overlay/hand.js`) and nothing else uses it.
 
 ## App ⇄ core (`/ws/app`)
 
 App → core:
 
 ```js
-{ type: 'hello', version, permissions: { accessibility, screen, microphone }, screen: { w, h, scale } }
+{ type: 'hello', version, permissions: { accessibility, screen, microphone, camera }, screen: { w, h, scale } }
 { type: 'attention', idle }                    // seconds since the last user key or mouse event; every 0.5 s
 { type: 'pause' } | { type: 'resume' }         // the menu bar item, or the hotkey ⌃⌥P
 { type: 'talk', mode: 'key' | 'always' }       // the menu's Listen choice; any other mode is logged and ignored
+{ type: 'gestures', on: true | false }         // the menu's Hand Gestures; anything else is logged and ignored
 { type: 'quit' }                               // Quit in the menu bar
 ```
 
@@ -163,12 +167,13 @@ Core → app, besides requests:
 ```js
 { type: 'paused', paused }                     // on connect, and on every change
 { type: 'talk', mode }                         // on connect, and on every change
+{ type: 'gestures', on }                       // on connect, and on every change
 { type: 'quit' }                               // the core is stopping; the app quits with it
 ```
 
 ## Pause and quit
 
-The core is the only place where `paused` and `talk` change; the overlay and the app only ask.
+The core is the only place where `paused`, `talk` and `gestures` change; the overlay and the app only ask.
 
 - **Pause** (`control` `pause` from the overlay, or `pause` from the app). If a turn is working, the core stops it exactly as `stop` does. Then `paused` becomes true. While paused:
   - the overlay closes the voice session entirely (the connection closed, the microphone stopped), so nothing is heard, sent or billed, and the voice stops talking; what is owed stays in the outbox;
@@ -177,9 +182,10 @@ The core is the only place where `paused` and `talk` change; the overlay and the
   - `tell` is refused with the same hint (its ack's `error`; `POST /api/tell` answers 409).
 - **Resume** (`resume` from the app). `paused` becomes false. The overlay reconnects the warm voice session, and the turn source opens the microphone again only if the talk mode rests open (`always`). Nothing else starts: a turn the pause stopped stays stopped until the user asks again.
 - **Talk mode** (`talk` from the app). The core sets `talk` for this run, like `paused`; the durable setting is `LOOKMA_TALK`. The snapshot carries it to the overlay's turn source, and the app is told.
+- **Hand gestures** (`gestures` from the app). The core sets `gestures` for this run the same way; the durable setting is `LOOKMA_GESTURES` (off by default). Only the app is told: it is not in the snapshot. The app runs the camera while gestures are on and the core is connected and not paused, and stops it (macOS's camera light goes out) otherwise. The first time it should run, macOS asks for camera access; the app then sends a fresh `hello`.
 - **Quit** (`quit` from the app). The core runs its usual shutdown, the same as Ctrl-C: `{ type: 'quit' }` to the app, the executor's `close`, the server closes and the process exits, so the `lookma` command ends. If the core is not reachable, or does not answer within 5 s, the app quits by itself.
 
-The app's menu bar item, the seal, shows the state the core and the page last sent: its ring filled while the microphone is open (`mic`), a pause sign while paused, and dimmed while not connected. Its menu has, in `key` mode, a hint (hold fn to talk, tap to stay open) and Start Conversation (End Conversation while one is open, `toggle` to the page); then Listen: With the fn Key or Always (`talk` to the core, checked as the core last said); Pause or Resume (⌃⌥P), Type a Request…, and Quit.
+The app's menu bar item, the seal, shows the state the core and the page last sent: its ring filled while the microphone is open (`mic`), a pause sign while paused, and dimmed while not connected. Its menu has, in `key` mode, a hint (hold fn to talk, tap to stay open) and Start Conversation (End Conversation while one is open, `toggle` to the page); then Listen: With the fn Key or Always (`talk` to the core, checked as the core last said); Hand Gestures (`gestures` to the core, checked while on; while on, "Hand Gestures: Allow Camera…" opens System Settings when camera access is refused, and "Hand Gestures: No Camera" is disabled when macOS has no camera to offer); Pause or Resume (⌃⌥P), Type a Request…, and Quit.
 
 - ⌃⌥P is a Carbon hot key, which needs no extra permission; when another app holds it, the app logs that and the menu still works.
 

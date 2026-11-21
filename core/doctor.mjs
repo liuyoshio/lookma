@@ -20,10 +20,13 @@ const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const NEEDS = { macos: '15', node: PKG.engines.node.replace(/^>=/, '') }
 const BUILD_SH = path.join(ROOT, 'app', 'build.sh')
 const PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_'
+// level: how much a missing grant matters with these settings. The camera is only for hand
+// gestures, which are off by default.
 const PERMISSIONS = [
-  { key: 'accessibility', name: 'Accessibility', pane: 'Accessibility', use: 'to read, click and type in other apps', required: true },
-  { key: 'screen', name: 'Screen Recording', pane: 'ScreenCapture', use: 'to see the screen', required: true },
-  { key: 'microphone', name: 'Microphone', pane: 'Microphone', use: 'for voice; macOS asks the first time you talk', required: false },
+  { key: 'accessibility', name: 'Accessibility', pane: 'Accessibility', use: 'to read, click and type in other apps', level: () => 'fail' },
+  { key: 'screen', name: 'Screen Recording', pane: 'ScreenCapture', use: 'to see the screen', level: () => 'fail' },
+  { key: 'microphone', name: 'Microphone', pane: 'Microphone', use: 'for voice; macOS asks the first time you talk', level: () => 'warn' },
+  { key: 'camera', name: 'Camera', pane: 'Camera', use: 'for hand gestures; macOS asks when you turn them on', level: config => (config.gestures ? 'warn' : 'note') },
 ]
 
 // A check returns a finding, or a list of them: { level, text, fix: [lines] }. One whose fix is
@@ -219,14 +222,18 @@ function checkInstance(app) {
   }
 }
 
-function checkPermissions(perms, appName) {
+// A grant these settings do not need is a note, with no fix: macOS asks once it is needed.
+function checkPermissions(perms, appName, config) {
   return PERMISSIONS.map(p => {
     if (perms[p.key]) return ok(p.name)
+    const level = p.level(config)
+    const text = `${p.name} is not granted to ${appName} (${p.use})`
+    if (level === 'note') return note(text)
     const url = PANE + p.pane
-    const missing = (p.required ? fail : warn)(`${p.name} is not granted to ${appName} (${p.use})`, [
+    const missing = finding(level)(text, [
       `Turn on ${appName} in System Settings → Privacy & Security → ${p.name}:`,
       `open "${url}"`,
-      ...(p.required ? ['If it already looks on, remove it with −, then start lookma: macOS adds it back and you turn it on.'] : []),
+      ...(level === 'fail' ? ['If it already looks on, remove it with −, then start lookma: macOS adds it back and you turn it on.'] : []),
     ])
     return { ...missing, settings: { where: `Privacy & Security → ${p.name}`, url } }
   })
@@ -261,10 +268,10 @@ export async function doctor(config, { fix = false } = {}) {
   report(checkCore(state, config.port))
   const app = findApp(config)
   report(checkApp(app))
-  if (state?.app) report(checkPermissions(state.app.permissions, app?.name || 'the app'))
+  if (state?.app) report(checkPermissions(state.app.permissions, app?.name || 'the app', config))
   else if (app && !app.stale) {
     const perms = checkInstance(app.path)
-    report(perms ? checkPermissions(perms, app.name) : fail('the app did not answer the permission check', `Rebuild it with ${BUILD_SH} and run lookma doctor again.`))
+    report(perms ? checkPermissions(perms, app.name, config) : fail('the app did not answer the permission check', `Rebuild it with ${BUILD_SH} and run lookma doctor again.`))
   } else report(note(`permissions: checked once the app is ${app ? 'rebuilt' : 'built'} (start lookma once)`))
 
   const panes = findings.filter(f => f.settings)

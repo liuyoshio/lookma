@@ -1,12 +1,13 @@
 /* Lookma overlay. A transparent page over the whole main display, click-through
    except the approval card (the app makes only the posted hitRects clickable).
    One material (dark glass, no real blur), one motion curve, one accent:
-   coral marks the agent's hands (ring, ghost cursor, press ripple, label);
+   coral marks hands on the screen: the agent's (ring, ghost cursor, press ripple, label)
+   and your own (a bare dot, with Hand Gestures on);
    yellow marks the two exceptions to "visible": background work, and the user being busy. */
 
 :root {
   --s: 1;                                /* ?scale= for TV distance */
-  --acc: 255 128 92;                     /* coral: the agent's marks, nothing else */
+  --acc: 255 128 92;                     /* coral: hands on the screen, the agent's marks and your hand's dot */
   --acc-hi: 255 190 168;
   --yel: 255 214 10;                     /* yellow: background tasks, user-busy hint */
   --yel-hi: 255 228 140;
@@ -78,6 +79,22 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #ripple {
   position: absolute; left: 0; top: 0; width: calc(40px * var(--s)); height: calc(40px * var(--s));
   border-radius: 50%; border: calc(2px * var(--s)) solid rgb(var(--acc)); opacity: 0;
+}
+
+/* your hand's dot: placed by translate every camera frame (no transition, so it never trails);
+   the disc is drawn by ::before so a pinch can shrink it without touching the position.
+   Faint while the hand is open; solid, a little smaller and glowing while it pinches. */
+#hand { position: absolute; left: 0; top: 0; opacity: 0; transition: opacity .2s }
+#hand.on { opacity: 1 }
+#hand::before {
+  content: ""; position: absolute; left: calc(-9px * var(--s)); top: calc(-9px * var(--s));
+  width: calc(18px * var(--s)); height: calc(18px * var(--s)); border-radius: 50%;
+  background: rgb(var(--acc) / .45);
+  transition: transform .15s var(--out), background-color .15s, box-shadow .15s;
+}
+#hand.pinched::before {
+  background: rgb(var(--acc)); transform: scale(.8);
+  box-shadow: 0 0 0 calc(1px * var(--s)) rgba(255, 255, 255, .6), 0 0 calc(16px * var(--s)) calc(4px * var(--s)) rgb(var(--acc) / .6);
 }
 
 /* ---------------------------------------------------------------- edge hint (user busy) */

@@ -18,11 +18,14 @@ export const DEFAULTS = { executors: 'claude', voices: 'openai' }
 // The core's own settings. A plug-in declares its own in its manifest; lookma doctor warns about
 // any other LOOKMA_* that is set. LOOKMA_SIGN_IDENTITY is app/build.sh's, LOOKMA_LIVE_TESTS the
 // dev checks'.
-const CORE = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK', 'LOOKMA_VOICE_LANGUAGE', 'LOOKMA_PORT', 'LOOKMA_DATA', 'LOOKMA_NO_APP', 'LOOKMA_SIGN_IDENTITY', 'LOOKMA_LIVE_TESTS']
+const CORE = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK', 'LOOKMA_GESTURES', 'LOOKMA_VOICE_LANGUAGE', 'LOOKMA_PORT', 'LOOKMA_DATA', 'LOOKMA_NO_APP', 'LOOKMA_SIGN_IDENTITY', 'LOOKMA_LIVE_TESTS']
 
 // How the user talks to the voice (LOOKMA_TALK), the default first: the key (hold fn to talk; a
 // tap opens a hands-free conversation), or always listening. The app's menu changes it for a run.
 export const TALK = ['key', 'always']
+
+// Hand gestures from the camera (LOOKMA_GESTURES), off by default. The app's menu changes it for a run.
+const GESTURES = ['off', 'on']
 
 // The named flags, each a shorthand for one setting. --set NAME=value sets any other.
 const FLAGS = {
@@ -30,6 +33,7 @@ const FLAGS = {
   '--voice': name => ({ LOOKMA_VOICE: name }),
   '--audio': setup => ({ LOOKMA_AUDIO: setup }),
   '--talk': mode => ({ LOOKMA_TALK: mode }),
+  '--gestures': on => ({ LOOKMA_GESTURES: on }),
   '--set': pair => {
     const m = pair.match(/^([A-Z][A-Z0-9_]*)=(.*)$/)
     if (!m) throw usage(`--set ${pair}: use --set NAME=value`)
@@ -127,6 +131,7 @@ export async function loadConfig(settings = {}) {
     port: Number(env.LOOKMA_PORT || 8790),
     dataDir,
     appsFile: path.join(dataDir, 'apps.json'),
+    gestures: oneOf('LOOKMA_GESTURES', GESTURES) === 'on', // the app runs the camera while it is on and not paused
     // executors/<name>, loaded (core/plugins.mjs), with the environment for its child processes:
     // everything but the secrets other plug-ins declared (the voice's API key stays with the core).
     executor: { ...executor, env: envFor(names, `executors/${executor.name}`) },
