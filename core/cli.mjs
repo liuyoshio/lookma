@@ -38,6 +38,7 @@ Options (each overrides the environment and .env):
   --voice <name>       the voice: ${anyOf([...choices(all, 'voices'), 'off (type instead)'])}
   --audio <setup>      room (speakers, the default) or headset
   --talk <mode>        key (hold fn to talk, the default) or always (always listening)
+  --gestures <off|on>  hand gestures from the camera: off (the default) or on
   --set NAME=value     any setting below, e.g. --set LOOKMA_CLAUDE_MODEL=opus
 
 While it runs, the agent's steps, cards and messages are in the log of the terminal
@@ -56,6 +57,7 @@ Settings, from the environment or ${path.join(ROOT, '.env')}:
   LOOKMA_VOICE           the voice, as --voice
   LOOKMA_AUDIO           room (speakers, the default) or headset (talking over the voice stops it)
   LOOKMA_TALK            key (the default) or always, as --talk
+  LOOKMA_GESTURES        off (the default) or on, as --gestures
   LOOKMA_VOICE_LANGUAGE  the language you speak, e.g. en or zh; unset, it is detected
 `
 
@@ -87,7 +89,7 @@ async function printHelp() {
   process.stdout.write(text + pluginHelp(config))
 }
 
-// The four switches, and every other setting that is set, with where it came from. Secrets are masked.
+// The main switches, and every other setting that is set, with where it came from. Secrets are masked.
 function settings(config) {
   const from = name => config.sources[name] || 'default'
   const rows = [
@@ -95,8 +97,9 @@ function settings(config) {
     ['voice', config.voice.provider?.name ?? 'off', from('LOOKMA_VOICE')],
     ['audio', config.voice.audio, from('LOOKMA_AUDIO')],
     ['talk', config.voice.talk, from('LOOKMA_TALK')],
+    ['gestures', config.gestures ? 'on' : 'off', from('LOOKMA_GESTURES')],
   ]
-  const shown = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK']
+  const shown = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK', 'LOOKMA_GESTURES']
   for (const name of Object.keys(config.sources).filter(n => !shown.includes(n)).sort()) {
     rows.push([name, config.declared.get(name)?.secret ? '(set)' : process.env[name], from(name)])
   }
@@ -111,12 +114,20 @@ async function printConfig(args) {
   for (const [name, value, from] of rows) console.log(`${name.padEnd(width)}  ${value}  (${from})`)
 }
 
-// `open` makes macOS attribute the permissions to the app, not to this terminal.
+// `open` makes macOS attribute the permissions to the app, not to this terminal. It also cuts the
+// app off from this terminal, so the app writes its log to app.log in the data folder and a tail
+// copies each line here: the two logs read as one, and the file keeps the app's side of this run.
 function launchApp(config) {
   log('launching', path.basename(config.app))
+  const appLog = path.join(config.dataDir, 'app.log')
+  fs.mkdirSync(config.dataDir, { recursive: true })
+  fs.writeFileSync(appLog, '')
+  const tail = spawn('tail', ['-f', appLog], { stdio: ['ignore', 'inherit', 'inherit'] })
+  process.on('exit', () => tail.kill())
   const env = [`LOOKMA_PORT=${config.port}`]
   if (!config.voice.provider) env.push(`LOOKMA_OVERLAY_URL=http://127.0.0.1:${config.port}/?voice=0`)
-  spawn('open', [...env.flatMap(e => ['--env', e]), '-a', config.app], { stdio: 'ignore', detached: true }).unref()
+  const args = [...env.flatMap(e => ['--env', e]), '--stdout', appLog, '--stderr', appLog, '-a', config.app]
+  spawn('open', args, { stdio: 'ignore', detached: true }).unref()
 }
 
 async function start(args) {
@@ -124,7 +135,7 @@ async function start(args) {
   const dirs = rest.map(d => path.resolve(d))
   for (const d of dirs) if (!fs.statSync(d, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`not a directory: ${d}`)
   const config = await loadConfig(flags)
-  log('settings', settings(config).slice(0, 4).map(([name, value, from]) => `${name} ${value} (${from})`).join(', '))
+  log('settings', settings(config).slice(0, 5).map(([name, value, from]) => `${name} ${value} (${from})`).join(', '))
 
   // Without the app (LOOKMA_NO_APP=1) its build is yours too, which also keeps a dev core from
   // replacing the bundle another Lookma is running.

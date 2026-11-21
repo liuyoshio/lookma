@@ -1,12 +1,12 @@
 /* Lookma overlay. A transparent page over the whole main display, click-through
    except the approval card (the app makes only the posted hitRects clickable).
    One material (dark glass, no real blur), one motion curve, one accent:
-   coral marks the agent's hands (ring, ghost cursor, press ripple, label);
+   coral marks the agent's hands on the screen (ring, ghost cursor, press ripple, label);
    yellow marks the two exceptions to "visible": background work, and the user being busy. */
 
 :root {
   --s: 1;                                /* ?scale= for TV distance */
-  --acc: 255 128 92;                     /* coral: the agent's marks, nothing else */
+  --acc: 255 128 92;                     /* coral: the agent's hands on the screen */
   --acc-hi: 255 190 168;
   --yel: 255 214 10;                     /* yellow: background tasks, user-busy hint */
   --yel-hi: 255 228 140;
@@ -79,6 +79,9 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   position: absolute; left: 0; top: 0; width: calc(40px * var(--s)); height: calc(40px * var(--s));
   border-radius: 50%; border: calc(2px * var(--s)) solid rgb(var(--acc)); opacity: 0;
 }
+
+/* the hand gestures' camera: a video WebKit keeps delivering frames for, which nobody sees */
+#camera { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none }
 
 /* ---------------------------------------------------------------- edge hint (user busy) */
 #edge {

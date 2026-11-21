@@ -13,8 +13,8 @@ This page is normative. For a walkthrough of adding an agent or a voice, see [Wr
 
 Three WebSockets meet at the core: the overlay page on `/ws/overlay`, the app on `/ws/app`, and the agent's tools bridge on `/ws/executor`.
 
-- **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/api/state`, `/api/tell` and `/api/voice/grant`. Beside the overlay it serves the selected voice provider's page half, `/voices/<name>/page.js` (and `/voices/<name>/page/*`), and nothing else of that folder.
-- **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, the talk key (fn's edges, to the page) and the menu bar item (pause, resume, talk mode, conversation, type, quit), and makes no decisions.
+- **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/api/state`, `/api/tell` and `/api/voice/grant`. Beside the overlay it serves the selected voice provider's page half, `/voices/<name>/page.js` (and `/voices/<name>/page/*`), and nothing else of that folder, and MediaPipe's `@mediapipe/tasks-vision` from `node_modules` at `/vendor/tasks-vision/*` for the page's hand tracker, whose model is the overlay's own `/hand/hand_landmarker.task`.
+- **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, the talk key (fn's edges, to the page), the hand mouse (the page's camera on and off, and the hand's points from the page as the real pointer, button and scroll) and the menu bar item (pause, resume, talk mode, hand gestures, conversation, type, quit), and makes no decisions.
 - **overlay** (`overlay/`) is a page loaded by the app's full-screen, click-through WKWebView. It renders core state and runs the voice session. It also opens in a normal browser for development.
 - **executor adapter** (`executors/<name>/`) wraps one agent behind the [executor contract](#executor-contract), and the core's executor host (`core/executor/host.mjs`) is the only code that runs it. `claude` and `codex` ship.
 - **voice provider** (`voices/<name>/`) is one voice service behind the [voice provider contract](#voice-provider-contract): its `mint.mjs` runs in the core, under the voice host (`core/voice/host.mjs`), and its `page.js` in the overlay, under the voice session. `openai` ships.
@@ -26,7 +26,7 @@ Local-only:
 - POST bodies must be `application/json`;
 - WebSocket upgrades are accepted only when `Origin` is absent (native clients) or is the core's own origin. Without this check, any web page could drive the computer.
 
-Nothing else.
+Nothing else. The overlay page makes no network calls of its own beyond the core and its voice provider's service: the hand tracker's library, wasm and model come from the core.
 
 ## Coordinates
 
@@ -129,32 +129,52 @@ Spoken "stop", "go ahead" and "pause" are the voice's: it calls its `control` to
 
 `POST /api/voice/grant` → `{ provider, credential?, startBy?, renewAfter, label, session? }`, one grant per voice session, minted by the selected provider (see Voice provider contract). A 503 means no voice, for good (`LOOKMA_VOICE=off`, or a required setting such as `OPENAI_API_KEY` unset): the page stops asking. Any other error (a 502 when the provider's service refused) means try again later.
 
-**Overlay ↔ app (local, not the core).** The page posts `{ hitRects: [rect…], typing, voice, mic, conversation }` to `window.webkit.messageHandlers.lookma` whenever one of them changes:
+**Overlay ↔ app (local, not the core).** The page posts `{ hitRects: [rect…], typing, voice, mic, conversation, camera }` to `window.webkit.messageHandlers.lookma` whenever one of them changes:
 
 - `hitRects`: the app makes the window accept mouse events only while the pointer is inside one of those rects (the card), and click-through everywhere else.
 - `typing`: the app gives the window the keyboard only while the typed input is open, and hands it back when the page closes it.
 - `voice`: voice works (voice on, not paused, the session not failing).
 - `mic`: the microphone is open for the user (the turn source is not `off`: fn held, a conversation open, or `always`). The app shows it in the menu bar.
 - `conversation`: a hands-free conversation is open. The app's menu then offers End Conversation.
+- `camera`: what the hand gestures' camera is doing, `'off'`, `'on'` (from the first processed frame) or `'failed'` (no camera, the track ended by itself, access refused, or the tracker did not load; the page logs why and turns the camera off). The app shows `failed` as No Camera in the menu and tries again when a camera is connected.
 
 The app calls the page with `evaluateJavaScript`; it returns nothing:
 
 ```js
 window.lookma.toggleTyping(true)                      // "Type a Request…"
 window.lookma.key('down' | 'up' | 'cancel' | 'toggle') // the talk key's edges; toggle: Start/End Conversation in the menu
+window.lookma.camera(true | false)                    // the hand gestures' camera on or off
 ```
 
 The page ignores the key while no session is live, and throws on any other edge. The app sends the edges of fn alone (`app/Sources/TalkKey.swift`): `down` when fn goes down with no other modifier, `up` when it goes up, `cancel` when any other key or modifier goes down while it is held (a shortcut such as fn+arrow), then nothing until fn is up again. It has no clocks; telling a tap from a hold is the turn source's. It watches with NSEvent's global and local monitors, which observe and never consume, so fn keeps working as a modifier, and it ignores events this process posted (the hands). While macOS Secure Input is on (a password field, Terminal's Secure Keyboard Entry) no key events reach the app: a press there does nothing, and a release lost there is ended by the 60 s maximum hold.
+
+**The hand gestures' camera.** The page throws on a `camera` argument that is not a boolean. `true` starts `getUserMedia` (video only, 1280x720, at most 30 fps) and MediaPipe's hand tracker in a module worker (`overlay/hand/worker.js`, loaded on the first `true` and kept for the page's life); `false` stops every track. A `false` that arrives while `getUserMedia` is pending stops the stream as soon as it resolves, and a frame in flight across a stop is dropped. The app calls `camera(true)` only while it wants the camera (gestures on, not paused, connected) and macOS has granted access, and grants WebKit's camera request only then (the microphone always); its `camera(false)` also ends WebKit's capture (`setCameraCaptureState(.none)`), so the camera stops even if the page is stuck.
+
+While the camera runs, the page posts one message per processed frame, hand or no hand, to its own handler, `window.webkit.messageHandlers.hand` (not page state, so not deduped):
+
+```js
+{ t, aspect, hand }   // t: seconds, strictly increasing; aspect: the frame's width / height
+                      // hand: null, or 42 numbers x0, y0 ... x20, y20: MediaPipe's 21 landmarks in its
+                      // order, as fractions of the frame, mirrored (x = 1 - MediaPipe's x, so x runs to
+                      // the user's right). z and handedness are not sent.
+```
+
+Frames themselves never leave the page: its main thread hands each to its own worker, which closes it once read. The app (`app/Sources/HandCamera.swift`) checks each message once: a dictionary; `t` a finite number above the last accepted `t` of this page; `aspect` finite in 0.25 to 4; `hand` null or exactly 42 finite numbers (a boolean is not a number). Points outside 0 to 1 pass: a hand partly out of view. A bad message is dropped and logged once; every message is dropped while the app does not want the camera, so a straggler after a stop cannot press anything. The app scales x by `aspect` into frame heights and passes the frame to the gesture engine (`app/Sources/Gesture.swift`), whose state the gesture output (`app/Sources/GestureOutput.swift`) makes the real mouse match: pointer moves, the left button and pixel scroll events, from a private event source, so they count as the user's input.
+
+Every way frames stop resets the engine and lets the button go: the camera turned off, `failed`, a navigation starting or the web content process dying (the app sends `camera(true)` again once the next page has loaded), and a stall, no message for 0.5 s while the page says `on`, the one way frames stop with no message; frames that resume are taken as usual.
+
+The page's `?hands=1` flag draws what the tracker sees (`overlay/hand/view.js`): the landmarks mapped onto the display as the engine maps them, the frame with its central 70%, and the tracker's milliseconds per frame. Nothing uses it but a person debugging.
 
 ## App ⇄ core (`/ws/app`)
 
 App → core:
 
 ```js
-{ type: 'hello', version, permissions: { accessibility, screen, microphone }, screen: { w, h, scale } }
+{ type: 'hello', version, permissions: { accessibility, screen, microphone, camera }, screen: { w, h, scale } }
 { type: 'attention', idle }                    // seconds since the last user key or mouse event; every 0.5 s
 { type: 'pause' } | { type: 'resume' }         // the menu bar item, or the hotkey ⌃⌥P
 { type: 'talk', mode: 'key' | 'always' }       // the menu's Listen choice; any other mode is logged and ignored
+{ type: 'gestures', on: true | false }         // the menu's Hand Gestures; anything else is logged and ignored
 { type: 'quit' }                               // Quit in the menu bar
 ```
 
@@ -163,12 +183,13 @@ Core → app, besides requests:
 ```js
 { type: 'paused', paused }                     // on connect, and on every change
 { type: 'talk', mode }                         // on connect, and on every change
+{ type: 'gestures', on }                       // on connect, and on every change
 { type: 'quit' }                               // the core is stopping; the app quits with it
 ```
 
 ## Pause and quit
 
-The core is the only place where `paused` and `talk` change; the overlay and the app only ask.
+The core is the only place where `paused`, `talk` and `gestures` change; the overlay and the app only ask.
 
 - **Pause** (`control` `pause` from the overlay, or `pause` from the app). If a turn is working, the core stops it exactly as `stop` does. Then `paused` becomes true. While paused:
   - the overlay closes the voice session entirely (the connection closed, the microphone stopped), so nothing is heard, sent or billed, and the voice stops talking; what is owed stays in the outbox;
@@ -177,9 +198,10 @@ The core is the only place where `paused` and `talk` change; the overlay and the
   - `tell` is refused with the same hint (its ack's `error`; `POST /api/tell` answers 409).
 - **Resume** (`resume` from the app). `paused` becomes false. The overlay reconnects the warm voice session, and the turn source opens the microphone again only if the talk mode rests open (`always`). Nothing else starts: a turn the pause stopped stays stopped until the user asks again.
 - **Talk mode** (`talk` from the app). The core sets `talk` for this run, like `paused`; the durable setting is `LOOKMA_TALK`. The snapshot carries it to the overlay's turn source, and the app is told.
+- **Hand gestures** (`gestures` from the app). The core sets `gestures` for this run the same way; the durable setting is `LOOKMA_GESTURES` (off by default). Only the app is told: it is not in the snapshot. The app runs the page's camera while gestures are on and the core is connected and not paused, and stops it (macOS's camera light goes out) otherwise. The first time it should run, macOS asks for camera access; the app then sends a fresh `hello`.
 - **Quit** (`quit` from the app). The core runs its usual shutdown, the same as Ctrl-C: `{ type: 'quit' }` to the app, the executor's `close`, the server closes and the process exits, so the `lookma` command ends. If the core is not reachable, or does not answer within 5 s, the app quits by itself.
 
-The app's menu bar item, the seal, shows the state the core and the page last sent: its ring filled while the microphone is open (`mic`), a pause sign while paused, and dimmed while not connected. Its menu has, in `key` mode, a hint (hold fn to talk, tap to stay open) and Start Conversation (End Conversation while one is open, `toggle` to the page); then Listen: With the fn Key or Always (`talk` to the core, checked as the core last said); Pause or Resume (⌃⌥P), Type a Request…, and Quit.
+The app's menu bar item, the seal, shows the state the core and the page last sent: its ring filled while the microphone is open (`mic`), a pause sign while paused, and dimmed while not connected. Its menu has, in `key` mode, a hint (hold fn to talk, tap to stay open) and Start Conversation (End Conversation while one is open, `toggle` to the page); then Listen: With the fn Key or Always (`talk` to the core, checked as the core last said); Hand Gestures (`gestures` to the core, checked while on; while on, "Hand Gestures: Allow Camera…" opens System Settings when camera access is refused, and "Hand Gestures: No Camera" shows when the page's camera failed, and still turns them off); Pause or Resume (⌃⌥P), Type a Request…, and Quit.
 
 - ⌃⌥P is a Carbon hot key, which needs no extra permission; when another app holds it, the app logs that and the menu still works.
 

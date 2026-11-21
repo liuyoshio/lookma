@@ -20,8 +20,8 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Piece | Where | What it does |
 |---|---|---|
 | Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and grants the voice its sessions. |
-| App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, the fn key's edges, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
-| Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
+| App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, the fn key's edges, the hand mouse (opt-in: the camera's on and off, and the hand's points turned into pointer, button and scroll), and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
+| Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, runs the voice, and with hand gestures on runs the camera and MediaPipe's hand tracker, sending the app only the hand's points. The window takes clicks only on the card, the Go ahead button and the text box. |
 | Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code run headless through the Claude Agent SDK, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
 | Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings, `mint.mjs` runs in the core and mints a short-lived grant for each session, and `page.js` runs in the overlay and connects to the service. The rest of the voice (`overlay/voice/`) is the same for every provider. |
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
@@ -168,6 +168,55 @@ When a voiced answer is refused, nothing is sent. The card shows “Not a clear 
 
 **Commands.** An utterance that is only “stop” (or “cancel”) cancels a running turn at once, without waiting for the voice model. “Go ahead” (or “continue”) resumes a step that is waiting for you. “Pause” pauses: the running turn stops as with “stop”, the voice session closes and the microphone is off until you resume from the menu bar or with ⌃⌥P. Resuming only brings the voice back; the stopped turn stays stopped. This works typed or spoken. While a card is up, your words answer the card instead.
 
+## Hand gestures
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/gestures-dark.svg">
+  <img src="images/gestures.svg" width="100%" alt="The camera runs in the overlay page, where MediaPipe's hand landmarker finds 21 points of your hand in each frame, on this Mac. Only those points go to the app: its gesture engine decides what the mouse should do, and a 120 Hz pointer loop moves the real mouse there, eased, and still while the hand is still. Four states: point with an open hand, and the pointer follows the base of your ring finger; pinch thumb and index to press the button, for a click, a double-click or a drag; pinch thumb and middle and move up or down to scroll the window under the pointer, where a flick coasts; make a fist or drop your hand to park, and the pointer stays and a held button lets go. A hand never opened flat in view moves nothing, and a pinch carried into view presses nothing.">
+</picture>
+
+**The hand is a mouse with a clutch.** An open hand is the hand on the mouse: the real pointer follows the base of the ring finger. A fist, or the hand leaving the view, lifts the mouse off the desk: the pointer stays where it is and a held button is let go. While the hand is on the mouse, a thumb-index pinch is the left button held, and a thumb-middle pinch moved up or down is the scroll wheel. That is the whole vocabulary:
+
+| State | The hand | The mouse |
+|---|---|---|
+| **Parked** | a fist, no hand, or a hand never opened flat in view | the pointer stays; the button is up |
+| **Pointing** | open: at least three fingers straight | the pointer follows the ring finger's base |
+| **Button held** | pointing, thumb and index pinched | the left button is down: click, double-click, drag |
+| **Scrolling** | pointing, thumb and middle pinched | the pointer is frozen; vertical travel scrolls the window under it |
+
+The engine says, every frame, what state the mouse should be in: where the pointer should be, whether the button is held, how much scroll is owed. The output makes the real mouse match it. Level, not edges, so every way out is the same "parked, button up".
+
+**One owner each.** The core decides only whether gestures are on (`LOOKMA_GESTURES`, or Hand Gestures in the menu for one run); the app wants the camera while they are on, Lookma is not paused and the core is connected.
+
+| Piece | What it owns |
+|---|---|
+| `overlay/hand/` | The camera and the tracker, in the overlay page. `camera.js` runs the `getUserMedia` stream (1280x720, 30 fps) exactly while the app says, and hands each frame to `worker.js`, one in flight: a frame that comes while the tracker is busy is skipped, never queued. The worker runs MediaPipe's `HandLandmarker` (one hand, video mode, on the CPU) and `pack.js` turns its 21 landmarks into 42 numbers, mirrored so x runs to your right. `view.js` is a debug view behind `?hands=1`. |
+| `HandCamera.swift` | Camera access with macOS, the WebKit grant, telling the page on and off, and the receiving side of the page's `hand` messages, each checked once into a `HandFrame` (`HandFrame.swift`). It knows no gesture. |
+| `Gesture.swift` | The gesture engine: hand frames in, the mouse's state out. Pure, with no clock of its own, so `npm run test:gesture` drives it with synthetic hands. Every constant is in `GestureTuning`. |
+| `GestureOutput.swift` | The 120 Hz pointer loop that makes the real mouse match the engine, and the only place gesture input is posted. |
+
+**Tracking.** MediaPipe finds the same hand in every frame with a few pixels of jitter, so the engine reads the raw points with no filter of its own; the output's easing is the smoothing. The page loads MediaPipe's library (`@mediapipe/tasks-vision`, pinned to 0.10.35) and the model (`overlay/hand/hand_landmarker.task`) from the core, never from the network; the 1.x line of the library adds usage metrics sent to Google, so the pin is a privacy decision, and `npm test` fails if the installed library changes. The tracker loads the first time the camera runs and stays for the page's life.
+
+**The engine.** Distances are in palm lengths (wrist to the middle finger's base), so it does not matter how far you sit. A palm under 0.06 frame heights is no hand (someone behind you).
+
+- **The clutch.** A finger is straight when the straight line from its base to its tip is at least 0.82 of the path along its joints, and folded below 0.55. The hand goes live after 3 frames in a row with at least three fingers straight (three, because a pinch bends one), and parks after 2 frames with at least three folded (a fist) or 2 frames with no hand. A relaxed hand in between changes nothing. A hand that was never opened flat, resting, typing or holding a cup, never moves the pointer.
+- **Pointing.** The pointer's target is the ring finger's base, which barely moves when the thumb meets the index or the middle finger, so a click lands where you aimed. The central 70% of the mirrored frame, in each axis, spans the main display.
+- **The button.** The thumb-index gap closes below 0.34 palm lengths and opens above 0.45, a band so a held button does not chatter. The button is held exactly while the pinch is closed and the hand is live, so click, double-click and drag need nothing more. A pinch counts only after the hand has been seen live with both gaps open, so a hand that comes in pinched presses nothing, and a fist, whose thumb lies over the index, never closes a pinch.
+- **Scroll.** The thumb-middle gap, with the same bounds. One pinch at a time: the tighter one wins, and the other cannot start until it opens. While scrolling, the pointer stays where the pinch closed, and the hand's vertical travel, mapped as the pointer is, moves the content the same distance: a pull across the mapped area scrolls one screen. Sideways travel is ignored. Released at 0.3 screen heights a second or faster, the scroll coasts and fades with a 0.25 s time constant; a slow scroll stops dead.
+- **A dropout.** One frame without a hand changes nothing; the second parks.
+
+**The output.** A loop at 120 Hz on its own queue, so the app's Accessibility calls and menus cannot freeze the pointer, and at a fixed rate, so it feels the same on any display. Each tick moves the pointer 1/12 of the way to the target (a time constant of about 0.1 s), unless the target is nearer than 0.3% of the display's diagonal: a still hand is a still pointer. The pointer gives way to anyone else: moved by the trackpad, the real mouse or an agent's click while the hand is still, it stays where they put it until the hand moves past the dead zone or parks, and the hand then starts from there. A hand held still in view never pulls the pointer back. The button goes down and up at once, with macOS's double-click count; while it is held, moves are drags. Owed scroll drains with the same easing, as pixel scroll events at the pointer. The loop runs only while the hand is live or scroll is owed.
+
+**The button always comes up.** A parked or lost hand is "button up" in the state. Every way the frames stop, gestures off, pause, quit, the page reloading or crashing, the camera failing, or no frame for 0.5 s while the page says its camera is on, resets the engine and releases the button.
+
+**The camera's life.** The app owns it end to end: it asks macOS for camera access, lets WebKit grant the page the camera only while it wants it, and calls the page's `camera(true)` or `camera(false)`. The page reports `on` at its first processed frame, `off`, or `failed` (no camera, unplugged, refused, or the tracker did not load); on `failed` the menu reads No Camera, and the app tries again when a camera is connected. Turning it off also ends WebKit's capture outright, so macOS's green light goes out even if the page is stuck.
+
+**Your input, not the agent's.** Gesture input comes from its own event source and is not marked as the hands', so it counts as you using the Mac: while you move the hand mouse, the agent's steps that need the front wait, as they do while you type. The talk key ignores input the app posts.
+
+**Privacy.** The camera runs only while gestures are on and Lookma is not paused, and macOS's green light shows it for exactly that time. Frames stay in the overlay page on this Mac: its main thread hands each to its own worker, which reads it and closes it. Only the hand's 21 points per frame reach the app, and they go no further: the core, the agent and the voice never see them. Nothing is stored or sent, and the log says when the hand mouse goes live or parks, never where a hand was.
+
+Hand tracking is Google's [MediaPipe](https://github.com/google-ai-edge/mediapipe) hand landmarker, library and model under Apache-2.0 (`overlay/hand/NOTICE`). The hand mouse learned from four MIT projects, whose ideas and numbers are adapted and whose code is not copied: [handTrack](https://github.com/small-cactus/handTrack) (the interaction model: the ring finger's base, the 70% mapping, the easing and dead zone, the pinch as the button and its threshold, the middle-finger scroll with inertia), [Pawvis](https://github.com/alexandriax/pawvis) (the open-hand gate), [Precog](https://github.com/lulu38m/precog-macos) (the finger-straightness test and its bounds) and [Gstrl](https://github.com/tomyang-tz/Gstrl) (the private event source).
+
 ## Background work
 
 Long work with nothing to show on screen goes to Claude Code's background subagents, such as research or a big batch of file edits. They are told not to use `say` or the hands, and they cannot start subagents of their own. Each one ends its final message with a `SAY:` line to speak and a `SHOW:` line to display. The overlay shows running tasks as yellow pills, and the voice reads the report when one finishes. The main session does all screen work itself, because there is one screen and one pair of hands. Codex has no background tasks yet: its subagents are turned off, and everything runs in the turn.
@@ -218,6 +267,7 @@ Besides its own shell, file edits and web search, Codex gets only Lookma's tools
 - POST bodies must be `application/json`, so another web page cannot send commands with a plain form.
 - WebSocket upgrades are accepted only without an `Origin` header (native clients) or from the core's own origin. Without this check, any web page you visit could drive your computer.
 - The voice's API key stays in the core. The overlay gets a short-lived grant: with OpenAI, a key with the voice's instructions and tools baked in.
+- The overlay page loads nothing from the network of its own: the hand tracker's library and model come from the core, which serves them from `node_modules` and `overlay/hand/`.
 
 There are no tokens or accounts beyond that.
 

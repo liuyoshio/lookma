@@ -8,10 +8,10 @@
 //
 // Full duplex, on one warm session. The talk mode (the snapshot's `talk`) is the turn source's
 // rest: key (the default), the microphone is closed until the key is held, or a tap opens a
-// hands-free conversation; always, it is open whenever a session is live. The key comes from the app (key()). In
-// auto the provider finds each turn, in hold the key bounds it, and the provider never replies by
-// itself; every committed turn goes to the floor, which asks for a reply at once, and
-// the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
+// hands-free conversation; always, it is open whenever a session is live. The key comes from the
+// app (key()). In auto the provider finds each turn, in hold the key bounds it, and the provider
+// never replies by itself; every committed turn goes to the floor, which asks for a reply at once,
+// and the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
 // work wants said is the core's outbox: every snapshot hands it to the floor, which announces
 // what is owed when nobody is talking and sends a receipt (delivered) for each entry. Replies
 // use the session's own instructions, never an override, so the approval policy always applies.

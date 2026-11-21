@@ -531,6 +531,12 @@ let app2
   check('talk: an unknown mode is ignored', last().talk === 'always' && !app2.notices.some(n => n.mode === 'loud'))
   app2.send({ type: 'talk', mode: 'key' })
   await until(() => last().talk === 'key')
+
+  // Hand gestures: off by default; the app's menu turns them on for this run; only a boolean counts.
+  check('on connect the app is told whether gestures are on, off by default', JSON.stringify(app2.notices[2]) === '{"type":"gestures","on":false}', JSON.stringify(app2.notices[2]))
+  app2.send({ type: 'gestures', on: 'yes' })
+  app2.send({ type: 'gestures', on: true })
+  check('gestures: a non-boolean is ignored, then on is told back once', !!(await until(() => JSON.stringify(app2.notices.at(-1)) === '{"type":"gestures","on":true}')) && app2.notices.filter(n => n.type === 'gestures').length === 2)
 }
 
 // Voice grant: without a voice, a clear error with its HTTP status and no network call.

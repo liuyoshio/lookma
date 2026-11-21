@@ -42,6 +42,8 @@ jobs:
       - run: swiftc --version
       - name: The talk key's machine
         run: npm run test:key
+      - name: The gesture engine
+        run: npm run test:gesture
       - name: Build Lookma.app, signed ad hoc
         run: app/build.sh
         env:

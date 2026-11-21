@@ -1,6 +1,6 @@
 // The link to the core on /ws/app: hello on connect, attention every 0.5 s, replies to the
-// core's requests, and the user's pause, resume, talk mode and quit from the menu bar; the core
-// says back whether it is paused and its talk mode. Requests go through one FIFO, so ops never
+// core's requests, and the user's pause, resume, talk mode, hand gestures and quit from the menu
+// bar; the core says back whether it is paused, its talk mode and whether gestures are on. Requests go through one FIFO, so ops never
 // run concurrently. Reconnects with backoff, so the app survives a core restart.
 import AppKit
 
@@ -15,6 +15,8 @@ final class Link: NSObject, URLSessionWebSocketDelegate {
     var onPaused: (Bool?) -> Void = { _ in }
     /// The talk mode, as the core says on connect and on every change.
     var onTalk: (TalkMode) -> Void = { _ in }
+    /// Whether hand gestures are on, as the core says on connect and on every change.
+    var onGestures: (Bool) -> Void = { _ in }
     var connected: Bool { isOpen }
 
     init(url: URL) {
@@ -60,6 +62,12 @@ final class Link: NSObject, URLSessionWebSocketDelegate {
                             break
                         }
                         DispatchQueue.main.async { self.onTalk(mode) }
+                    case "gestures":
+                        guard let on = msg["on"] as? Bool else {
+                            log("ignored a gestures notice without on: \(msg["on"] ?? "none")")
+                            break
+                        }
+                        DispatchQueue.main.async { self.onGestures(on) }
                     default: break
                     }
                 }

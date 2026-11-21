@@ -3,8 +3,9 @@ import { cancelled } from './util.mjs'
 
 const FRAME_MS = 16
 
-// talk: the talk mode the core starts with (config.voice.talk).
-export function createStore({ talk }) {
+// talk: the talk mode the core starts with (config.voice.talk); gestures: whether hand gestures
+// are on (config.gestures).
+export function createStore({ talk, gestures }) {
   const data = {
     executor: { name: '', status: 'starting', detail: '' },
     app: null, // the app's hello: version and permissions (null while not connected)
@@ -16,6 +17,7 @@ export function createStore({ talk }) {
     outbox: [], // what the work wants the user told (core/outbox.mjs)
     paused: false, // the user paused: no voice and no hands until they resume
     talk, // 'key' | 'always': how the user talks to the voice (LOOKMA_TALK, or the app's menu for this run)
+    gestures, // hand gestures on (LOOKMA_GESTURES, or the app's menu for this run); only the app needs it, so not in the snapshot
   }
   const clients = new Set()
   const watchers = new Set()

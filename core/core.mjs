@@ -1,9 +1,9 @@
 // The core: one place that decides. Holds turn, focus, attention, cards, tasks, the outbox,
-// paused and the talk mode; runs the hands pipeline; answers the overlay's requests (tell, answer,
-// control: stop, go ahead, pause) with one ack each, takes its receipts for the outbox, and the
-// app's pause, resume, talk mode and quit; talks to one executor through the executor host
-// (executor/host.mjs), and grants the overlay its voice sessions through the voice host
-// (voice/host.mjs). Transport is server.mjs's: it hands each socket to an entry point.
+// paused, the talk mode and whether hand gestures are on; runs the hands pipeline; answers the
+// overlay's requests (tell, answer, control: stop, go ahead, pause) with one ack each, takes its
+// receipts for the outbox, and the app's pause, resume, talk mode, gestures and quit; talks to
+// one executor through the executor host (executor/host.mjs), and grants the overlay its voice
+// sessions through the voice host (voice/host.mjs). Transport is server.mjs's: it hands each socket to an entry point.
 import { createLog, logUnknown, cancelled } from './util.mjs'
 import { createStore } from './state.mjs'
 import { createAppLink } from './app-link.mjs'
@@ -20,7 +20,7 @@ const IDLE_S = 3
 // onQuit: the app asked to quit; the CLI runs its graceful shutdown. createExecutor and timing go
 // to the executor host, for checks.
 export async function createCore(config, { log = createLog(), createExecutor, timing, onQuit = () => {} } = {}) {
-  const store = createStore({ talk: config.voice.talk })
+  const store = createStore({ talk: config.voice.talk, gestures: config.gestures })
   let n = 0
   const nextId = prefix => `${prefix}${++n}`
   const outbox = createOutbox({ store, nextId })
@@ -102,6 +102,7 @@ export async function createCore(config, { log = createLog(), createExecutor, ti
       }
     },
     onTalk: setTalk, // the menu's Listen choice
+    onGestures: setGestures, // the menu's Hand Gestures
   })
   const hands = createHands({ store, app, grants: createGrants(config.appsFile), ask, log })
 
@@ -267,6 +268,15 @@ export async function createCore(config, { log = createLog(), createExecutor, ti
     app.send({ type: 'talk', mode })
   }
 
+  // Hand gestures, the same way: LOOKMA_GESTURES at start, the app's menu for this run. Only the
+  // app acts on it (it runs the camera while gestures are on and it is not paused).
+  function setGestures(on) {
+    if (store.data.gestures === on) return
+    log('gestures', on ? 'on' : 'off')
+    store.update(s => (s.gestures = on))
+    app.send({ type: 'gestures', on })
+  }
+
   // ---------------------------------------------------------------- overlay
 
   const unknownOverlay = logUnknown(log, 'overlay')
@@ -338,6 +348,7 @@ export async function createCore(config, { log = createLog(), createExecutor, ti
       app.attach(ws)
       app.send({ type: 'paused', paused: store.data.paused })
       app.send({ type: 'talk', mode: store.data.talk })
+      app.send({ type: 'gestures', on: store.data.gestures })
     },
     connectExecutor: ws => executor.connect(ws),
 

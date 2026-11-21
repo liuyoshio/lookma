@@ -244,7 +244,9 @@ async function scenario(name, fake) {
   check((await glyph('vg open')) === 'vg open' && (await capHidden()), 'startup: the glyph still and solid (the microphone open) and the capsule hidden while idle')
   check((await posted('voice')) === true && (await posted('mic')) === true && (await posted('conversation')) === false && (await posted('listening')) === undefined,
     'startup: the app is told voice is on and the microphone open (its menu bar icon)')
-  check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping,key', 'the app\'s page API is toggleTyping and key (the old talk and wake APIs are gone)')
+  check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping,key,camera', 'the app\'s page API is toggleTyping, key and camera (the old talk, wake, hand and stop APIs are gone)')
+  check((await page.evaluate(`(() => { try { window.lookma.camera('on') } catch { return 'refused' } })()`)) === 'refused' && (await posted('camera')) === 'off',
+    'the camera: a non-boolean refused, and the app told it is off')
 
   // 2. A turn: "Listening…" while the user talks; a reply asked for at once on commit; the
   // caption once the reply takes the turn.

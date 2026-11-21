@@ -1,15 +1,18 @@
 // The overlay page: renders the core's snapshots (docs/protocol.md, "Core -> overlay")
-// and runs the voice butler, which it hands every snapshot (voice.update). Full-screen and
+// and runs the voice butler, which it hands every snapshot (voice.update), and, with hand
+// gestures on, the camera and its hand tracker (hand/), whose hands go to the app. Full-screen and
 // transparent in the app's WKWebView; also opens in a normal browser for development.
 //   ?scale=1.75     one size factor for TV distance
 //   ?voice=0        captions only, no realtime voice
 //   ?backdrop=1     draw a neutral fake desktop underneath (development screenshots)
+//   ?hands=1        draw the hand tracker's view: landmarks, the 70% box, ms per frame (hand/view.js)
 
 import { $ } from './dom.js'
 import { connect } from './link.js'
 import { createVoice } from './voice.js'
 import { renderCapsule } from './capsule.js'
 import { renderMarks } from './marks.js'
+import { createCamera } from './hand/camera.js'
 import { initCard, renderCard } from './card.js'
 import { commandFor } from './consent.js'
 import { chime } from './sound.js'
@@ -18,6 +21,7 @@ const params = new URLSearchParams(location.search)
 const scale = Number(params.get('scale'))
 if (scale > 0) document.documentElement.style.setProperty('--s', String(scale))
 if (params.get('backdrop') === '1') import('./dev/backdrop.js')
+if (params.get('hands') === '1') import('./hand/view.js')
 const voiceOn = params.get('voice') !== '0'
 
 // Everything the page shows is a function of this: the core's last snapshot plus
@@ -30,6 +34,7 @@ const ui = {
   voiceAvailable: voiceOn,
   mic: false,      // the microphone is open for the user: held, in a conversation, or always listening
   conversation: false, // a hands-free conversation is open (a tap, or Start Conversation in the menu)
+  camera: 'off',   // the hand gestures' camera: off | on | failed (hand/camera.js)
   user: null,      // { text, at, prev }   the user's last line (voice transcript or typed)
   said: null,      // { display, kind, at } the work's last line (the newest outbox entry that is not a card or report)
   notice: null,    // { display, at }       a request that did not go through, one the voice lost, or no microphone (shown like a said line)
@@ -67,7 +72,7 @@ function render() {
 // The app makes the window clickable only inside these rects; everywhere else the
 // overlay is click-through. It gives the window the keyboard only while `typing`; its menu bar
 // icon shows `voice` (on, not paused, not failing) and `mic` (the microphone open), and its menu
-// offers End Conversation while `conversation`.
+// offers End Conversation while `conversation`. `camera` is what the camera it asked for is doing.
 let lastPost = ''
 function postToApp() {
   const edge = $('edge')
@@ -83,6 +88,7 @@ function postToApp() {
     voice: ui.voiceAvailable,
     mic: ui.mic,
     conversation: ui.conversation,
+    camera: ui.camera,
   }
   const key = JSON.stringify(msg)
   if (key === lastPost) return
@@ -136,6 +142,9 @@ async function answerCard(cardId, allow, via) {
   return ack
 }
 
+// To the console and the core's log.
+const log = msg => { console.info(`[lookma] ${msg}`); link.send({ type: 'log', text: msg }) }
+
 // ------------------------------------------------------------ voice
 
 // One warm voice session while voice is on and not paused, listening as the talk mode says (voice.js).
@@ -159,7 +168,7 @@ const voice = createVoice({
     else ui.notice = { display: NOTICES[line.kind], at: Date.now() }
     schedule()
   },
-  log: msg => { console.info(`[lookma] ${msg}`); link.send({ type: 'log', text: msg }) },
+  log,
 })
 
 // ------------------------------------------------------------ card, go ahead, typed input
@@ -208,14 +217,40 @@ addEventListener('keydown', e => {
   else if (e.key === 'Escape' && !typed.hidden) toggleTyping(false)
 })
 
-// For the app (evaluateJavaScript): "Type a Request…" in its menu bar item, and the talk key's
-// edges (and the menu's Start/End Conversation, 'toggle'), checked here where they enter. Each
-// returns nothing, so evaluateJavaScript has no result to convert.
+// ------------------------------------------------------------ hand gestures' camera
+
+// Runs while the app says (window.lookma.camera). Each processed frame's hand goes to the app on
+// its own handler, `hand` (not page state: no dedupe, one message per frame), and to the ?hands=1
+// view. Frames themselves never leave the page.
+const camera = createCamera({
+  getUserMedia: c => navigator.mediaDevices.getUserMedia(c),
+  video: $('camera'),
+  startWorker: () => new Worker(new URL('./hand/worker.js', import.meta.url), { type: 'module' }),
+  onFrame({ t, aspect, hand, ms }) {
+    window.webkit?.messageHandlers?.hand?.postMessage({ t, aspect, hand })
+    window.dispatchEvent(new CustomEvent('lookma:hand', { detail: { aspect, hand, ms } }))
+  },
+  onState(s) {
+    ui.camera = s
+    postToApp()
+  },
+  log,
+})
+
+// ------------------------------------------------------------ for the app
+
+// Called with evaluateJavaScript: "Type a Request…" in its menu bar item, the talk key's edges
+// (and the menu's Start/End Conversation, 'toggle'), and the camera on or off, checked here where
+// they enter. Each returns nothing, so evaluateJavaScript has no result to convert.
 const KEY_EDGES = ['down', 'up', 'cancel', 'toggle']
 function key(edge) {
   if (!KEY_EDGES.includes(edge)) throw new Error(`lookma.key: unknown edge ${JSON.stringify(edge)}`)
   voice.key(edge)
 }
-window.lookma = { toggleTyping, key }
+function setCamera(on) {
+  if (typeof on !== 'boolean') throw new Error(`lookma.camera: not a boolean: ${JSON.stringify(on)}`)
+  camera(on)
+}
+window.lookma = { toggleTyping, key, camera: setCamera }
 
 render()

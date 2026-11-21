@@ -1,9 +1,16 @@
 // HTTP and WebSocket server on 127.0.0.1. Local-only rules (docs/protocol.md): listen on loopback,
 // POST bodies must be JSON, WebSocket upgrades only without an Origin or from our own origin.
+// Static files: the overlay page, each voice provider's page half, and MediaPipe's tasks-vision
+// (/vendor/tasks-vision/, from node_modules) for the page's hand tracking, so the page loads
+// nothing from the network.
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
+
+/** The installed @mediapipe/tasks-vision folder (its bundle, and its wasm/ loaders and binaries). */
+export const TASKS_VISION = path.dirname(fileURLToPath(import.meta.resolve('@mediapipe/tasks-vision')))
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -16,6 +23,7 @@ const TYPES = {
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm', // required for streaming compilation
 }
 
 function json(res, status, data) {
@@ -89,6 +97,9 @@ export function startServer({ config, core, log }) {
       if (page) {
         const dir = path.join(config.root, 'voices', page[1])
         return page[2] === '.js' ? serveStatic(res, dir, '/page.js') : serveStatic(res, path.join(dir, 'page'), page[2])
+      }
+      if (req.method === 'GET' && pathname.startsWith('/vendor/tasks-vision/')) {
+        return serveStatic(res, TASKS_VISION, pathname.slice('/vendor/tasks-vision'.length))
       }
       if (req.method === 'GET') return serveStatic(res, overlayDir, pathname)
       json(res, 404, { error: 'not found' })
