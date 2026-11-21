@@ -303,6 +303,9 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const bad = [
     ['click', {}, /click needs an element id or a point/],
     ['scroll', { direction: 'sideways' }, /scroll needs a direction/],
+    ['scroll', { direction: 'down', pages: 0 }, /scroll pages must be a number above 0 and at most 10/],
+    ['scroll', { direction: 'down', pages: 11 }, /scroll pages must be/],
+    ['scroll', { direction: 'down', pages: '2' }, /scroll pages must be/],
     ['type', {}, /type needs text/],
     ['key', {}, /key needs a combo/],
     ['open', {}, /open needs an app, a url or a path/],
@@ -325,11 +328,14 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
     return { r, resolve: app.ops.slice(n).find(o => o.op === 'resolve')?.args, scroll: app.ops.slice(n).find(o => o.op === 'scroll')?.args }
   }
   const el = await scrolled({ element: app.elementIds()[0], direction: 'down' })
-  check('scroll at an element: at its point, 3 steps by default', el.r.ok && el.resolve?.element === app.elementIds()[0] && el.scroll?.amount === 3 && el.scroll.direction === 'down' && Array.isArray(el.scroll.point) && /Scrolled down in Finder/.test(el.r.v.text), el.r.v?.text || el.r.e?.message)
-  const pt = await scrolled({ point: [100, 50], direction: 'up', amount: 5 })
-  check('scroll at a point of the screenshot', pt.r.ok && JSON.stringify(pt.resolve?.point) === '[100,50]' && pt.scroll?.amount === 5, pt.r.v?.text || pt.r.e?.message)
+  check('scroll at an element: at its point, 1 page by default, where it is now', el.r.ok && el.resolve?.element === app.elementIds()[0] && el.scroll?.pages === 1 && el.scroll.direction === 'down' && Array.isArray(el.scroll.point) && /Scrolled down 1 page \(504 px\) in Finder, now at 25%/.test(el.r.v.text), el.r.v?.text || el.r.e?.message)
+  const pt = await scrolled({ point: [100, 50], direction: 'up', pages: 0.25 })
+  check('scroll at a point of the screenshot, a fraction of a page', pt.r.ok && JSON.stringify(pt.resolve?.point) === '[100,50]' && pt.scroll?.pages === 0.25 && /Scrolled up 0.25 pages \(126 px\) in Finder, now at 19%/.test(pt.r.v.text), pt.r.v?.text || pt.r.e?.message)
+  await scrolled({ direction: 'up', pages: 10 })
+  const top = await scrolled({ direction: 'up' })
+  check('scroll that cannot move: says so', top.r.ok && /Did not move: already at the top in Finder/.test(top.r.v.text), top.r.v?.text || top.r.e?.message)
   const cur = await scrolled({ direction: 'left' })
-  check('scroll with no target: in the app of the last step', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left', JSON.stringify(cur.resolve))
+  check('scroll with no target: in the app of the last step; no scroll bar, just the pixels', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left' && /Scrolled left 1 page \(810 px\) in Finder\. Frontmost/.test(cur.r.v.text), cur.r.v?.text || JSON.stringify(cur.resolve))
 }
 
 {

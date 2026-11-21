@@ -188,10 +188,12 @@ Core → app requests, and the app's replies:
 | `click` | `{ point }` (screen points) | `{}` |
 | `type` | `{ text }` | `{}` |
 | `key` | `{ combo }` e.g. `"cmd+t"` | `{}` |
-| `scroll` | `{ point, direction, amount }` | `{}` |
+| `scroll` | `{ point, direction, pages }` | `{ pixels, position, moved }` |
 | `open` | `{ url } \| { path }` | `{ app }` |
 
 Element ids come from the last `see` and stay valid until the next one. A stale id is an error: "call see again".
+
+`scroll` moves `pages` (above 0) of the visible area at the point: the nearest scroll area or web area there, cut to its window, or else the window. A page is 90% of that length, so the last line stays in view, sent as pixel wheel events of at most 100 px. The op returns once it has read the area's scroll bar on that axis again, 200 ms after the last event: `position` is where it is now, from 0 (top or left) to 1, and `moved` says whether it changed. Both are null when the area has no scroll bar to read (typical for Chromium content).
 
 ## The hands pipeline (core, one function, one step at a time)
 
@@ -206,7 +208,7 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
 5. **Act** through the app, then set `focus.phase` to `done` or `failed`.
 6. **Return** to the executor:
    - `see` → the image plus the element list as text;
-   - every other tool → one line saying what happened and what is frontmost now.
+   - every other tool → one line saying what happened and what is frontmost now. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put.
 
 ## Plug-ins
 

@@ -50,6 +50,21 @@ func axPid(_ e: AXUIElement) -> pid_t? {
     return AXUIElementGetPid(e, &pid) == .success ? pid : nil
 }
 
+/// Roles whose frame is an area that scrolls: see clips its list by them, scroll measures a page by them.
+let scrollRoles: Set<String> = ["AXScrollArea", "AXWebArea"]
+
+/// The element itself or its nearest ancestor with one of `roles`. Bounded, since another app's
+/// tree is not trusted to end.
+func axAncestor(_ e: AXUIElement, _ roles: Set<String>) -> AXUIElement? {
+    var cur: AXUIElement? = e
+    for _ in 0..<64 {
+        guard let c = cur else { return nil }
+        if let r = axString(c, "AXRole"), roles.contains(r) { return c }
+        cur = axElement(axGet(c, "AXParent"))
+    }
+    return nil
+}
+
 // MARK: - apps
 
 let systemWide = AXUIElementCreateSystemWide()

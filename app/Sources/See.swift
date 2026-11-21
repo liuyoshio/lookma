@@ -41,7 +41,6 @@ private let actionRoles: Set<String> = ["AXButton", "AXLink", "AXTextField", "AX
                                         "AXPopUpButton", "AXMenuButton", "AXComboBox", "AXMenuItem", "AXSlider",
                                         "AXDisclosureTriangle", "AXTab", "AXRow", "AXIncrementor", "AXSegment"]
 private let textRoles: Set<String> = ["AXStaticText", "AXHeading"]
-private let scrollRoles: Set<String> = ["AXScrollArea", "AXWebArea"]
 private let walkAttrs = ["AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXValue", "AXPlaceholderValue",
                          "AXPosition", "AXSize", "AXChildren"] as CFArray
 private let maxElements = 300, maxVisit = 6000, maxDepth = 60, walkBudget = 1.1

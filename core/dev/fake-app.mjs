@@ -50,6 +50,7 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
   let nextId = 0
   let elements = new Map() // id -> { id, role, text, rect, app } from the last see
   let shot = null // { w, h, rect } of the last see
+  const scrolledTo = {} // app -> vertical scroll position, 0 to 1
 
   function resolve(args) {
     if (args.element != null) {
@@ -110,7 +111,16 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
     },
     type: () => ({}),
     key: () => ({}),
-    scroll: () => ({}),
+    // Up and down read a scroll bar that moves a quarter per page; left and right have none.
+    scroll: a => {
+      const vertical = a.direction === 'up' || a.direction === 'down'
+      const pixels = Math.round(APPS[frontApp].window.rect[vertical ? 'h' : 'w'] * 0.9 * a.pages)
+      if (!vertical) return { pixels, position: null, moved: null }
+      const was = scrolledTo[frontApp] ?? 0
+      const now = Math.min(1, Math.max(0, was + (a.direction === 'down' ? 0.25 : -0.25) * a.pages))
+      scrolledTo[frontApp] = now
+      return { pixels, position: now, moved: now !== was }
+    },
     open: a => {
       frontApp = a.url ? 'Google Chrome' : 'Finder'
       return { app: frontApp }

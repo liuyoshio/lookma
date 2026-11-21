@@ -29,12 +29,12 @@ export const HANDS = [
     label,
     combo: { type: 'string' },
   }, ['label', 'combo']),
-  tool('scroll', 'Scroll at an element, a point, or the app you are working in.', {
+  tool('scroll', 'Scroll at an element, a point, or the app you are working in. `pages` is how far, in pages of the visible area: default 1, 0.25 for a small move. The result says where it is now, or that it did not move.', {
     label,
     element,
     point,
     direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
-    amount: { type: 'number', description: 'How far, in wheel steps. Default 3.' },
+    pages: { type: 'number', description: 'How far, in pages of the visible area: above 0, at most 10. Default 1.' },
   }, ['label', 'direction']),
   tool('open', 'Open an app (by pressing its Dock icon), a URL (in the default browser) or a file or folder. Give exactly one of app, url or path.', {
     label,

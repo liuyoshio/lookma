@@ -44,7 +44,7 @@ func runOp(_ op: String, _ args: [String: Any]) async throws -> [String: Any] {
     case "click": return try await click(point(args["point"]))
     case "type": return try typeInTarget(args)
     case "key": return try keyInTarget(args)
-    case "scroll": return try scroll(args)
+    case "scroll": return try await scroll(args)
     case "open": return try await open(args)
     default: throw HandsError("Unknown op \(op).")
     }
@@ -180,11 +180,44 @@ private func keyInTarget(_ args: [String: Any]) throws -> [String: Any] {
     return [:]
 }
 
-private func scroll(_ args: [String: Any]) throws -> [String: Any] {
+// How long an op waits after its last event before it reads the effect.
+private let settleNs: UInt64 = 200_000_000
+
+// The wheel's signs per direction: positive scrolls toward the top (dy) or the left (dx).
+private let wheel: [String: (dx: Int, dy: Int)] = ["up": (0, 1), "down": (0, -1), "left": (1, 0), "right": (-1, 0)]
+
+/// One scroll in pixels: `pages` of the visible length, less a tenth so the last line stays in view.
+private func pagePixels(_ visible: CGFloat, _ pages: Double) -> Int { max(1, Int((visible * 0.9 * pages).rounded())) }
+
+private func barValue(_ bar: AXUIElement) -> Double? { (axGet(bar, "AXValue") as? NSNumber)?.doubleValue }
+
+/// Scrolls `pages` of what is visible at the point: the nearest scroll area or web area there, cut
+/// to the window, else the window. Done when the scroll bar has been read again after settling;
+/// `position` and `moved` are null when the area has no scroll bar (typical for Chromium content).
+private func scroll(_ args: [String: Any]) async throws -> [String: Any] {
     let p = try point(args["point"])
+    guard let dir = args["direction"] as? String, let sign = wheel[dir] else { throw HandsError("scroll needs a direction: up, down, left or right.") }
+    guard let pages = num(args["pages"]), pages > 0 else { throw HandsError("scroll needs pages above 0.") }
     try checkPointer(p, "scroll")
-    try scrollWheel(at: p, direction: (args["direction"] as? String ?? "").lowercased(), amount: (args["amount"] as? NSNumber)?.intValue ?? 3)
-    return [:]
+    let t = target!
+    let appEl = AXUIElementCreateApplication(t.pid!)
+    var hit: AXUIElement?
+    let area = AXUIElementCopyElementAtPosition(appEl, Float(p.x), Float(p.y), &hit) == .success
+        ? hit.flatMap { axAncestor($0, scrollRoles) } : nil
+    let win = frontWindow(appEl).flatMap(axFrame)
+    var visible = win
+    if let f = area.flatMap(axFrame) { visible = win.map { f.intersection($0) } ?? f }
+    guard let v = visible, !v.isEmpty else { throw HandsError("Did not scroll: found no visible area of \(t.name) at that point.") }
+
+    let vertical = sign.dy != 0
+    let px = pagePixels(vertical ? v.height : v.width, Double(pages))
+    let bar = area.flatMap { axElement(axGet($0, vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar")) }
+    let before = bar.flatMap(barValue)
+    scrollWheel(at: p, dx: sign.dx * px, dy: sign.dy * px)
+    try await Task.sleep(nanoseconds: settleNs)
+    let after = bar.flatMap(barValue)
+    guard let before, let after else { return ["pixels": px, "position": NSNull(), "moved": NSNull()] }
+    return ["pixels": px, "position": after, "moved": abs(after - before) > 0.0005]
 }
 
 /// A URL in its app, or a file, folder or app by path. Done when that app is in front with a window.

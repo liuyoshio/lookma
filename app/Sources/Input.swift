@@ -41,20 +41,21 @@ func mouseClick(_ p: CGPoint) {
     }
 }
 
-func scrollWheel(at p: CGPoint, direction: String, amount: Int) throws {
-    let n = Int32(max(1, min(amount, 50)))
-    let (dy, dx): (Int32, Int32)
-    switch direction {
-    case "up": (dy, dx) = (n, 0)
-    case "down": (dy, dx) = (-n, 0)
-    case "left": (dy, dx) = (0, n)
-    case "right": (dy, dx) = (0, -n)
-    default: throw HandsError("scroll needs a direction: up, down, left or right.")
-    }
+/// Scrolls by pixels, positive dy toward the top and positive dx toward the left, in events of at
+/// most 100 px, 8 ms apart: some apps drop or clamp one large delta.
+func scrollWheel(at p: CGPoint, dx: Int, dy: Int) {
+    let n = max(1, (max(abs(dx), abs(dy)) + 99) / 100)
     posting {
         post(CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left))
         usleep(50_000)
-        post(CGEvent(scrollWheelEvent2Source: src, units: .line, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0))
+        var sent = (x: 0, y: 0)
+        for i in 1...n {
+            let next = (x: dx * i / n, y: dy * i / n)
+            post(CGEvent(scrollWheelEvent2Source: src, units: .pixel, wheelCount: 2,
+                         wheel1: Int32(next.y - sent.y), wheel2: Int32(next.x - sent.x), wheel3: 0))
+            sent = next
+            if i < n { usleep(8_000) }
+        }
     }
 }
 

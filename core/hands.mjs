@@ -29,6 +29,19 @@ function seen(res) {
   return { text: lines.join('\n'), image: res.image }
 }
 
+// The result of a scroll. `position` (0 to 1 along the axis) and `moved` are null when the area has
+// no scroll bar to read; "did not move" is what tells the agent to stop scrolling that way.
+const EDGE = { up: 'top', down: 'bottom', left: 'left edge', right: 'right edge' }
+function scrolled(a, r, res) {
+  const pages = a.pages ?? 1
+  const how = `${a.direction} ${pages} page${pages === 1 ? '' : 's'} (${res.pixels} px) in ${r.app}`
+  if (res.position === null) return `Scrolled ${how}.`
+  const pct = Math.round(res.position * 100)
+  if (res.moved) return `Scrolled ${how}, now at ${pct}%.`
+  const end = a.direction === 'down' || a.direction === 'right' ? pct === 100 : pct === 0
+  return end ? `Did not move: already at the ${EDGE[a.direction]} in ${r.app}.` : `Did not move: scrolled ${how}, still at ${pct}%.`
+}
+
 // Per tool:
 //   target(args, current)  checks the args and says what to resolve (null: nothing to resolve).
 //                          `current` is the app of the last step; type, key and scroll go there.
@@ -74,13 +87,14 @@ const TOOLS = {
   scroll: {
     target: (a, current) => {
       need(['up', 'down', 'left', 'right'].includes(a.direction), 'scroll needs a direction: up, down, left or right.')
+      need(a.pages === undefined || (typeof a.pages === 'number' && a.pages > 0 && a.pages <= 10), 'scroll pages must be a number above 0 and at most 10, e.g. 1 or 0.25.')
       if (has(a.element)) return { element: a.element }
       if (Array.isArray(a.point)) return { point: a.point }
       return { app: current }
     },
     front: () => true,
-    act: (a, r) => ['scroll', { point: r.point, direction: a.direction, amount: a.amount ?? 3 }],
-    result: line((a, r) => `Scrolled ${a.direction} in ${r.app}.`),
+    act: (a, r) => ['scroll', { point: r.point, direction: a.direction, pages: a.pages ?? 1 }],
+    result: line(scrolled),
   },
   open: a => {
     need(has(a.app) || has(a.url) || has(a.path), 'open needs an app, a url or a path.')
