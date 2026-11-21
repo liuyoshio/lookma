@@ -144,8 +144,9 @@ const TOOLS = {
 const OPEN_APP = {
   target: a => ({ dock: a.app }),
   front: () => true,
-  raise: false, // pressing the Dock icon brings the app forward
-  act: (a, r) => ['click', { point: r.point }],
+  raise: false, // pressing the Dock icon, or opening the app, brings it forward
+  // An app with no Dock icon resolves to its path instead, and is opened from there.
+  act: (a, r) => (has(r.path) ? ['open', { path: r.path }] : ['click', { point: r.point }]),
   did: a => `Opened ${a.app}.`,
 }
 const OPEN_ITEM = {

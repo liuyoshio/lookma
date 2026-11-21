@@ -131,6 +131,12 @@ private let keyCodes: [String: CGKeyCode] = [
     "f10": 0x6D, "f11": 0x67, "f12": 0x6F,
 ]
 
+// Symbols typed with Shift on a US layout, by the key they share ("*" is Shift and "8").
+private let shifted: [String: String] = [
+    "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0",
+    "_": "-", "plus": "=", "{": "[", "}": "]", "|": "\\", ":": ";", "\"": "'", "<": ",", ">": ".", "?": "/", "~": "`",
+]
+
 private func parseCombo(_ combo: String) throws -> (CGKeyCode, CGEventFlags) {
     var flags: CGEventFlags = []
     var code: CGKeyCode? = nil
@@ -142,8 +148,13 @@ private func parseCombo(_ combo: String) throws -> (CGKeyCode, CGEventFlags) {
         case "ctrl", "control": flags.insert(.maskControl)
         case "fn": flags.insert(.maskSecondaryFn)
         default:
-            guard let c = keyCodes[part] else { throw HandsError("Unknown key \"\(part)\" in \(combo).") }
-            code = c
+            if let base = shifted[part] {
+                flags.insert(.maskShift)
+                code = keyCodes[base]
+            } else {
+                guard let c = keyCodes[part] else { throw HandsError("Unknown key \"\(part)\" in \(combo).") }
+                code = c
+            }
         }
     }
     guard let code else { throw HandsError("No key in \(combo).") }

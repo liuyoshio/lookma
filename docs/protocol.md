@@ -192,7 +192,7 @@ Core → app requests, and the app's replies:
 | op | args | result |
 |---|---|---|
 | `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, frontmost, window: { title, rect }, elements: [{ id, role, text, states, rect }], menu, cut, unlabeled, shot?, image? }` |
-| `resolve` | `{ element } \| { point:[x,y] } \| { dock: appName } \| { app }` | `{ app, rect, point, frontmost, pressable }` |
+| `resolve` | `{ element } \| { point:[x,y] } \| { dock: appName } \| { app }` | `{ app, rect, point, frontmost, pressable, path? }` (`path`: a `dock` app with no Dock icon) |
 | `front` | `{ app }` | `{}` (best effort: the ops that post input check the front themselves) |
 | `press` | `{ element }` | AX press: `{}` |
 | `click` | `{ point, button? }` (screen points; `button` `'left'` or `'right'`, default left) | `{}`; a right click: `{ menu }` |
@@ -218,7 +218,7 @@ A `point` is in the pixels of the last screenshot taken, which a `see` without o
 
 The executor's GUI tools are `see`, `click` (left, or `button: 'right'` for a context menu), `drag` (`from` and `to`, each `{ element }` or `{ point }`, in one app), `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language, and `screenshot` (default false), which asks for a screenshot with the step's list. Every call runs the same steps:
 
-1. **Resolve** the target to `{ app, rect, point }`: an element, a screenshot point, a Dock item (`open` an app = press its Dock icon), or the app itself (`see`, `type`, `key`). A `drag` resolves its two ends, and fails when they are in two apps: a step has one app to grant, to bring forward and to act in.
+1. **Resolve** the target to `{ app, rect, point }`: an element, a screenshot point, a Dock item (`open` an app = press its Dock icon; an installed app with no Dock icon resolves to its `path` and is opened from there), or the app itself (`see`, `type`, `key`). A `drag` resolves its two ends, and fails when they are in two apps: a step has one app to grant, to bring forward and to act in.
 2. **Grant.** If the hands have never touched this app, raise a `core` card ("Allow controlling Maps?") and wait. A no ends the step with an error the executor can read. Answers persist in `~/.lookma/apps.json`.
 3. **Attention.** Visible by default: if the user is not busy (idle ≥ 3 s), bring the target forward. If they are busy:
    - steps that can act in the background (AX `press`, `see`) proceed with `background: true` and an edge hint;

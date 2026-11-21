@@ -87,8 +87,13 @@ private func resolve(_ args: [String: Any]) throws -> [String: Any] {
     }
     if let name = text(args, "dock") {
         guard let item = dockItem(named: name), let r = axFrame(item) else {
-            if let url = appURL(name) { throw HandsError("\(name) has no Dock icon. Open it with open { path: \"\(url.path)\" }.") }
-            throw HandsError("\(name) is not in the Dock, and no app by that name is installed.")
+            // Not in the Dock: an installed app is launched from its path instead (the core acts
+            // with open), named as it runs, like a Dock item below.
+            guard let url = appURL(name) else { throw HandsError("\(name) is not in the Dock, and no app by that name is installed.") }
+            let running = NSWorkspace.shared.runningApplications.first { $0.bundleURL == url }
+            target = Target(pid: running?.processIdentifier, name: running?.localizedName ?? bundleAppName(url) ?? name)
+            return ["app": target!.name, "rect": NSNull(), "point": NSNull(), "frontmost": isFront(running?.processIdentifier),
+                    "pressable": false, "path": url.path]
         }
         let title = axString(item, "AXTitle") ?? name
         let running = dockItemApp(item)
