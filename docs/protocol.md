@@ -273,7 +273,8 @@ Events:
 - **The host** owns everything else, once:
   - **status** `starting` until `start()` resolves, then `ready`; `down` when a start fails, after `close`, or when recovery is used up;
   - **the prompt line**: prompts go to the adapter one at a time, in order, only while `ready` and not stopping; a rejected `prompt` fails the turn with its reason;
-  - **the stop gate**: from the core's stop until `interrupt()` resolves, the adapter's events are dropped, tool calls are refused, open cards are withdrawn, the hands stop, and prompts told before the stop are discarded;
+  - **the stop gate**: from the core's stop until `interrupt()` resolves, the adapter's events are dropped, tool calls are refused, open cards are withdrawn, the hands stop, and prompts told before the stop are discarded. A `task` event still passes while the session is `ready`: a background task is not the stopped work, and its `id` says which task it is;
+  - **background tasks**: when the session ends (a restart, a failed start, `close`), every task still running gets `task { id, status: 'failed' }`;
   - **recovery**: a `down` event, or an `interrupt()` that has not resolved after 10 s, fails the running turn with the reason, closes the session and starts it again (status `starting`, "…; restarting"); a second failure within a minute leaves it `down`;
   - **the turn text**: a failed turn that said nothing tells "That did not work: <error>."; `summary` goes to the log only.
 - `lookma start` launches the app without waiting for the executor: prompts told while it starts wait in the host.
@@ -287,7 +288,7 @@ GUI steps are not in the contract. They arrive as hands tool calls through the t
 
 The bridge returns `see`'s screenshot as an MCP image, and an error as a tool error.
 
-**Conformance.** `core/dev/check-executors.mjs` runs one list of scenarios over every executor with a `dev/fake-agent.mjs`, a script that speaks the agent's protocol in place of its binary: ready, prompts, tools through the bridge, cards allowed, declined and withdrawn, steering, a stop and its stragglers, a stop that never resolves, the agent dying, and `close`.
+**Conformance.** `core/dev/check-executors.mjs` runs one list of scenarios over every executor with a `dev/fake-agent.mjs`, a script that speaks the agent's protocol in place of its binary: ready, prompts, tools through the bridge, cards allowed, declined and withdrawn, steering, a stop and its stragglers, a correction told just before a stop, a stop that never resolves, the agent dying, and `close`.
 
 ### Claude Code adapter (`executors/claude/`)
 
@@ -296,12 +297,12 @@ The bridge returns `see`'s screenshot as an MCP image, and an error as a tool er
   - `settingSources: []`: none of the user's, project or local settings, so no CLAUDE.md, hooks or plugins. Lookma's own settings go in as flag settings (`settings`): `permissions.allow` the `lookma` server (say and the hands never ask), `permissions.deny` `mcp__computer-use`, `AskUserQuestion` and `Agent(fork)`, and `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`.
   - `strictMcpConfig: true`, `mcpServers: { lookma: ctx.tools.mcp({ toolMeta: { 'anthropic/alwaysLoad': true }, instructions }) }`, sent over stdin (`mcpServersDelivery: 'initialize'`) so the bridge's environment is not on the command line.
   - `cwd`: the empty `<data>/sessions/claude/work`; `additionalDirectories`: the user's folders.
-  - The environment is `ctx.env` without a parent Claude Code's session markers (`CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_AGENT_SDK_*`), so a Lookma started from inside Claude Code still uses the user's own login.
+  - The environment is `ctx.env` without a parent Claude Code's session markers (`CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_AGENT_SDK_*`), so a Lookma started from inside Claude Code still uses the user's own login. The user's own auth choices among them stay: `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_USE_*` (Bedrock, Vertex).
 - **Options.** `model` (`LOOKMA_CLAUDE_MODEL`), `permissionMode` (`LOOKMA_CLAUDE_PERMISSION_MODE`), `systemPrompt`: Claude Code's own preset with `ctx.instructions` appended, plus the background-task convention below. `LOOKMA_CLAUDE_FLAGS` becomes `extraArgs`.
-- **Start.** `query()`, then its `initializationResult()`, then `mcpServerStatus()` until `lookma` is `connected` (a failed server rejects the start). The log names the login in use (`account.subscriptionType`, or the API key source). After `close`, `start` passes the last session id as `resume`, so a restart goes on with the same conversation.
+- **Start.** `query()`, then its `initializationResult()`, then `mcpServerStatus()` until `lookma` is `connected` (a failed or missing server, or one still pending after 30 s, rejects the start). The log names the login in use (`account.subscriptionType`, or the API key source). After `close`, `start` passes the last session id as `resume`, so a restart goes on with the same conversation.
 - **Turns.**
-  - `prompt` → one user message into the stream. During a turn, Claude Code takes it into that turn after the running tool calls.
-  - `interrupt` → `Query.interrupt()`, resolving on the stopped turn's `result` (`error_during_execution`). Nothing runs: it resolves at once.
+  - `prompt` → one user message into the stream, with a `uuid`. During a turn, Claude Code queues it and takes it into that turn after the running tool calls.
+  - `interrupt` → `Query.interrupt()`, once every prompt is written. A prompt still queued survives a plain interrupt and runs as the next turn; the interrupt's receipt names it (`still_queued`). So the stop interrupts every turn that starts while it lasts, asks again after a turn ends while the last receipt named prompts of ours, and resolves when no turn runs and the last receipt names none. Nothing runs and nothing is queued: it resolves on the receipt.
   - `result` → `turnEnd`: `ok` for a `success` that is not `is_error`; `error` from the result's text or its `errors`; `summary` is the result's text.
   - A main-agent `system/init` or `assistant` message while no turn runs → `turnStart` (a finished background task woke the agent).
   - The stream ending by itself (Claude Code exited) → `down`.

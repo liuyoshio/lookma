@@ -31,7 +31,7 @@ LOOKMA_PORT=8793 app/build/Lookma.app/Contents/MacOS/Lookma
 - **`LOOKMA_VOICE=off`** is text only: no voice session and no microphone, so nothing goes to OpenAI. With voice on, Lookma listens whenever it runs and is not paused; pause it with ⌃⌥P while you work on it. Type with **Type a Request…** in the menu bar, or post to the core:
   `curl -X POST -H 'Content-Type: application/json' -d '{"text":"open notes"}' http://127.0.0.1:8793/api/tell`
 - **Swift changed?** Run `app/build.sh` again. `LOOKMA_SIGN_IDENTITY=-` forces ad hoc signing.
-- **Watch the agent** in the core's log: its steps, cards and messages, and for Claude Code the login it uses. A core started from inside another agent's session can inherit that session's API settings; if the login is not yours, start it with a plain environment (`env -i HOME="$HOME" PATH="$PATH" ...`).
+- **Watch the agent** in the core's log: its steps, cards and messages, and for Claude Code the login it uses. A core started from inside another agent's session can inherit that session's API settings; if the login is not yours, start it with a plain environment (`env -i HOME="$HOME" USER="$USER" PATH="$PATH" ...`; Claude Code needs `USER` to find its login in the keychain).
 - **The overlay is a plain page.** Open `http://127.0.0.1:8793/` in a browser to see it against your core, or run `node overlay/dev/mock-core.mjs` and open `http://127.0.0.1:8797/?backdrop=1` to replay a scripted scenario on a fake desktop, no core needed.
 - **No real screen:** `npm run fake-app -- --port 8793` stands in for the app.
 
@@ -64,7 +64,7 @@ Run `npm run check && npm test` before every pull request, the two Chrome checks
 Match the code around you. In short:
 
 - **ESM, no build step.** The core is `.mjs` on Node built-ins (`node:` imports). The overlay is plain `.js` modules the browser loads as they are. No TypeScript, no bundler.
-- **Few dependencies.** Four at runtime (`@modelcontextprotocol/sdk`, `ws`, `zod`, and `@anthropic-ai/claude-agent-sdk`, which only the Claude adapter imports: it is the documented way to interrupt a headless Claude Code), none for development. A new one needs a reason in the PR.
+- **Few dependencies.** Four at runtime (`@modelcontextprotocol/sdk`, `ws`, `zod`, and `@anthropic-ai/claude-agent-sdk`, which only the Claude adapter imports: it is the documented way to interrupt a headless Claude Code. Its bundled `claude` binaries are optional packages, which the repo's `.npmrc` leaves out: Lookma runs the user's own), none for development. A new one needs a reason in the PR.
 - **Small modules, one job each**, each opening with a comment that says what it is and how it fits.
 - **Comments explain why**, not what the next line does.
 - **No dead code:** no commented-out blocks, unused exports, or options for cases that do not exist yet.

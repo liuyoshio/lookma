@@ -145,11 +145,12 @@ These are the two promises adapters get wrong.
 
 **A prompt during work joins the work.** `prompt` while the agent is busy means: add this to what you are doing, as soon as you can. The user is correcting or adding to the request ("no, the other one"). It must never restart the conversation and never be lost. Claude Code and Codex take a message mid-turn natively. If your agent cannot, interrupt it yourself and send the text as the next prompt in the same conversation, without a `turnEnd` for that inner interrupt.
 
-**`interrupt` resolves on the truth.** Resolve when the agent has stopped, not when you sent the request. The host closes a **stop gate** when it calls `interrupt()` and opens it when your promise resolves. While it is closed, your events are dropped, tool calls are refused and cards are withdrawn, so nothing of the stopped work reaches the user or the screen. After it opens, an event belongs to the next turn. So:
+**`interrupt` resolves on the truth.** Resolve when the agent has stopped, not when you sent the request. The host closes a **stop gate** when it calls `interrupt()` and opens it when your promise resolves. While it is closed, your events are dropped (all but `task`: a background task is not the stopped work), tool calls are refused and cards are withdrawn, so nothing of the stopped work reaches the user or the screen. After it opens, an event belongs to the next turn. So:
 
 - Resolve too early, and a late `turnEnd` of the stopped work ends the user's next turn.
 - Never resolve, and after 10 s the host treats the session as broken: it fails the turn, calls `close()` and `start()` again. A second failure within a minute leaves the executor `down` until Lookma restarts. A `down` event takes the same path.
 - An interrupt can arrive while a prompt is still being delivered. Wait for that delivery first, or the turn it starts escapes the stop (the Codex adapter keeps the delivery's promise for this).
+- If your agent keeps a prompt queued past an interrupt, that prompt is part of the stopped work too. Stop it before you resolve: the Claude Code adapter interrupts every turn that starts until the interrupt's receipt names none of its prompts.
 
 ## Isolation
 
@@ -176,7 +177,7 @@ Lookma runs your agent beside the user's own use of it. The session must not pic
 | `stuck` | takes a step, then ignores everything, interrupts included |
 | `die` | exits at once |
 
-Interrupted, the stopped work straggles: it says `late` and takes one more step before its turn ends, and the check proves the gate held both back. It also checks readiness, cards allowed, declined and withdrawn, the restart after `stuck` and `die`, and that `close` leaves no process. `npm test` runs it, offline. The fakes in `executors/claude/` and `executors/codex/` are complete examples.
+Interrupted, the stopped work straggles: it says `late` and takes one more step before its turn ends, and the check proves the gate held both back. It also checks that a correction told just before a stop never runs, readiness, cards allowed, declined and withdrawn, the restart after `stuck` and `die`, and that `close` leaves no process. `npm test` runs it, offline. The fakes in `executors/claude/` and `executors/codex/` are complete examples.
 
 ## A complete minimal adapter
 

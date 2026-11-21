@@ -4,17 +4,25 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { ROOT, loadConfig, parseArgs } from './config.mjs'
+import { ROOT, DEFAULTS, loadConfig, parseArgs } from './config.mjs'
 import { createLog, usage } from './util.mjs'
 import { isStale, build } from './app-build.mjs'
 import { doctor, preflight } from './doctor.mjs'
-import { describe } from './plugins.mjs'
+import { describe, manifests } from './plugins.mjs'
 
 const log = createLog()
 
-// The core's settings a new user needs, then those of the selected plug-ins from their manifests.
-// The full list is the README's Configuration table.
-const HELP = `lookma: talk to your Mac. Watch it work.
+// "a, b or c"
+const anyOf = words => (words.length > 1 ? `${words.slice(0, -1).join(', ')} or ${words.at(-1)}` : words[0])
+
+// The installed plug-ins of a kind, by name and title, the default marked.
+function choices(all, kind) {
+  return all.filter(p => p.kind === kind).map(p => `${p.name} (${p.title}${p.name === DEFAULTS[kind] ? ', the default' : ''})`)
+}
+
+// The core's settings a new user needs, the plug-ins named from their manifests. The settings of
+// the selected plug-ins follow (pluginHelp); the full list is the README's Configuration table.
+const help = all => `lookma: talk to your Mac. Watch it work.
 
 Usage:
   lookma [options] [dir ...]         Start. The agent may work in each dir you pass.
@@ -26,8 +34,8 @@ Usage:
   lookma --help                      Print this help.
 
 Options (each overrides the environment and .env):
-  --agent <name>       the agent: claude (Claude Code, the default) or codex (Codex CLI)
-  --voice <name>       the voice: openai (the default) or off (type instead, nothing goes to OpenAI)
+  --agent <name>       the agent: ${anyOf(choices(all, 'executors'))}
+  --voice <name>       the voice: ${anyOf([...choices(all, 'voices'), 'off (type instead)'])}
   --audio <setup>      room (speakers, the default) or headset
   --set NAME=value     any setting below, e.g. --set LOOKMA_CLAUDE_MODEL=opus
 
@@ -39,8 +47,8 @@ to the voice, and macOS shows its microphone indicator. To approve a card, say
 "pause". Quit from the menu bar icon, or with Ctrl-C in the terminal that started it.
 
 Settings, from the environment or ${path.join(ROOT, '.env')}:
-  LOOKMA_EXECUTOR        the agent: claude (Claude Code, the default) or codex (Codex CLI)
-  LOOKMA_VOICE           the voice: openai (OpenAI Realtime, the default) or off
+  LOOKMA_EXECUTOR        the agent, as --agent
+  LOOKMA_VOICE           the voice, as --voice
   LOOKMA_AUDIO           room (speakers, the default) or headset (talking over the voice stops it)
   LOOKMA_VOICE_LANGUAGE  the language you speak, e.g. en or zh; unset, it is detected
 `
@@ -56,8 +64,21 @@ function pluginHelp(config) {
   return `${text}\n\nAll of them: the Configuration table in ${path.join(ROOT, 'README.md')}\n`
 }
 
+// With a setting that is wrong, the help still prints, then the error instead of the plug-ins'
+// settings (they depend on the selection).
 async function printHelp() {
-  process.stdout.write(HELP + pluginHelp(await loadConfig()))
+  const text = help(await manifests())
+  let config
+  try {
+    config = await loadConfig()
+  } catch (err) {
+    if (!err.exitCode) throw err
+    process.stdout.write(text)
+    console.error(`\nlookma: ${err.message}`)
+    process.exitCode = err.exitCode
+    return
+  }
+  process.stdout.write(text + pluginHelp(config))
 }
 
 // The three switches, and every other setting that is set, with where it came from. Secrets are masked.
@@ -101,7 +122,7 @@ async function start(args) {
   // Without the app (LOOKMA_NO_APP=1) its build is yours too, which also keeps a dev core from
   // replacing the bundle another Lookma is running.
   const building = config.launchApp && isStale(config)
-  preflight(config, { build: building })
+  for (const warning of preflight(config, { build: building })) log('warning', warning)
   if (building) build(config)
   // Only now: the core needs the npm packages the preflight checked for.
   const { createCore } = await import('./core.mjs')

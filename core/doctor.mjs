@@ -85,12 +85,17 @@ const toRun = config => [checkMacos, checkNode, checkPackages, ...pluginChecks(c
 const TO_BUILD = [checkSwiftc]
 
 // `lookma start` checks what it needs, building or not, and throws the first failure as the doctor
-// words it. Warnings do not stop it.
+// words it. Warnings do not stop it: it returns their texts, for the log. A setting nobody reads
+// is one of them, so a misspelt or renamed setting does not go unnoticed.
 export function preflight(config, { build }) {
-  for (const check of [...toRun(config), ...(build ? TO_BUILD : [])]) {
-    const f = check()
-    if (f.level === 'fail') throw new Error([f.text, ...f.fix.map(l => `  ${l}`), 'Run lookma doctor for a full check.'].join('\n'))
+  const warnings = []
+  for (const check of [...toRun(config), ...(build ? TO_BUILD : []), () => checkUndeclared(config)]) {
+    for (const f of [check()].flat()) {
+      if (f.level === 'fail') throw new Error([f.text, ...f.fix.map(l => `  ${l}`), 'Run lookma doctor for a full check.'].join('\n'))
+      if (f.level === 'warn') warnings.push(f.fix.length ? `${f.text}. ${f.fix.join(' ')}` : f.text)
+    }
   }
+  return warnings
 }
 
 // ---------------------------------------------------------------- plug-ins and settings

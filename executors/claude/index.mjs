@@ -3,49 +3,68 @@
 // prompts per session.
 //   start      query(); resolves once Claude Code is initialised and the tools' MCP server is connected
 //   prompt     one user message into the stream; during a turn, Claude Code takes it into that turn
-//   interrupt  Query.interrupt(); resolves on the interrupted turn's result
+//   interrupt  Query.interrupt() until nothing of ours is left to run; resolves on the last result
 //   result → turnEnd     a main-agent message while idle → turnStart (a background task woke it)
 //   canUseTool → cards (approvals.mjs)     hooks → steps and tasks (hooks.mjs)
 // After close, start goes on with the same conversation, by its session id.
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { clip, sleep } from '../../core/util.mjs'
 import { queryOptions } from './session.mjs'
 import { EVENTS, createHookHandler } from './hooks.mjs'
 import { createCanUseTool } from './approvals.mjs'
 
-// The prompt stream query() reads: open until end(), so the session lives between turns.
+const TOOLS_MS = 30000 // how long Claude Code may take to connect the tools' MCP server
+
+// The prompt stream query() reads: open until end(), so the session lives between turns. Each
+// message carries a uuid, by which an interrupt's receipt names the ones that survive it.
 function createInbox() {
   const waiting = []
   let wake = null
   let ended = false
+  let drained = [] // written() calls waiting for the SDK to have written everything pushed
   return {
+    /** Queues a prompt; returns its uuid. */
     push(text) {
-      waiting.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null })
+      const uuid = randomUUID()
+      waiting.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, uuid })
       wake?.()
+      return uuid
     },
     end() {
       ended = true
       wake?.()
     },
+    // Resolves once the SDK has written every pushed message to Claude Code, so a control request
+    // sent after it reaches Claude Code after them.
+    written() {
+      return waiting.length ? new Promise(resolve => drained.push(resolve)) : Promise.resolve()
+    },
     async *stream() {
       for (;;) {
-        if (waiting.length) yield waiting.shift()
-        else if (ended) return
+        if (waiting.length) {
+          // The SDK asks for the next message only after writing this one.
+          yield waiting[0]
+          waiting.shift()
+          if (!waiting.length) for (const resolve of drained.splice(0)) resolve()
+        } else if (ended) return
         else await new Promise(resolve => (wake = resolve))
       }
     },
   }
 }
 
-// Resolves once Claude Code has connected the tools' MCP server; rejects in words if it failed.
+// Resolves once Claude Code has connected the tools' MCP server; rejects in words if it failed,
+// is not listed, or is still pending after TOOLS_MS.
 async function toolsUp(session, name) {
-  for (;;) {
+  for (const end = Date.now() + TOOLS_MS; ; await sleep(100)) {
     const s = (await session.mcpServerStatus()).find(s => s.name === name)
+    if (!s) throw new Error('the tools did not start')
     if (s.status === 'connected') return
     if (s.status !== 'pending') throw new Error(`the tools did not start (${s.status}${s.error ? `: ${s.error}` : ''})`)
-    await sleep(100)
+    if (Date.now() > end) throw new Error(`the tools did not start within ${TOOLS_MS / 1000} s`)
   }
 }
 
@@ -60,11 +79,34 @@ export function create(ctx) {
   let sessionId = null // the conversation, resumed by the next start
   let busy = false // a turn runs: from a prompt, or a main-agent message while idle, to its result
   let closing = false
-  let ending = [] // interrupts waiting for the turn's result
+  const sent = new Set() // the uuids of this session's prompts
+  // The stop under way, or null: { resolve, reject, asked: interrupts not yet answered, left: the
+  // last receipt names prompts of ours that will still run }. A plain interrupt stops the running
+  // turn only; a prompt Claude Code has queued survives it and runs next (its receipt's
+  // still_queued). So the stop interrupts every turn that starts while it lasts, asks again after
+  // a turn ends while some were left, and is over when no turn runs, every interrupt is answered
+  // and the last receipt names none of ours.
+  let stop = null
 
-  function settle() {
-    for (const resolve of ending) resolve()
-    ending = []
+  // One more interrupt for the stop under way.
+  function halt() {
+    stop.asked++
+    answered(stop, q.interrupt())
+  }
+
+  function answered(s, receipt) {
+    receipt.then(r => {
+      s.asked--
+      // An older Claude Code sends no receipt. The list may name messages that are not ours.
+      s.left = !!r?.still_queued.some(id => sent.has(id))
+      if (s === stop && !busy && !s.asked && !s.left) over()
+    }, s.reject)
+  }
+
+  function over() {
+    const s = stop
+    stop = null
+    s.resolve()
   }
 
   function onMessage(m) {
@@ -78,11 +120,13 @@ export function create(ctx) {
       const error = ok ? undefined : (m.subtype === 'success' ? m.result : m.errors.join('; ')) || m.subtype
       log(`turn ${ok ? 'done' : `${m.subtype}: ${error}`}`)
       emit({ type: 'turnEnd', ok, summary: m.result, error })
-      return settle()
+      if (stop && !stop.asked) stop.left ? halt() : over()
+      return
     }
     if (!busy && main && (m.type === 'assistant' || (m.type === 'system' && m.subtype === 'init'))) {
       busy = true
       emit({ type: 'turnStart' })
+      if (stop) halt()
     }
     // The model is told to speak only with say; its text replies are for this log.
     if (m.type === 'assistant' && main) for (const b of m.message.content) if (b.type === 'text') log('message', clip(b.text, 200))
@@ -97,7 +141,7 @@ export function create(ctx) {
     }
     if (session !== q) return
     busy = false
-    settle()
+    if (stop) over()
     if (!closing) emit({ type: 'down', detail: reason })
   }
 
@@ -106,6 +150,7 @@ export function create(ctx) {
     async start({ dirs }) {
       closing = false
       busy = false
+      sent.clear()
       const work = path.join(ctx.sessionDir, 'work')
       fs.mkdirSync(work, { recursive: true })
       inbox = createInbox()
@@ -122,14 +167,17 @@ export function create(ctx) {
 
     async prompt(text) {
       busy = true
-      inbox.push(text)
+      sent.add(inbox.push(text))
     },
 
+    // Asked even while idle: a prompt queued behind the last result may be about to run.
     async interrupt() {
-      if (!busy) return
-      const end = new Promise(resolve => ending.push(resolve))
-      await q.interrupt()
-      await end
+      const session = q
+      const done = new Promise((resolve, reject) => (stop = { resolve, reject, asked: 1, left: false }))
+      const s = stop
+      await inbox.written()
+      answered(s, session.interrupt())
+      await done
     },
 
     async close() {

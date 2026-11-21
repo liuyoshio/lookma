@@ -1,6 +1,6 @@
 // The approval card: the oldest pending card from the core, with Approve / Decline.
 // It slides up above the capsule and is the only part of the overlay that takes clicks.
-// Only the question and its detail are shown, never Claude Code's numbered options: Approve is
+// Only the question and its detail are shown, never the agent's own options: Approve is
 // always "yes, once", and listing "Yes, and don't ask again" would suggest it might pick that.
 // onShow(card) fires when a card is actually rendered: that moment is when the user can see it.
 

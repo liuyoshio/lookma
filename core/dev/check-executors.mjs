@@ -10,7 +10,8 @@
 //   fail          end the turn failed, with the error "boom"
 //   refuse        refuse the prompt itself
 //   work          take a step, then work until interrupted; a prompt meanwhile ends the turn ok
-//                 with the summary "steered: <prompt>"
+//                 with the summary "steered: <prompt>" (Claude's fake takes it 50 ms later, and
+//                 an interrupt before then leaves it queued, as Claude Code does)
 //   stuck         take a step, then ignore everything, interrupts included
 //   die           exit at once
 // Interrupted, the stopped work straggles: it says "late" and takes one more step before its
@@ -144,6 +145,21 @@ async function conformance(name, fakeFile, bin) {
     check(it('the stragglers came and the gate held them (a late step and the end)'), held === 2, h.logs.slice(logs).join('; '))
     const after = await h.turn('say again')
     check(it('after the stop, the next prompt works'), after?.ok === true && h.said.at(-1) === 'again', JSON.stringify(after))
+
+    // Work, a correction, and a stop at once: the correction is stopped with the work, also where
+    // the agent keeps it queued past an interrupt.
+    {
+      h.host.prompt('work')
+      await until(() => h.events.at(-1)?.type === 'step')
+      const at = h.events.length
+      const said = h.said.length
+      h.host.prompt('say more')
+      await h.host.interrupt()
+      await sleep(200)
+      check(it('a correction told just before a stop never runs'), h.events.length === at && h.said.length === said, JSON.stringify(h.events.slice(at)) + JSON.stringify(h.said.slice(said)))
+      const next = await h.turn('say then')
+      check(it('after it, the next prompt is a turn of its own'), next?.ok === true && next.summary === 'then' && h.said.at(-1) === 'then', JSON.stringify(next))
+    }
 
     // A stop while a card is up: the card is withdrawn.
     const m = h.ends().length

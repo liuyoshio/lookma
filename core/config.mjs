@@ -12,6 +12,9 @@ import { list, load, manifests } from './plugins.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+// The plug-ins used when none is selected: the one place the core names a plug-in.
+export const DEFAULTS = { executors: 'claude', voices: 'openai' }
+
 // The core's own settings. A plug-in declares its own in its manifest; lookma doctor warns about
 // any other LOOKMA_* that is set. LOOKMA_SIGN_IDENTITY is app/build.sh's, LOOKMA_LIVE_TESTS the
 // dev checks'.
@@ -104,10 +107,9 @@ export async function loadConfig(settings = {}) {
   loadEnvFile(path.join(ROOT, '.env'), name => ours(name) && (sources[name] = '.env'))
   const env = process.env
   const dataDir = env.LOOKMA_DATA || path.join(os.homedir(), '.lookma')
-  // The defaults are the one place the core names a plug-in.
-  const executor = await load('executors', oneOf('LOOKMA_EXECUTOR', list('executors'), 'claude'), env)
+  const executor = await load('executors', oneOf('LOOKMA_EXECUTOR', list('executors'), DEFAULTS.executors), env)
   if (executor.missing.length) throw usage(`${executor.missing[0]} is not set (${executor.title} needs it)`)
-  const voice = oneOf('LOOKMA_VOICE', [...list('voices'), 'off'], 'openai')
+  const voice = oneOf('LOOKMA_VOICE', [...list('voices'), 'off'], DEFAULTS.voices)
   const provider = voice === 'off' ? null : await load('voices', voice, env)
   return {
     sources,

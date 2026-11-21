@@ -12,6 +12,9 @@
 //                are withdrawn and the hands stop, so nothing of the stopped work reaches the
 //                user or the screen. Order is enough: outside the gate, an event belongs to the
 //                work that is running.
+//   background tasks   a `task` event passes the gate while the session is ready: a background
+//                task is not the work a stop stops, and its id says which it is. When the session
+//                ends (a restart, a failed start, close), every task still running fails with it.
 //   recovery     a session that dies (`down`) or does not stop in INTERRUPT_MS is closed and
 //                started again, once: a second failure within RESTART_WINDOW_MS leaves it down
 // The contract an adapter keeps is in docs/protocol.md (Executor contract).
@@ -29,7 +32,7 @@ const KINDS = ['info', 'question', 'confirm']
 
 /**
  * config: the core's (config.executor is the loaded plug-in).
- * onEvent(e): turnStart, turnEnd { ok, error? }, step and task, outside the gate.
+ * onEvent(e): turnStart, turnEnd { ok, error? } and step, outside the gate; task while ready.
  * onStatus(status, detail). say({ speech, display?, kind? }): the say tool.
  * hands: { run(tool, args), abort() }. ask(card, signal): a core card, resolving with the
  * answer and rejecting when signal aborts. log: the core's; the host's lines start "executor", the
@@ -56,6 +59,7 @@ export async function createExecutorHost(config, { onEvent, onStatus, say, hands
   let stopping = Promise.resolve() // the last interrupt: settles when its gate opens or recovery takes over
   const line = [] // prompts waiting for the adapter
   const asks = new Set() // the AbortControllers of open cards
+  const tasks = new Set() // the ids of the background tasks running
 
   function setStatus(next, detail = '') {
     if (next === status && detail === shown) return
@@ -72,9 +76,20 @@ export async function createExecutorHost(config, { onEvent, onStatus, say, hands
       if (status === 'ready') recover(e.detail) // a session still starting rejects its start instead
       return
     }
+    if (e.type === 'task' && status === 'ready') {
+      if (e.status === 'running') tasks.add(e.id)
+      else tasks.delete(e.id)
+      return onEvent(e)
+    }
     if (gated || status !== 'ready') return log('dropped', e.type)
     if (e.type === 'turnEnd' && e.summary) log('summary', e.summary)
     onEvent(e)
+  }
+
+  // The session is gone, and its background tasks with it.
+  function orphan() {
+    for (const id of tasks) onEvent({ type: 'task', id, status: 'failed' })
+    tasks.clear()
   }
 
   // A card for the user: true or false, or null when it is withdrawn (stop, restart, close, or
@@ -157,6 +172,7 @@ export async function createExecutorHost(config, { onEvent, onStatus, say, hands
       gated = true
       drop()
       fail(err.message)
+      orphan()
       setStatus('down', err.message)
       await adapter.close()
       return
@@ -176,6 +192,7 @@ export async function createExecutorHost(config, { onEvent, onStatus, say, hands
     gated = true
     drop()
     fail(reason)
+    orphan()
     if (again) setStatus('down', reason)
     else setStatus('starting', `${reason}; restarting`)
     await adapter.close()
@@ -240,6 +257,7 @@ export async function createExecutorHost(config, { onEvent, onStatus, say, hands
       run++
       gated = true
       drop()
+      orphan()
       setStatus('down', 'stopped')
       await adapter.close()
     },

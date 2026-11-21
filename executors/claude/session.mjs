@@ -12,9 +12,10 @@ import path from 'node:path'
 
 // A parent Claude Code's own session markers (CLAUDECODE, CLAUDE_CODE_*, CLAUDE_AGENT_SDK_*), set
 // when Lookma is started from inside one. Inherited, they would make this session a child of that
-// one: bare mode, for one, never reads the login. The user's own auth choices (ANTHROPIC_*,
-// CLAUDE_CONFIG_DIR) are kept.
-const PARENT = /^(CLAUDECODE$|CLAUDE_CODE_|CLAUDE_AGENT_SDK_)/
+// one: bare mode, for one, never reads the login. The user's own auth choices are kept: ANTHROPIC_*,
+// CLAUDE_CONFIG_DIR, and among the markers' names CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) and
+// CLAUDE_CODE_USE_* (Bedrock, Vertex and the like).
+const PARENT = /^(CLAUDECODE$|CLAUDE_AGENT_SDK_|CLAUDE_CODE_(?!OAUTH_TOKEN$|USE_))/
 
 /** The environment Claude Code runs in: env without a parent Claude Code's session markers. */
 export function sessionEnv(env) {

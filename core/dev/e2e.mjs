@@ -7,7 +7,7 @@
 //   2. "say hello" → a say in the outbox, with no card (say never asks), and the turn ends done;
 //   3. the core stops on SIGTERM and takes its Claude Code and tools bridge with it.
 // Started from inside another agent's session, run it with a plain environment (env -i HOME=...
-// PATH=...), so the Claude Code session does not inherit that session's API settings.
+// USER=... PATH=...), so the Claude Code session does not inherit that session's API settings.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

@@ -3,7 +3,10 @@
 // requests), for core/dev/check-executors.mjs: it answers initialize, spawns the tools bridge from
 // the MCP servers the SDK sends at initialize and calls its tools over MCP, asks for permission
 // with can_use_tool, reports steps through the PreToolUse hook, and plays each prompt as one of
-// the conformance commands listed in check-executors.mjs. No model, no network.
+// the conformance commands listed in check-executors.mjs. A prompt during a turn waits in a queue
+// until the turn's next tool boundary (here 50 ms on), as in Claude Code: an interrupt before then
+// leaves it queued, names it in the receipt's still_queued, and it runs as the next turn. No
+// model, no network.
 import readline from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -24,7 +27,8 @@ function play() {
   let seq = 0
   let tools = null // the MCP client of the tools bridge
   let hooks = {} // hook event -> callback ids
-  let turn = null // { cmd, asking } of the turn running
+  let turn = null // { cmd, asking, stopped } of the turn running
+  const queued = [] // prompts told during a turn: { uuid, text }
 
   function request(req) {
     const id = `fake${++seq}`
@@ -50,12 +54,14 @@ function play() {
     turn = null
     const base = { type: 'result', session_id: session, uuid: randomUUID(), duration_ms: 1, num_turns: 1 }
     send(ok ? { ...base, subtype: 'success', is_error: false, result: text } : { ...base, subtype: 'error_during_execution', is_error: true, errors: [text] })
+    if (queued.length) begin(queued.shift().text)
   }
 
   // The stopped work's stragglers, which the host must hold back, then the end.
+  // A turn that ended meanwhile has nothing left to straggle.
   async function straggle(t) {
-    await call('say', { speech: 'late' })
-    await step('late step')
+    if (turn === t) await call('say', { speech: 'late' })
+    if (turn === t) await step('late step')
     result(t, false, 'interrupted')
   }
 
@@ -78,11 +84,20 @@ function play() {
     die: () => process.exit(3),
   }
 
-  function prompt(text) {
-    if (turn) {
-      const t = turn
-      return setImmediate(() => result(t, true, `steered: ${text}`))
-    }
+  // A prompt during a turn is taken into it at its next tool boundary, unless the turn ended first.
+  function prompt({ uuid, text }) {
+    if (!turn) return begin(text)
+    const t = turn
+    const q = { uuid, text }
+    queued.push(q)
+    setTimeout(() => {
+      if (turn !== t || !queued.includes(q)) return
+      queued.splice(queued.indexOf(q), 1)
+      result(t, true, `steered: ${text}`)
+    }, 50)
+  }
+
+  function begin(text) {
     const [cmd, ...words] = text.split(' ')
     const t = (turn = { cmd })
     send({ type: 'system', subtype: 'init', session_id: session, uuid: randomUUID(), model: 'fake', mcp_servers: [{ name: 'lookma', status: 'connected' }] })
@@ -100,22 +115,24 @@ function play() {
       return { commands: [], agents: [], output_style: 'default', available_output_styles: [], models: [], account: {}, claude_code_version: 'fake', hooks_applied: true, mcp_servers_applied: true }
     },
     mcp_status: () => ({ mcpServers: [{ name: tools.server, status: 'connected' }] }),
-    // A stuck turn never answers. Any other is stopped: its open request is cancelled, then it straggles.
+    // A stuck turn never answers. Any other is stopped: its open request is cancelled, then it
+    // straggles. The queued prompts survive, and the receipt names them.
     interrupt() {
       const t = turn
       if (t?.cmd === 'stuck') return new Promise(() => {})
-      if (t) {
+      if (t && !t.stopped) {
+        t.stopped = true // a second interrupt of a turn already stopping changes nothing
         if (t.asking) send({ type: 'control_cancel_request', request_id: t.asking.id })
         setImmediate(() => straggle(t))
       }
-      return { still_queued: [] }
+      return { still_queued: queued.map(q => q.uuid) }
     },
   }
 
   readline.createInterface({ input: process.stdin })
     .on('line', async line => {
       const msg = JSON.parse(line)
-      if (msg.type === 'user') return prompt(msg.message.content)
+      if (msg.type === 'user') return prompt({ uuid: msg.uuid, text: msg.message.content })
       if (msg.type === 'control_response') {
         waiting.get(msg.response.request_id)?.(msg.response.response)
         return waiting.delete(msg.response.request_id)
