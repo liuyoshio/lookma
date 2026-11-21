@@ -4,7 +4,7 @@ How to work on Lookma, for AI coding agents (Claude Code, Codex and others) and 
 
 ## What Lookma is
 
-A visible, voice-driven computer operator for macOS. You talk, and a coding agent operates your real apps on your own screen while you watch. It is a real daily tool, not a demo: optimize for everyday use with real apps and low friction, never for a staged recording.
+A visible, voice-driven computer operator for macOS. You hold fn and talk (or tap fn for a hands-free conversation), and a coding agent operates your real apps on your own screen while you watch. It is a real daily tool, not a demo: optimize for everyday use with real apps and low friction, never for a staged recording.
 
 - **Three parts.** The Node core decides everything. The Swift app only provides primitives (hands, attention, the overlay window). The overlay draws what the core says and runs the voice client. [docs/how-it-works.md](docs/how-it-works.md) explains the design, [docs/protocol.md](docs/protocol.md) is the contract between the parts.
 - **Two plug-in ends.** Modularity is a headline feature. The agent that does the work is an executor in `executors/<name>/` (Claude Code, Codex). The voice you talk to is a provider in `voices/<name>/` (OpenAI Realtime today; other providers are planned), selected the same way (`LOOKMA_EXECUTOR`, `LOOKMA_VOICE`). Each plug-in declares its settings and checks in a `manifest.mjs`, which `core/plugins.mjs` alone loads and validates; a setting's name is derived, `LOOKMA_<PLUGIN>_<KEY>`. Adding an agent or a voice should take one folder plus a section in the docs ([writing an executor](docs/writing-an-executor.md), [writing a voice](docs/writing-a-voice.md)), and the core should never know a provider's specifics.
@@ -18,6 +18,7 @@ A visible, voice-driven computer operator for macOS. You talk, and a coding agen
 - **Depth over breadth.** Make the agreed scope deeper (concrete mechanisms, numbers, failure modes) instead of adding subsystems. Before adding a component, check whether an existing one, or a feature of the agent itself, already covers it.
 - **Validate at boundaries, trust inside.** Check input once where it enters: user input, files and environment variables, network and IPC messages (WebSocket, JSON-RPC, MCP, HTTP), and other processes' output. Inside, assume the data is correct. Do not add repeated null or type checks, optional chaining on values that must exist, try/catch that swallows errors, or "just in case" fallbacks. If an internal assumption breaks, let it throw; catch only where there is a real recovery, such as a reconnect. Defensive code hides bugs and makes the code harder to read. Delete it when you touch a file.
 - **Voice should feel human.** Natural turn-taking, short acknowledgements ("OK, opening Maps"), progress that matches what is really happening, no robotic silence and no rambling. Headphones are a first-class setup next to the room microphone, with one model for both, not two pipelines.
+- **The microphone opens when the user asks.** The default is the fn key: hold to talk, tap for a hands-free conversation. Always listening (`LOOKMA_TALK=always`) is the option. Both are one turn source (`overlay/voice/source.js`) resting in a different place, never two code paths. Lookma never writes the user's 🌐 setting and never swallows fn; it says what to change.
 
 ## Code
 
@@ -31,11 +32,11 @@ Follow the conventions in [CONTRIBUTING.md](CONTRIBUTING.md#code-conventions). I
 ## Tests
 
 - **Offline by default.** `npm test` and the dev checks use fakes and recordings and never touch the network. Never call a paid API (the OpenAI Realtime voice, or any OpenAI endpoint billed to the maintainer's key) in a test without asking first and saying roughly how many calls it takes. Live checks sit behind `LOOKMA_LIVE_TESTS=1`.
-- **Test by text.** To try a change end to end, start Lookma with `LOOKMA_VOICE=off` (or `--voice off`) and send requests with `POST /api/tell`. Nothing then reaches OpenAI. Agent sessions (Claude Code, Codex) run on the maintainer's subscription: fine, but keep them modest.
+- **Test by text.** To try a change end to end, start Lookma with `LOOKMA_VOICE=off` (or `--voice off`) and send requests with `POST /api/tell`. Nothing then reaches OpenAI. Agent sessions (Claude Code, Codex) run on the maintainer's subscription: fine, but keep them modest. With voice off fn does nothing, so try the talk key through `overlay/dev/check-voices.mjs`, which drives `window.lookma.key` against the fake voice service.
 - **Read the code first; tests are not the proof.** Simple, clear logic should be judged correct by reading it, not by running a hundred tests. A green suite can hide bugs: it only covers the cases someone thought of, and piling on tests is often a sign the logic itself is not clear. If the code needs many tests to be trusted, make it simpler first.
 - **Test what is tricky, only.** Timing, races, parsers and state machines (such as the voice floor) get tests. Clear-cut edits (text, prompts, renames, docs) get none, and do not run the whole suite to prove them. Do not add cases just to document behaviour.
 - **Harmless apps only.** GUI tests use Maps, Calculator, TextEdit (a new, unsaved document), Finder (read-only) and a browser for searching. Never Mail, Messages, Slack, WeChat, Discord or any other app that can send something on the user's behalf.
-- **Leave the running copy alone.** A Lookma may be running on port 8790. Use the dev ports in CONTRIBUTING.md and never stop the user's instance or touch `~/.lookma`.
+- **Leave the running copy alone.** A Lookma may be running on port 8790. Use the dev ports in CONTRIBUTING.md and never stop the user's instance or touch `~/.lookma`. Every running app hears fn, so a dev app runs with voice off.
 
 ## Language and privacy in tracked files
 

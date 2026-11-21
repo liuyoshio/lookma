@@ -20,7 +20,7 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Piece | Where | What it does |
 |---|---|---|
 | Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and grants the voice its sessions. |
-| App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
+| App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, the fn key's edges, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
 | Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
 | Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code run headless through the Claude Agent SDK, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
 | Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings, `mint.mjs` runs in the core and mints a short-lived grant for each session, and `page.js` runs in the overlay and connects to the service. The rest of the voice (`overlay/voice/`) is the same for every provider. |
@@ -47,7 +47,7 @@ What a plug-in cannot do is never declared. An agent without background work sim
 
 Say “find three ramen places near the ferry and put them in a new note”:
 
-1. **You talk.** You just say it. The overlay streams your microphone to the voice (OpenAI Realtime today), which hears when you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
+1. **You talk.** Hold fn, say it and let go, or tap fn first and just talk. While it listens, the overlay streams your microphone to the voice (OpenAI Realtime today); the turn ends when you let go or, hands-free, when the voice hears you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
 2. **The core starts a turn** and hands the text to the executor. If a turn is already running, the text goes in as a correction instead: the agent takes it into the work it is doing.
 3. **The agent works.** Anything on screen goes through the six hands tools. Anything else (files, shell commands, web searches) uses the agent's own tools; the adapter reports each step, which shows up as the capsule's status line.
 4. **Every hands call runs the pipeline** below, one call at a time.
@@ -105,13 +105,34 @@ Each agent asks one request at a time, in a structured form, so a card maps to e
 
 ## When it listens
 
-While Lookma runs, voice is on and it is not paused, it listens. You just talk, from the desk or from across the room. With a headset you can talk over the voice to interrupt it. macOS shows its microphone indicator the whole time. Pause from the menu bar, with ⌃⌥P or by saying “pause”, and the microphone is off until you resume.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/talking-dark.svg">
+  <img src="images/talking.svg" width="100%" alt="Three timelines of the fn key and the microphone. Hold fn: the microphone opens about 150 ms after the press and closes when you let go, and your words go in. Tap fn: the microphone stays open for a hands-free conversation, until 20 seconds of quiet or another tap. Always listening, the option --talk always: the microphone is open until you pause, and a tap stops the voice mid-sentence.">
+</picture>
 
-**One warm session.** The overlay (`overlay/voice.js`) keeps one session of the voice connected, with the microphone attached: with OpenAI Realtime, one WebRTC call. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_VOICE=off` or no OpenAI key) there is no session and no microphone.
+The microphone is closed until you ask. **Hold fn** and it listens while you hold it: the turn is yours from the press to the release, and your words go in when you let go. **Tap fn**, or choose Start Conversation in the menu bar, and it listens hands-free until 20 s of quiet or another tap. Quiet means nobody speaking, nothing waiting to be said, no turn working and no card waiting, so a conversation stays open through the task it asked for and you answer “Done, shall I …?” without the key; background tasks do not count, since they can run for an hour. **Always listening** (`--talk always`, or Listen: Always in the menu for one run) is the option: it listens whenever Lookma runs and is not paused, as if a conversation were always open. Pause from the menu bar, with ⌃⌥P or by saying “pause”, and the voice is off until you resume.
 
-**Turns.** The voice service finds them. OpenAI's uses semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the service never replies on its own, and the overlay's floor asks for every reply.
+**One model for all three.** The turn source (`overlay/voice/source.js`, a small pure reducer) answers one question: is the microphone open, and who ends the turn? It has three answers:
 
-**No replies to silence or noise.** A microphone that is always on hears the whole room. So the page asks for a reply only when the turn's transcript means something:
+| `how` | Microphone | Who ends a turn |
+|---|---|---|
+| `off` | closed: nothing captured, nothing sent | nobody: there are no turns |
+| `hold` | open | the key: the turn ends at release |
+| `auto` | open | the voice service's detector |
+
+The talk mode only picks where it rests: `key` (the default) rests `off`, `always` rests `auto`. Holding fn gives a `hold` turn in both, and in `key` a tap opens or closes a conversation, `auto`. Every hold and every tap first cuts the voice off, so the key is also how you interrupt it, with speakers as with a headset. The source tells the voice provider the level (`listen`) whenever it changes; nothing else opens or closes the microphone.
+
+**Reading the key.** The app watches fn alone (`app/Sources/TalkKey.swift`) and passes its edges to the page: down, up, and cancel when any other key or modifier joins it. It only observes, never consumes, so fn keeps working as a modifier. A press means nothing until it has lasted 150 ms alone, so fn+arrow, fn+delete and Globe shortcuts open no microphone and cut nothing; released within 300 ms of the press, it was a tap. A hold ends by itself after 60 s, in case the release is lost: while a password field has focus, macOS Secure Input hides every key from every app.
+
+**The 🌐 key.** fn is also the Globe key, which macOS may give a job of its own (System Settings → Keyboard → Press 🌐 key to): then a tap also switches the input source or opens Emoji & Symbols. `lookma doctor` and `lookma start` read that setting and ask for Do Nothing (⌃Space still switches input sources), and `lookma doctor --fix` opens the pane. Lookma never changes the setting itself.
+
+**What you notice.** A soft rising tone once the microphone is live, a falling one when it closes. The capsule's bars are hollow while it is closed and solid while it is open, the menu bar seal fills its ring, and macOS shows its microphone indicator only while it is open. An approval card's hint reads “Hold fn and say ‘yes, I approve’” while the microphone is closed.
+
+**One warm session.** The overlay (`overlay/voice.js`) keeps one session of the voice connected whether the microphone is open or not: with OpenAI Realtime, one WebRTC call whose audio sender carries no track while the microphone is closed, so no audio of any kind reaches the service. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_VOICE=off` or no OpenAI key) there is no session and no microphone.
+
+**Turns.** While you hold fn the key bounds the turn: OpenAI's detector is switched off for the hold and the turn is committed when you let go. Hands-free, the voice service finds the turns: OpenAI's uses semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo; fn still cuts it off. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the service never replies on its own, and the overlay's floor asks for every reply, and never while you hold the key.
+
+**No replies to silence or noise.** An open microphone hears the whole room, and hands-free nobody says when a turn is meant for Lookma. So the page asks for a reply only when the turn's transcript means something:
 
 | The transcript | What happens |
 |---|---|
@@ -126,7 +147,7 @@ The decision is one small pure function, with its own tests. Speech that gets th
 
 **Language.** Set `LOOKMA_VOICE_LANGUAGE` (an ISO code such as `en` or `zh`) and the transcriber is told the language you speak. There is no transcription prompt: it makes the transcriber drop question marks, and the approval check relies on them.
 
-**Health.** If the session closes or fails, the overlay reconnects in the background. Before the service's session time limit, it opens a fresh one while nothing is going on, never in the middle of a turn, with its grant (a short-lived key) minted ahead of time. A session that replaces an old one starts knowing what you were just told: the pending cards and the updates and reports of the last 5 minutes, marked as from earlier, with no reply. So “yes, I approve” still answers a card announced on the old session.
+**Health.** If the session closes or fails, the overlay reconnects in the background. Before the service's session time limit, it opens a fresh one while nothing is going on, never in the middle of a turn, a hold or a conversation, with its grant (a short-lived key) minted ahead of time. A session that replaces an old one starts knowing what you were just told: the pending cards and the updates and reports of the last 5 minutes, marked as from earlier, with no reply. So “yes, I approve” still answers a card announced on the old session.
 
 ## Voice consent
 
@@ -151,7 +172,7 @@ Declines go through the same checks, with an explicit no instead (“no”, “c
 
 When a voiced answer is refused, nothing is sent. The card shows “Not a clear yes” with what was heard, and the voice asks again. The approval words are English, whatever language you speak to it in; you can always click instead. Clicking Approve or Decline always works.
 
-**Commands.** An utterance that is only “stop” (or “cancel”) cancels a running turn at once, without waiting for the voice model. “Go ahead” (or “continue”) resumes a step that is waiting for you. “Pause” pauses: the running turn stops as with “stop”, the voice session closes and the microphone is off until you resume from the menu bar or with ⌃⌥P. Resuming only turns listening back on; the stopped turn stays stopped. This works typed or spoken. While a card is up, your words answer the card instead.
+**Commands.** An utterance that is only “stop” (or “cancel”) cancels a running turn at once, without waiting for the voice model. “Go ahead” (or “continue”) resumes a step that is waiting for you. “Pause” pauses: the running turn stops as with “stop”, the voice session closes and the microphone is off until you resume from the menu bar or with ⌃⌥P. Resuming only brings the voice back; the stopped turn stays stopped. This works typed or spoken. While a card is up, your words answer the card instead.
 
 ## Background work
 

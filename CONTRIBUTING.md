@@ -28,8 +28,10 @@ LOOKMA_PORT=8793 app/build/Lookma.app/Contents/MacOS/Lookma
 ```
 
 - **`LOOKMA_NO_APP=1`** keeps the core from launching the app with `open`. Run the binary yourself instead: it then uses your terminal's Accessibility, Screen Recording and Microphone grants, which survive rebuilds.
-- **`LOOKMA_VOICE=off`** is text only: no voice session and no microphone, so nothing goes to OpenAI. With voice on, Lookma listens whenever it runs and is not paused; pause it with ⌃⌥P while you work on it. Type with **Type a Request…** in the menu bar, or post to the core:
+- **`LOOKMA_VOICE=off`** is text only: no voice session and no microphone, so nothing goes to OpenAI. With voice on, Lookma listens while you hold fn or a conversation is open (or always, with `--talk always`). Type with **Type a Request…** in the menu bar, or post to the core:
   `curl -X POST -H 'Content-Type: application/json' -d '{"text":"open notes"}' http://127.0.0.1:8793/api/tell`
+- **Every running Lookma hears fn.** A dev app with voice on and your everyday Lookma both open their microphone on the same press, so give the dev copy `LOOKMA_VOICE=off`, or pause one of them.
+- **The talk key without a voice bill.** With voice off the turn source never goes live, so fn does nothing there. `node overlay/dev/check-voices.mjs` drives the key (`window.lookma.key`) against each provider's fake service instead, and `npm run test:key` checks how the app reads fn.
 - **Swift changed?** Run `app/build.sh` again. `LOOKMA_SIGN_IDENTITY=-` forces ad hoc signing.
 - **Watch the agent** in the core's log: its steps, cards and messages, and for Claude Code the login it uses. A core started from inside another agent's session can inherit that session's API settings; if the login is not yours, start it with a plain environment (`env -i HOME="$HOME" USER="$USER" PATH="$PATH" ...`; Claude Code needs `USER` to find its login in the keychain).
 - **The overlay is a plain page.** Open `http://127.0.0.1:8793/` in a browser to see it against your core, or run `node overlay/dev/mock-core.mjs` and open `http://127.0.0.1:8797/?backdrop=1` to replay a scripted scenario on a fake desktop, no core needed.

@@ -50,7 +50,7 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
   outbox: [ { id, kind: 'info' | 'question' | 'confirm' | 'report' | 'card', speech, display,
               title?, taskId?, cardId?, turnId, held, at, delivered: null | 'spoken' | 'cut' | 'shown' } ],
   paused: false | true,
-  talk: 'always' | 'key' }
+  talk: 'key' | 'always' }
 ```
 
 - `turn.sent` is the exact text handed to the executor (the capsule's second row).
@@ -64,7 +64,7 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
 - `turn.said` counts the lines the work said during the turn (see the outbox below).
 - `outbox` is what the user is owed by voice, oldest first. See The outbox below.
 - `paused` is true while the user has paused. See Pause and quit below.
-- `talk` is the talk mode: `LOOKMA_TALK` at start, then the app's menu for this run. See the turn source below.
+- `talk` is the talk mode: `LOOKMA_TALK` at start (`key` by default: hold fn to talk), then the app's menu for this run. See the turn source below.
 
 **The outbox** (`core/outbox.mjs`). Everything the work wants the user told is an entry, kept in the core so it outlives a pause, a voice failure and a page reload:
 
@@ -86,7 +86,7 @@ The answer to an overlay request (see Overlay → core) goes to the requesting s
 **Voice session** (`overlay/voice.js`, `overlay/voice/`). Full duplex: while voice is on and not paused, one warm session is connected, and the talk mode says when the microphone is open on it.
 
 - **Warm session.** One connection of the selected voice provider (see Voice provider contract). It comes up hearing nothing; the turn source then gives it the microphone, and macOS shows its mic indicator. The voice speaks on the same session, and it keeps the conversation across turns.
-- **The turn source** (`overlay/voice/source.js`) decides whether the microphone is open and who ends the turn, one of three: `off` (closed), `auto` (open, the provider finds the turns) or `hold` (open, the key holds the turn). It says so with one level, `listen`, sent to the provider whenever it changes; nothing else opens or closes the microphone. While no session is live it is `off`. The talk mode (the snapshot's `talk`) only chooses the rest: `always` rests `auto`, `key` rests `off`. The key's edges come from the app (`window.lookma.key`): a press is nothing until it has lasted 150 ms alone (a shortcut such as fn+arrow is cancelled by then); held that long it is a `hold` turn, committed at release, or dropped if released within 300 ms of the press (then it was a tap) or cancelled; a hold ends by itself after 60 s. In `key`, a tap (or the menu's `toggle`) opens a hands-free conversation, `auto`, until 20 s of quiet (nobody speaking, nothing owed, no turn working, no card waiting; background tasks do not count) or another tap; in `always` a tap has nothing to open. Every hold that armed and every tap first cuts the butler (`cut`). A reconnect or pause ends a hold and a conversation. When the microphone opens for the user or closes again while the session stays up, the page plays a soft tone, the open tone once the microphone is live; a reconnect, a renewal, a pause and a microphone that failed to open make none. The capsule's glyph is hollow while the microphone is closed and solid while it is open and nobody is talking; an approval card's hint then says to hold fn.
+- **The turn source** (`overlay/voice/source.js`) decides whether the microphone is open and who ends the turn, one of three: `off` (closed), `auto` (open, the provider finds the turns) or `hold` (open, the key holds the turn). It says so with one level, `listen`, sent to the provider whenever it changes; nothing else opens or closes the microphone. While no session is live it is `off`. The talk mode (the snapshot's `talk`) only chooses the rest: `key` (the default) rests `off`, `always` rests `auto`. The key's edges come from the app (`window.lookma.key`): a press is nothing until it has lasted 150 ms alone (a shortcut such as fn+arrow is cancelled by then); held that long it is a `hold` turn, committed at release, or dropped if released within 300 ms of the press (then it was a tap) or cancelled; a hold ends by itself after 60 s. In `key`, a tap (or the menu's `toggle`) opens a hands-free conversation, `auto`, until 20 s of quiet (nobody speaking, nothing owed, no turn working, no card waiting; background tasks do not count) or another tap; in `always` a tap has nothing to open. Every hold that armed and every tap first cuts the butler (`cut`). A reconnect or pause ends a hold and a conversation. When the microphone opens for the user or closes again while the session stays up, the page plays a soft tone, the open tone once the microphone is live; a reconnect, a renewal, a pause and a microphone that failed to open make none. The capsule's glyph is hollow while the microphone is closed and solid while it is open and nobody is talking; an approval card's hint then says to hold fn.
 - **Turns** come from the provider in `auto`; the service never replies by itself. The audio setup (`LOOKMA_AUDIO`) sets the rest: in a `room` (the default) speech over the voice does not cut it off; with a `headset` it does (barge-in).
 - **The floor** (`overlay/voice/floor.js`) decides who speaks: one reply at a time, and only once the user's turn is committed and nobody holds the key. A reply the key cut is settled at once: its announcements get `cut`, a turn it answered is no longer owed. What the voice owes is user turns (a reply) and outbox entries (an announcement). Every committed turn gets a `create` at once; the voice itself decides whether it was meant for it, and a reply that is a `pass` call, or has nothing in it, drops that turn from the conversation. A turn is shown as heard when the reply's first output that is not a `pass` arrives.
 - **Replies.** A reply to new turns (`create` of kind `turn`) may call tools; every other reply (`speak`: an announcement, or a tool result to say) only speaks. A tool result the user has not heard (an error, `status`, or any result after a reply that said nothing) gets a `speak` reply.
@@ -102,7 +102,7 @@ The answer to an overlay request (see Overlay → core) goes to the requesting s
 - its own transcript, matched by the turn's id and awaited up to 3 s, is explicit: "yes, I approve", "approved, do it", or a clear "no", "don't". A lone "approve" or "go ahead" is not enough, and any hesitation fails. "Cancel" is a stop, never a decline.
 - the core accepts it: the butler's `answer` sends an `answer` request, and the card shows Approved (or Declined) only after the ack says `ok`.
 
-Otherwise the voice asks again. The card's hint reads: Say “yes, I approve”. Clicking Approve always works.
+Otherwise the voice asks again. The card's hint reads: Hold fn and say “yes, I approve” while the microphone is closed, Say “yes, I approve” while it is open. Clicking Approve always works.
 
 ## Overlay → core
 
@@ -153,7 +153,7 @@ App → core:
 { type: 'hello', version, permissions: { accessibility, screen, microphone }, screen: { w, h, scale } }
 { type: 'attention', idle }                    // seconds since the last user key or mouse event; every 0.5 s
 { type: 'pause' } | { type: 'resume' }         // the menu bar item, or the hotkey ⌃⌥P
-{ type: 'talk', mode: 'always' | 'key' }       // the menu's Listen choice; any other mode is logged and ignored
+{ type: 'talk', mode: 'key' | 'always' }       // the menu's Listen choice; any other mode is logged and ignored
 { type: 'quit' }                               // Quit in the menu bar
 ```
 
@@ -174,7 +174,7 @@ The core is the only place where `paused` and `talk` change; the overlay and the
   - the capsule shows "Paused" and how to resume: the menu bar or ⌃⌥P;
   - marks clear, and the hands refuse every step;
   - `tell` is refused with the same hint (its ack's `error`; `POST /api/tell` answers 409).
-- **Resume** (`resume` from the app). `paused` becomes false. The overlay reconnects the warm voice session, with the microphone. Nothing else starts: a turn the pause stopped stays stopped until the user asks again.
+- **Resume** (`resume` from the app). `paused` becomes false. The overlay reconnects the warm voice session, and the turn source opens the microphone again only if the talk mode rests open (`always`). Nothing else starts: a turn the pause stopped stays stopped until the user asks again.
 - **Talk mode** (`talk` from the app). The core sets `talk` for this run, like `paused`; the durable setting is `LOOKMA_TALK`. The snapshot carries it to the overlay's turn source, and the app is told.
 - **Quit** (`quit` from the app). The core runs its usual shutdown, the same as Ctrl-C: `{ type: 'quit' }` to the app, the executor's `close`, the server closes and the process exits, so the `lookma` command ends. If the core is not reachable, or does not answer within 5 s, the app quits by itself.
 

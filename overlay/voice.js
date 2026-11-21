@@ -7,8 +7,8 @@
 //   voice/butler.js   - the butler's tools (do, status, answer, control) and the wording of what it is told
 //
 // Full duplex, on one warm session. The talk mode (the snapshot's `talk`) is the turn source's
-// rest: always, the microphone is open whenever a session is live; key, it is closed until the
-// key is held, or a tap opens a hands-free conversation. The key comes from the app (key()). In
+// rest: key (the default), the microphone is closed until the key is held, or a tap opens a
+// hands-free conversation; always, it is open whenever a session is live. The key comes from the app (key()). In
 // auto the provider finds each turn, in hold the key bounds it, and the provider never replies by
 // itself; every committed turn goes to the floor, which asks for a reply at once, and
 // the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
@@ -53,7 +53,7 @@ import { tone } from './sound.js'
 export function createVoice(o) {
   let state = floor.initial()
   let timer = 0
-  let talking = source.initial('always') // until the core's first snapshot says otherwise
+  let talking = source.initial('key') // the default, closed, until the core's first snapshot says otherwise
   let talkTimer = 0
   let busy = false, calmAt = 0 // the snapshot's work: running or waiting on a card; when it last stopped
   let quiet = null             // the quiet last given to the turn source

@@ -21,7 +21,7 @@
     <source media="(prefers-color-scheme: dark)" srcset="brand/bike-dark.svg">
     <img src="brand/bike.svg" width="100%" alt="A person on a stationary bike says 'Hey Lookma, visualize this data for me', and Lookma builds a chart on the living-room TV while they keep pedaling.">
   </picture>
-  <br><sub>Talk to it from across the room.</sub>
+  <br><sub>Tap fn once, then talk to it from across the room.</sub>
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@
 
 Most AI agents work where you can't see them: in the background, in a cloud browser, in a virtual machine. Lookma works on your screen.
 
-Lookma is a free, open-source app for your Mac. Just say what you want, in any language, and watch an AI do it in your real apps, on your own screen. It shows every step, and it waits for your yes. The work is done by the coding agent you already have: Claude Code or Codex.
+Lookma is a free, open-source app for your Mac. Hold fn and say what you want, in any language, and watch an AI do it in your real apps, on your own screen. It listens only while you ask it to, shows every step, and waits for your yes. The work is done by the coding agent you already have: Claude Code or Codex.
 
 
 <p align="center">
@@ -66,7 +66,7 @@ Your real apps, on your screen. A coral ring and a ghost cursor land on each tar
 </picture>
 
 **You say yes out loud.**
-Anything that needs your OK pops up a card. Say “yes, I approve”. A lone “ok” never counts.
+Anything that needs your OK pops up a card. Hold fn and say “yes, I approve”. A lone “ok” never counts.
 </td>
 <td width="33%" valign="top">
 <picture>
@@ -112,7 +112,7 @@ lookma doctor
 lookma ~/Projects
 ```
 
-Then just say “turn on dark mode”. To work with Codex instead of Claude Code, start it with `lookma --agent codex ~/Projects`, or set `LOOKMA_EXECUTOR=codex` in `.env`.
+Then hold <kbd>fn</kbd>, say “turn on dark mode” and let go. To work with Codex instead of Claude Code, start it with `lookma --agent codex ~/Projects`, or set `LOOKMA_EXECUTOR=codex` in `.env`.
 
 > [!NOTE]
 > Voice needs an OpenAI API key: `cp .env.example .env` and set `OPENAI_API_KEY`. Without one, Lookma still works by typing (menu bar → **Type a Request…**).
@@ -127,7 +127,7 @@ Then just say “turn on dark mode”. To work with Codex instead of Claude Code
   |---|---|---|
   | Accessibility | reading the UI, clicking, typing | on the first start |
   | Screen Recording | screenshots of the app it works in | on the first start |
-  | Microphone | your voice | on the first start with voice on |
+  | Microphone | your voice | the first time you hold fn (with `--talk always`, on the first start) |
 
   After you switch on Screen Recording, macOS may want the app reopened: press Ctrl-C and run `lookma` again.
 - **One card per app.** The first time it touches an app you get “Allow controlling Notes?”. The answer is kept in `~/.lookma/apps.json`.
@@ -145,6 +145,7 @@ Always:
 | **Xcode Command Line Tools** | `xcode-select --install`, for `swiftc` (full Xcode is not needed) |
 | **Node.js 20** or later | `brew install node` |
 | **OpenAI API key** | optional, for voice |
+| **An Apple keyboard** | for the talk key, fn (🌐). On most other keyboards fn never reaches macOS: use the menu bar or `--talk always` |
 
 And one agent:
 
@@ -155,26 +156,34 @@ And one agent:
 
 ## Using it
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/talking-dark.svg">
+  <img src="docs/images/talking.svg" width="100%" alt="Three timelines of the fn key and the microphone. Hold fn: the microphone opens about 150 ms after the press and closes when you let go, and your words go in. Tap fn: the microphone stays open for a hands-free conversation, until 20 seconds of quiet or another tap. Always listening, the option --talk always: the microphone is open until you pause, and a tap stops the voice mid-sentence.">
+</picture>
+
 | To | Do this |
 |---|---|
-| **Talk** | Just talk. While Lookma runs it listens; pause from the menu bar or <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd>. It answers only what is meant for it, not people talking to each other, the TV or noise. |
+| **Talk** | Hold <kbd>fn</kbd> while you talk, and let go: it answers. A soft tone says the microphone opened and closed. |
+| **Talk hands-free** | Tap <kbd>fn</kbd>, or **Start Conversation** in the menu bar. It listens until 20 s of quiet or another tap, and stays open while the work you asked for runs. It answers only what is meant for it, not people talking to each other, the TV or noise. |
 | **Ask** | Say it: “Find three ramen places near the ferry and put them in a new note.” |
-| **Approve** | Say “yes, I approve”, or click **Approve**. |
+| **Interrupt** | Hold or tap <kbd>fn</kbd>: the voice stops mid-sentence. |
+| **Approve** | Hold <kbd>fn</kbd> and say “yes, I approve”, or click **Approve**. |
 | **Decline** | “No” or “cancel”, or click **Decline**. |
 | **Change your mind** | Just say so, even mid-task. |
 | **Stop** | “Stop.” |
 | **Let it carry on** | “Go ahead”, or click **Go ahead** on the yellow tab, or pause for 3 s. |
 | **Check in** | “How’s it going?” |
 | **Pause** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd>, **Pause** in the menu bar, or say “pause”. The task stops, the voice disconnects and the microphone turns off until you resume. |
-| **Resume** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> again, or **Resume**. It listens again. The stopped task stays stopped; say “keep going” to carry on. |
+| **Resume** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> again, or **Resume**. The voice is back. The stopped task stays stopped; say “keep going” to carry on. |
+| **Always listening** | Start with `--talk always`, or **Listen: Always** in the menu bar for this run. It listens whenever it is not paused, as if a conversation were always open; fn still interrupts. |
 | **Type instead** | **Type a Request…** in the menu bar. Enter sends, Escape closes. |
 | **Quit** | **Quit** in the menu bar, or Ctrl-C in the terminal that started it. |
 
-**One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you. With a headset, talk over it to interrupt.
+**One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you, even while the microphone is closed. With a headset you can also just talk over it to interrupt.
 
 **The menu bar seal** fills its ring while the microphone is open, shows a pause sign while paused, and dims when the app has lost the core. Its menu also switches how you talk for this run (**Listen: With the fn Key** or **Always**) and, with the key, starts or ends a hands-free conversation.
 
-**The fn key is also 🌐.** With `LOOKMA_TALK=key`, set System Settings → Keyboard → **Press 🌐 key to** → **Do Nothing**, or a tap of fn also switches the input source, opens Emoji & Symbols or starts Dictation. If you switch input sources with 🌐, <kbd>⌃</kbd><kbd>Space</kbd> does the same. If Dictation's shortcut (Keyboard → Dictation) is **Press 🌐 Twice**, pick another, or two quick taps start Dictation. `lookma doctor` and `lookma start` warn about the first, and `lookma doctor --fix` opens the Keyboard pane. Lookma never changes either setting itself.
+**The fn key is also 🌐.** Set System Settings → Keyboard → **Press 🌐 key to** → **Do Nothing**, or a tap of fn also switches the input source, opens Emoji & Symbols or starts Dictation. If you switch input sources with 🌐, <kbd>⌃</kbd><kbd>Space</kbd> does the same. If Dictation's shortcut (Keyboard → Dictation) is **Press 🌐 Twice**, pick another, or two quick taps start Dictation. `lookma doctor` and `lookma start` warn about the first (with `--talk always` it is only a note), and `lookma doctor --fix` opens the Keyboard pane. Lookma never changes either setting itself.
 
 **Watch the agent itself.** Both agents log their steps, cards and messages in the terminal that started Lookma.
 
@@ -203,8 +212,8 @@ More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals a
 ## Privacy and costs
 
 - **Local.** The core listens on 127.0.0.1 only and refuses connections from web pages. No accounts, no telemetry, no servers of ours.
-- **The microphone is on while Lookma runs and is not paused**, and macOS shows its microphone indicator. Its audio streams to OpenAI the whole time, so it hears the room: pause (⌃⌥P or the menu bar) when you want privacy. Paused, the voice session is closed and nothing is sent. With `LOOKMA_TALK=key`, audio goes to OpenAI only while you hold fn or a conversation is open.
-- **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_VOICE=off`, nothing goes to OpenAI and the microphone stays off.
+- **The microphone is closed until you ask.** It opens while you hold fn or a conversation is open, and only then does audio go to OpenAI; macOS shows its microphone indicator for exactly that time. In between, the voice stays connected so it can speak to you, but hears nothing. With `--talk always` the microphone is open, and streams to OpenAI, whenever Lookma runs and is not paused, so it hears the room. Paused, the voice session is closed and nothing is sent.
+- **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_VOICE=off`, nothing goes to OpenAI and the microphone stays closed.
 - **Claude Code uses your Claude plan, Codex your ChatGPT plan**, as usual. The agent's model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
 - **Nothing else leaves your Mac.** Local state is in `~/.lookma/`.
 
@@ -216,6 +225,7 @@ Set these in `.env` at the repo root, in your shell, or on the command line. A f
 
 ```sh
 lookma --agent codex --audio headset ~/Projects
+lookma --talk always ~/Projects  # always listening, no key
 lookma --voice off --set LOOKMA_CLAUDE_MODEL=opus ~/Projects
 lookma config --agent codex      # print the settings in effect, and where each came from
 ```
@@ -225,7 +235,7 @@ lookma config --agent codex      # print the settings in effect, and where each 
 | `--agent` | `LOOKMA_EXECUTOR` | `claude` (default) or `codex` |
 | `--voice` | `LOOKMA_VOICE` | `openai` (default) or `off` |
 | `--audio` | `LOOKMA_AUDIO` | `room` (default) or `headset` |
-| `--talk` | `LOOKMA_TALK` | `always` (default) or `key` |
+| `--talk` | `LOOKMA_TALK` | `key` (default) or `always` |
 
 The agent and the voice are plug-ins (folders in `executors/` and `voices/`), and each declares its own settings, named `LOOKMA_<PLUGIN>_<SETTING>`. `lookma --help` lists those of the agent and voice you selected, and `lookma doctor` shows the ones in effect and warns about any `LOOKMA_*` variable that Lookma does not read, such as a misspelled one.
 
@@ -235,7 +245,7 @@ The agent and the voice are plug-ins (folders in `executors/` and `voices/`), an
 | `LOOKMA_VOICE` | `openai` | The voice: `openai` (OpenAI Realtime) or `off`, text only: nothing is sent to OpenAI. |
 | `LOOKMA_VOICE_LANGUAGE` | detected | The language you speak, as an ISO code (`en`, `zh`, `ja`), for a better transcript. |
 | `LOOKMA_AUDIO` | `room` | How you hear the voice: `room` (speakers) or `headset`. With a headset, talking over the voice cuts it off; in a room it finishes its sentence. Sets the microphone's noise reduction to match. |
-| `LOOKMA_TALK` | `always` | How you talk to the voice: `always` (it listens whenever it is not paused) or `key` (it listens while you hold fn; a tap of fn keeps it listening, hands-free, until 20 s of quiet or another tap). In both, holding fn gives you the floor and a tap stops the voice mid-sentence. |
+| `LOOKMA_TALK` | `key` | How you talk to the voice: `key` (it listens while you hold fn; a tap of fn keeps it listening, hands-free, until 20 s of quiet or another tap) or `always` (it listens whenever it is not paused). In both, holding fn gives you the floor and a tap stops the voice mid-sentence. The menu bar changes it for one run. |
 | `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
 | `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |
 | `LOOKMA_SIGN_IDENTITY` | your first signing identity, else ad hoc | Code signing for the app build; `-` forces ad hoc. Environment only. |
@@ -279,7 +289,7 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 - **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
 - **One at a time:** one port, one agent session.
 - **The talk key needs an Apple keyboard.** On most other keyboards fn never reaches macOS: use **Start Conversation** in the menu bar, or `LOOKMA_TALK=always`. While a password field has focus (macOS Secure Input), no app sees fn.
-- **It hears the room.** It stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Pause when that matters.
+- **Hands-free, it hears the room.** In a conversation, or with `--talk always`, it stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Hold fn instead when that matters.
 
 ## Swap the agent, swap the voice
 
@@ -307,7 +317,7 @@ Lookma is built to swap both ends: the agent that does the work, and the voice y
 1. **Gemini Live** as a second voice.
 2. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
 3. **Drag and drop, and right-click menus** for the hands.
-4. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
+4. **An on-device “Hey Lookma” wake word**, as an option next to the fn key.
 
 Adapters for other agents (Gemini CLI, Aider, OpenCode, …) and other voices are very welcome. See [Swap the agent, swap the voice](#swap-the-agent-swap-the-voice) and [CONTRIBUTING.md](CONTRIBUTING.md).
 

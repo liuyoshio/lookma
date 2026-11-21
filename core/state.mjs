@@ -15,7 +15,7 @@ export function createStore({ talk }) {
     tasks: [],
     outbox: [], // what the work wants the user told (core/outbox.mjs)
     paused: false, // the user paused: no voice and no hands until they resume
-    talk, // 'always' | 'key': how the user talks to the voice (LOOKMA_TALK, or the app's menu for this run)
+    talk, // 'key' | 'always': how the user talks to the voice (LOOKMA_TALK, or the app's menu for this run)
   }
   const clients = new Set()
   const watchers = new Set()

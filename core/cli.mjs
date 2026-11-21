@@ -37,22 +37,25 @@ Options (each overrides the environment and .env):
   --agent <name>       the agent: ${anyOf(choices(all, 'executors'))}
   --voice <name>       the voice: ${anyOf([...choices(all, 'voices'), 'off (type instead)'])}
   --audio <setup>      room (speakers, the default) or headset
-  --talk <mode>        always (listening, the default) or key (hold fn to talk)
+  --talk <mode>        key (hold fn to talk, the default) or always (always listening)
   --set NAME=value     any setting below, e.g. --set LOOKMA_CLAUDE_MODEL=opus
 
 While it runs, the agent's steps, cards and messages are in the log of the terminal
 that started Lookma.
-Just talk. While Lookma runs and is not paused, it listens: the microphone streams
-to the voice, and macOS shows its microphone indicator. With --talk key it listens
-only while you hold fn, or from a tap of fn until 20 s of quiet. To approve a card,
-say "yes, I approve". Pause or resume it with ⌃⌥P, its menu bar icon, or by saying
-"pause". Quit from the menu bar icon, or with Ctrl-C in the terminal that started it.
+Hold fn and talk; let go and it answers. Tap fn for a hands-free conversation: it
+listens until 20 s of quiet or another tap. Only then is the microphone open, and
+macOS shows its indicator. With --talk always it listens whenever it is not paused.
+A hold or a tap also stops the voice mid-sentence. For fn to do nothing else, set
+System Settings → Keyboard → Press 🌐 key to → Do Nothing (lookma doctor checks).
+To approve a card, hold fn and say "yes, I approve". Pause or resume it with ⌃⌥P,
+its menu bar icon, or by saying "pause". Quit from the menu bar icon, or with
+Ctrl-C in the terminal that started it.
 
 Settings, from the environment or ${path.join(ROOT, '.env')}:
   LOOKMA_EXECUTOR        the agent, as --agent
   LOOKMA_VOICE           the voice, as --voice
   LOOKMA_AUDIO           room (speakers, the default) or headset (talking over the voice stops it)
-  LOOKMA_TALK            always (the default) or key, as --talk
+  LOOKMA_TALK            key (the default) or always, as --talk
   LOOKMA_VOICE_LANGUAGE  the language you speak, e.g. en or zh; unset, it is detected
 `
 

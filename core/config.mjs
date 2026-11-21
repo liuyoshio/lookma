@@ -20,9 +20,9 @@ export const DEFAULTS = { executors: 'claude', voices: 'openai' }
 // dev checks'.
 const CORE = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK', 'LOOKMA_VOICE_LANGUAGE', 'LOOKMA_PORT', 'LOOKMA_DATA', 'LOOKMA_NO_APP', 'LOOKMA_SIGN_IDENTITY', 'LOOKMA_LIVE_TESTS']
 
-// How the user talks to the voice (LOOKMA_TALK), the default first: always listening, or the key
-// (hold fn to talk; a tap opens a hands-free conversation). The app's menu changes it for a run.
-export const TALK = ['always', 'key']
+// How the user talks to the voice (LOOKMA_TALK), the default first: the key (hold fn to talk; a
+// tap opens a hands-free conversation), or always listening. The app's menu changes it for a run.
+export const TALK = ['key', 'always']
 
 // The named flags, each a shorthand for one setting. --set NAME=value sets any other.
 const FLAGS = {

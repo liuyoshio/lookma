@@ -240,7 +240,7 @@ function overlayAnatomy(c) {
     callout('left', L, 172, 'Step label', ['What this step does,', 'in your language.'], [lx - 1, ly + 12]) +
     callout('left', L, 292, 'Approval card', ['Comes with a chime.', 'Answer out loud or click.'], [cx - 1, cy + 40]) +
     callout('left', L, 392, 'Capsule', ['Grows while it works,', 'then shrinks away.'], [px - 1, py + 42]) +
-    callout('right', R, 40, 'Menu bar', ['Talk, Pause (⌃⌥P),', 'Type a Request…, Quit.'], [X0 + W - 14, Y0 + 11]) +
+    callout('right', R, 40, 'Menu bar', ['Listen, Pause (⌃⌥P),', 'Type a Request…, Quit.'], [X0 + W - 14, Y0 + 11]) +
     callout('right', R, 128, 'Ghost cursor', ['The agent’s hand.', 'Your cursor stays yours.'], [tip[0] + 19, tip[1] + 12]) +
     callout('right', R, 330, 'Your words', ['As it heard them, so a', 'mishearing shows at once.'], [px + pw - 22, py + 22]) +
     callout('right', R, 400, 'Doing', ['The exact request', 'handed to the agent.'], [px + pw - 26, py + 43]) +
@@ -591,9 +591,67 @@ function plugIns(c) {
     body)
 }
 
+// ------------------------------------------------------------------ 7. when it listens
+
+function talking(c) {
+  const T0 = 380, T1 = 956
+  const at = t => T0 + t * (T1 - T0)
+  // The fn key, as Apple prints it: the globe bottom left, fn top right.
+  const keycap = (x, y) => rect(x, y, 40, 40, { rx: 8, fill: c.surface, stroke: c.line, strokeWidth: 1.2, filter: 'url(#soft)' }) +
+    text(x + 31, y + 16, 'fn', { size: 11.5, weight: 600, anchor: 'end', fill: c.ink2 }) +
+    circle(x + 12, y + 28, 5.5, { fill: 'none', stroke: c.ink2, strokeWidth: 1.2 }) +
+    pathEl(`M${x + 6.5} ${y + 28}h11M${x + 12} ${y + 22.5}c-3 3.4-3 7.6 0 11c3-3.4 3-7.6 0-11`, { fill: 'none', stroke: c.ink2, strokeWidth: 1 })
+  // Two lanes per row: the key (a pill while it is down) and the microphone (coral while open).
+  const lanes = y => text(T0 - 16, y + 4, 'fn', { size: 12, anchor: 'end', fill: c.muted, family: MONO }) +
+    line(T0, y, T1, y, { stroke: c.line, strokeWidth: 1.5 }) +
+    text(T0 - 16, y + 42, 'mic', { size: 12, anchor: 'end', fill: c.muted, family: MONO }) +
+    line(T0, y + 38, T1, y + 38, { stroke: c.line, strokeWidth: 1.5, strokeDasharray: '3 4' })
+  const down = (y, t0, t1) => rect(at(t0), y - 7, Math.max(8, at(t1) - at(t0)), 14, { rx: 7, fill: c.ink2 })
+  const open = (y, t0, t1) => rect(at(t0), y + 31, at(t1) - at(t0), 14, { rx: 7, fill: c.coral })
+  // Speech on the open microphone: a few bars.
+  const words = (y, t0, n) => [...Array(n)].map((_, i) => {
+    const h = [6, 10, 8, 11, 5, 9][i % 6]
+    return rect(at(t0) + i * 5, y + 38 - h / 2, 2.4, h, { rx: 1.2, fill: '#fff', fillOpacity: .9 })
+  }).join('')
+  const note = (x, y, s, o = {}) => text(x, y, s, { size: 12.5, fill: c.muted, ...o })
+  // A note on the microphone's lane, over a patch of the row's own fill so the lane stops at it.
+  const after = (x, y, s) => rect(x, y + 28, s.length * 6.6 + 12, 20, { fill: c.surface }) + note(x + 6, y + 42, s)
+  const row = (y, title, lines, timeline) => box(c, 20, y, 960, 112, { shadow: true }) +
+    keycap(40, y + 22) +
+    text(96, y + 38, title, { size: 16.5, weight: 700, fill: c.ink }) +
+    lines.map((s, i) => text(96, y + 62 + i * 19, s, { size: 13.5, fill: c.ink2 })).join('') +
+    lanes(y + 34) + timeline(y + 34)
+
+  const body = [
+    text(32, 44, 'You decide when it listens', { size: 19, weight: 700, fill: c.ink }),
+    text(32, 68, 'The microphone stays closed until you press fn. While it is closed, no audio leaves your Mac.', { size: 13.5, fill: c.ink2 }),
+    row(92, 'Hold fn', ['Talk while you hold it.', 'Let go, and it answers.'], y =>
+      down(y, .12, .58) + open(y, .15, .58) + words(y, .2, 12) + words(y, .36, 9) +
+      note(at(.12), y - 14, 'press') +
+      note(at(.58), y - 14, 'let go', { anchor: 'end' }) +
+      note(at(.15), y + 64, 'open ~150 ms after the press') +
+      after(at(.58), y, 'your words go in')),
+    row(222, 'Tap fn', ['A hands-free conversation,', 'until 20 s of quiet or another tap.'], y =>
+      down(y, .06, .07) + open(y, .07, .9) + words(y, .12, 10) + words(y, .34, 7) + words(y, .5, 11) +
+      note(at(.06), y - 14, 'tap') +
+      note(at(.12), y + 64, 'talk, it answers, talk again') +
+      pathEl(`M${at(.7)} ${y + 50}v6H${at(.9)}v-6`, { fill: 'none', stroke: c.muted, strokeWidth: 1.2 }) +
+      note((at(.7) + at(.9)) / 2, y + 70, '20 s of quiet', { anchor: 'middle' }) +
+      after(at(.9), y, 'closed')),
+    row(352, 'Always listening', ['The option: --talk always.', 'It hears the room until you pause.'], y =>
+      open(y, 0, 1) + words(y, .08, 9) + words(y, .58, 10) +
+      down(y, .4, .41) +
+      note(at(.4), y - 14, 'a tap stops the voice mid-sentence')),
+    text(32, 498, [['In every mode, ', { fill: c.ink2 }], ['a hold or a tap cuts the voice off', { fontWeight: 700, fill: c.ink }], [', a soft tone says the microphone opened or closed, and pausing closes it.', { fill: c.ink2 }]], { size: 13.5 }),
+  ].join('\n')
+  return svg(c, 1000, 524, 'When Lookma listens',
+    'Three timelines of the fn key and the microphone. Hold fn: the microphone opens about 150 ms after the press and closes when you let go, and your words go in. Tap fn: the microphone stays open for a hands-free conversation, until 20 seconds of quiet or another tap. Always listening, the option --talk always: the microphone is open until you pause, and a tap stops the voice mid-sentence. In every mode a hold or a tap cuts the voice off, a soft tone says the microphone opened or closed, and pausing closes it.',
+    body)
+}
+
 // ------------------------------------------------------------------ write
 
-const DIAGRAMS = { 'overlay-anatomy': overlayAnatomy, architecture, approvals, 'consent-chart': consentChart, 'hands-pipeline': handsPipeline, 'plug-ins': plugIns }
+const DIAGRAMS = { 'overlay-anatomy': overlayAnatomy, architecture, approvals, 'consent-chart': consentChart, 'hands-pipeline': handsPipeline, 'plug-ins': plugIns, talking }
 for (const [name, draw] of Object.entries(DIAGRAMS)) {
   for (const [theme, c] of Object.entries(THEMES)) {
     const file = path.join(OUT, `${name}${theme === 'dark' ? '-dark' : ''}.svg`)
