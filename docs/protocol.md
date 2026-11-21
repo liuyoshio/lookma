@@ -143,11 +143,14 @@ The app calls the page with `evaluateJavaScript`; it returns nothing:
 window.lookma.toggleTyping(true)                      // "Type a Request…"
 window.lookma.key('down' | 'up' | 'cancel' | 'toggle') // the talk key's edges; toggle: Start/End Conversation in the menu
 window.lookma.hand(null | { x, y, pinched })          // your hand's dot, in overlay points; null hides it
+window.lookma.stop()                                  // the stop gesture: cut the voice, stop the work
 ```
 
 The page ignores the key while no session is live, and throws on any other edge. The app sends the edges of fn alone (`app/Sources/TalkKey.swift`): `down` when fn goes down with no other modifier, `up` when it goes up, `cancel` when any other key or modifier goes down while it is held (a shortcut such as fn+arrow), then nothing until fn is up again. It has no clocks; telling a tap from a hold is the turn source's. It watches with NSEvent's global and local monitors, which observe and never consume, so fn keeps working as a modifier, and it ignores events this process posted (the hands). While macOS Secure Input is on (a password field, Terminal's Secure Keyboard Entry) no key events reach the app: a press there does nothing, and a release lost there is ended by the 60 s maximum hold.
 
 The page throws on a `hand` that is not `null` or finite `x`, `y` and a boolean `pinched`. While hand gestures run, the app sends the dot on every camera frame with a hand in view, and `null` when the hand goes or the camera stops. The dot is the hand's knuckles as the gesture engine (`app/Sources/Gesture.swift`) tracks them, mirrored, with the central 70% of the camera frame stretched to the whole display; `pinched` is the engine's debounced pinch. The page draws it (`overlay/hand.js`) and nothing else uses it.
+
+The other gestures need nothing new from the page. A raised palm's talk key comes as the same `key` edges as fn (`down`, then `up`, or `cancel`), so the turn source treats it as fn: held, it is a turn; brief, a tap. The turn source has one key state, so if fn and a palm overlap the first `up` ends the hold. A palm pushed at the camera calls `stop()`: the page cuts the butler (the same `cut` a key press sends, without changing how the microphone listens) and sends `{ type: 'control', action: 'stop' }`, as a typed "stop" does; its ack is not shown, since with nothing running the cut was the point. Scroll, the app switcher and zoom are input the app posts itself (`app/Sources/GestureOutput.swift`): scroll goes to the window under the pointer, zoom keys to the focused app.
 
 ## App ⇄ core (`/ws/app`)
 

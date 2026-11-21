@@ -4,7 +4,7 @@
 // it out by capturing only the target app. The page owns the voice session and the microphone: it
 // is told the talk key's edges (key()) and posts back whether its voice is on, whether the
 // microphone is open and whether a hands-free conversation is. With hand gestures on it also draws
-// the user's hand as a dot (hand()).
+// the user's hand as a dot (hand()), and a palm pushed at the camera stops through it (stop()).
 import AppKit
 import WebKit
 
@@ -101,6 +101,13 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
     func key(_ edge: TalkEdge) {
         web.evaluateJavaScript("window.lookma?.key('\(edge.rawValue)')") { _, err in
             if let err { log("key \(edge.rawValue) failed: \(err.localizedDescription)") }
+        }
+    }
+
+    /// A palm pushed at the camera: the page cuts the voice and asks the core to stop the work.
+    func stop() {
+        web.evaluateJavaScript("window.lookma?.stop()") { _, err in
+            if let err { log("stop failed: \(err.localizedDescription)") }
         }
     }
 

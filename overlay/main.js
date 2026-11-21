@@ -210,8 +210,8 @@ addEventListener('keydown', e => {
 })
 
 // For the app (evaluateJavaScript): "Type a Request…" in its menu bar item, the talk key's edges
-// (and the menu's Start/End Conversation, 'toggle'), and your hand's dot, checked here where they
-// enter. Each returns nothing, so evaluateJavaScript has no result to convert.
+// (and the menu's Start/End Conversation, 'toggle'), your hand's dot, checked here where they
+// enter, and the stop gesture. Each returns nothing, so evaluateJavaScript has no result to convert.
 const KEY_EDGES = ['down', 'up', 'cancel', 'toggle']
 function key(edge) {
   if (!KEY_EDGES.includes(edge)) throw new Error(`lookma.key: unknown edge ${JSON.stringify(edge)}`)
@@ -223,6 +223,12 @@ function hand(p) {
   }
   showHand(p)
 }
-window.lookma = { toggleTyping, key, hand }
+// A palm pushed at the camera: the butler stops talking now and the core stops the working turn,
+// as a typed "stop" would. Its ack is not shown: with nothing running, the cut was the point.
+function stop() {
+  voice.cut()
+  link.request({ type: 'control', action: 'stop' })
+}
+window.lookma = { toggleTyping, key, hand, stop }
 
 render()

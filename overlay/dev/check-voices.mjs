@@ -244,7 +244,7 @@ async function scenario(name, fake) {
   check((await glyph('vg open')) === 'vg open' && (await capHidden()), 'startup: the glyph still and solid (the microphone open) and the capsule hidden while idle')
   check((await posted('voice')) === true && (await posted('mic')) === true && (await posted('conversation')) === false && (await posted('listening')) === undefined,
     'startup: the app is told voice is on and the microphone open (its menu bar icon)')
-  check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping,key,hand', 'the app\'s page API is toggleTyping, key and hand (the old talk and wake APIs are gone)')
+  check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping,key,hand,stop', 'the app\'s page API is toggleTyping, key, hand and stop (the old talk and wake APIs are gone)')
   const dot = await page.evaluate(`(() => {
     const el = document.getElementById('hand'), seen = []
     window.lookma.hand({ x: 120, y: 340, pinched: true }); seen.push(el.className, el.style.transform)

@@ -8,7 +8,8 @@
 //
 // Full duplex, on one warm session. The talk mode (the snapshot's `talk`) is the turn source's
 // rest: key (the default), the microphone is closed until the key is held, or a tap opens a
-// hands-free conversation; always, it is open whenever a session is live. The key comes from the app (key()). In
+// hands-free conversation; always, it is open whenever a session is live. The key comes from the app (key()), and
+// so does the stop gesture, which cuts the butler the way a press does (cut()). In
 // auto the provider finds each turn, in hold the key bounds it, and the provider never replies by
 // itself; every committed turn goes to the floor, which asks for a reply at once, and
 // the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
@@ -49,7 +50,7 @@ import { tone } from './sound.js'
  *        { kind: 'missed' }                a request the voice gave up on ("say that again")
  *        { kind: 'nomic' }                 the microphone could not open
  * @param {(msg: string) => void} o.log
- * @returns {{ update(snapshot: object): void, key(edge: 'down' | 'up' | 'cancel' | 'toggle'): void }}
+ * @returns {{ update(snapshot: object): void, key(edge: 'down' | 'up' | 'cancel' | 'toggle'): void, cut(): void }}
  */
 export function createVoice(o) {
   let state = floor.initial()
@@ -184,5 +185,7 @@ export function createVoice(o) {
     },
     /** The talk key, from the app: down, up, cancel, or toggle (the menu's Start/End Conversation). */
     key: edge => talk({ type: `key.${edge}` }),
+    /** Stop talking now (the app's stop gesture): the turn source's cut, without changing how the microphone listens. */
+    cut: TALK.cut,
   }
 }

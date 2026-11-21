@@ -42,13 +42,18 @@ let menu = StatusMenu()
 
 // Hand gestures: the camera runs while the core says they are on and not paused (and connected).
 // Its frames go through the engine to the output on the camera's capture queue, the only place
-// that touches the engine. Only the dot is shown so far; the engine's events are not acted on.
+// that touches either. When the camera stops, the engine's closing events (a held Command let go,
+// a raised palm's talk key up) go out the same way.
 var gestureEngine = GestureEngine()
 let gestureOutput = GestureOutput(overlay: overlay)
 let handCamera = HandCamera()
-handCamera.onFrame = { frame, aspect in gestureOutput.dot(gestureEngine.feed(frame).dot, aspect: aspect) }
+handCamera.onFrame = { frame, aspect in
+    let out = gestureEngine.feed(frame)
+    gestureOutput.handle(out.events)
+    gestureOutput.dot(out.dot, aspect: aspect)
+}
 handCamera.onStop = {
-    _ = gestureEngine.reset()
+    gestureOutput.handle(gestureEngine.reset())
     gestureOutput.hide()
 }
 handCamera.onState = { menu.camera = $0 }
@@ -86,9 +91,14 @@ registerPauseHotkey(togglePause)
 let talkKey = TalkKeyWatcher { overlay.key($0) }
 link.start()
 
-// Every exit path turns off the AX attributes we set on other apps.
+// Every exit path stops the camera (so a gesture's held Command is let go) and turns off the AX
+// attributes we set on other apps.
+func cleanUp() {
+    handCamera.stop()
+    restoreAX()
+}
 final class Delegate: NSObject, NSApplicationDelegate {
-    func applicationWillTerminate(_ note: Notification) { restoreAX() }
+    func applicationWillTerminate(_ note: Notification) { cleanUp() }
 }
 let delegate = Delegate()
 app.delegate = delegate
@@ -104,7 +114,7 @@ func onSignal(_ sig: Int32, _ handler: @escaping () -> Void) {
 for sig in [SIGTERM, SIGINT, SIGHUP] {
     onSignal(sig) {
         log("exiting on signal \(sig)")
-        restoreAX()
+        cleanUp()
         exit(0)
     }
 }

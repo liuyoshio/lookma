@@ -1,5 +1,8 @@
 // Synthetic input (CGEvent clicks, drags, keys, text, scrolling) and the user's idle time. Our own
-// events count as input to macOS too, so we note when we post and leave those out of idle.
+// events count as input to macOS too, so we note when we post and leave those out of idle. Hand
+// gestures (GestureOutput.swift) post outside posting {} on purpose: they are the user's input and
+// count against idle. One that lands inside a burst of ours is taken as ours; the next frame of a
+// scroll counts again.
 import CoreGraphics
 import Foundation
 
