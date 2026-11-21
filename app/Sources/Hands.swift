@@ -1,5 +1,5 @@
 // The hands: the ops of docs/protocol.md ("App ⇄ core"). The core resolves a target before every
-// step; that target is the only app the step may touch. Input that needs the front (click,
+// step; that target is the only app the step may touch. Input that needs the front (click, drag,
 // type, key, scroll) is posted only when it will land in the target. Ops run one at a time.
 // An act op returns once its effect has had time to show, since the core lists the app right after.
 import AppKit
@@ -54,6 +54,7 @@ func runOp(_ op: String, _ args: [String: Any]) async throws -> [String: Any] {
     case "front": return try await front(text(args, "app"))
     case "press": return try await press(args)
     case "click": return try await click(point(args["point"]), button: button(args["button"]))
+    case "drag": return try await drag(from: point(args["from"]), to: point(args["to"]))
     case "type": return try await typeInTarget(args)
     case "key": return try await keyInTarget(args)
     case "scroll": return try await scroll(args)
@@ -177,6 +178,15 @@ private func click(_ p: CGPoint, button: CGMouseButton) async throws -> [String:
     guard button == .right else { return try await settled() }
     let pid = target!.pid!
     return ["menu": await until(menuWait, { !openMenus(pid).isEmpty })]
+}
+
+/// A left-button drag inside the target app: both ends must be on its window, as for a click.
+/// Returns when settled after the drop.
+private func drag(from: CGPoint, to: CGPoint) async throws -> [String: Any] {
+    try checkPointer(from, "drag")
+    try checkPointer(to, "drag")
+    mouseDrag(from: from, to: to)
+    return try await settled()
 }
 
 /// Opening an app is pressing its Dock icon. Done when the app is in front with a window on screen.

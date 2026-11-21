@@ -49,7 +49,7 @@ Say “find three ramen places near the ferry and put them in a new note”:
 
 1. **You talk.** You just say it. The overlay streams your microphone to the voice (OpenAI Realtime today), which hears when you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
 2. **The core starts a turn** and hands the text to the executor. If a turn is already running, the text goes in as a correction instead: the agent takes it into the work it is doing.
-3. **The agent works.** Anything on screen goes through the six hands tools. Anything else (files, shell commands, web searches) uses the agent's own tools; the adapter reports each step, which shows up as the capsule's status line.
+3. **The agent works.** Anything on screen goes through the seven hands tools. Anything else (files, shell commands, web searches) uses the agent's own tools; the adapter reports each step, which shows up as the capsule's status line.
 4. **Every hands call runs the pipeline** below, one call at a time.
 5. **The agent talks back** with `say`: one short sentence in your language. You hear one assistant: the voice speaks it as soon as nobody is talking, on the same session. Questions, confirmations and approval cards go to the front of the queue. Without voice, these are captions only.
 6. **The turn ends** when the agent stops. The capsule shows the result and how long it took, then shrinks away.
@@ -58,16 +58,18 @@ Say “find three ramen places near the ferry and put them in a new note”:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/hands-pipeline-dark.svg">
-  <img src="images/hands-pipeline.svg" width="100%" alt="Every hands call (see, click, type, key, scroll, open) runs six steps: resolve, grant, attention, mark, act and observe. If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead. Every step returns the app's elements; a screenshot only when asked.">
+  <img src="images/hands-pipeline.svg" width="100%" alt="Every hands call (see, click, drag, type, key, scroll, open) runs six steps: resolve, grant, attention, mark, act and observe. If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead. Every step returns the app's elements; a screenshot only when asked.">
 </picture>
 
-The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each call carries a `label`, a few words in your language (“Search for ramen”), which the overlay shows at the target. Every call goes through the same steps, in `core/hands.mjs`:
+The agent's GUI tools are `see`, `click`, `drag`, `type`, `key`, `scroll` and `open`. Each call carries a `label`, a few words in your language (“Search for ramen”), which the overlay shows at the target. Every call goes through the same steps, in `core/hands.mjs`:
 
 1. **Resolve** the target to an app, a rect and a point:
    - an element id from the latest list. An id stays valid while its element is listed, so two calls sent from one list both work; an id of an element that is gone is an error.
    - a point in the last screenshot's pixels. The app maps it back to screen points, and refuses it once that window has moved.
    - a Dock icon: opening an app means pressing its Dock icon, as a person would.
    - the app itself, for `see`, `type`, `key`, and `scroll` with no element or point.
+
+   A `drag` has two targets, where it starts and where it drops, and both must be in the same app.
 2. **Grant.** The first time the hands touch an app, the core raises its own card (“Allow controlling Maps?”). The answer is kept in `~/.lookma/apps.json`. A no ends the step with an error that the agent reads.
 3. **Attention.** The app reports the seconds since your last key or mouse event every half second. You count as busy when you used either in the last 3 s.
    - **Not busy:** the target comes to the front.
@@ -76,10 +78,10 @@ The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Ea
    | Step | While you are busy |
    |---|---|
    | `see`, and `click` on an element that supports an AX press | Runs in the background. |
-   | `type`, `key`, `scroll`, `open`, a right `click`, and `click` at a point or on an element without an AX press | Waits until you pause for 3 s, or until you say “go ahead”. The tab says it is waiting. |
+   | `type`, `key`, `scroll`, `open`, `drag`, a right `click`, and `click` at a point or on an element without an AX press | Waits until you pause for 3 s, or until you say “go ahead”. The tab says it is waiting. |
 
-4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. Before an action, the core waits about 350 ms so the marks arrive before anything happens. `see` only looks, so it does not wait.
-5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason. The app returns once the effect has had time to show (200 ms after the last event for a click, a key or text; for a right click, once its menu is up).
+4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. A drag also gets a dimmer ring on where it drops and a dashed line to it, so you see both ends before the button goes down. Before an action, the core waits about 350 ms so the marks arrive before anything happens. `see` only looks, so it does not wait.
+5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason. The app returns once the effect has had time to show (200 ms after the last event for a click, a drag, a key or text; for a right click, once its menu is up). A drag holds the button 300 ms before it moves, as apps want, and the ghost cursor holds and glides with it.
 6. **Observe.** The core lists the app the step resolved and granted. So the agent does not need a `see` after every action: act, read the list, act again. If listing fails after an action, the action is still reported as done. `open` with a URL or a file lists nothing, since the app it opened in has not been granted yet; the agent's next `see` asks.
 7. **Return** to the agent: a line saying what was done, then a text list of elements (id, role, text, and states such as selected or disabled; an open menu's items first), headed by the facts that tell the agent whether the list is enough: whether it was cut short, how many elements have no label, and whether the last screenshot is older than this action. A screenshot comes only when the call asks for one (`screenshot: true`, on any tool): for a canvas, a map or unlabeled icons.
 

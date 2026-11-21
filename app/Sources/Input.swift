@@ -1,4 +1,4 @@
-// Synthetic input (CGEvent clicks, keys, text, scrolling) and the user's idle time. Our own
+// Synthetic input (CGEvent clicks, drags, keys, text, scrolling) and the user's idle time. Our own
 // events count as input to macOS too, so we note when we post and leave those out of idle.
 import CoreGraphics
 import Foundation
@@ -39,6 +39,49 @@ func mouseClick(_ p: CGPoint, button: CGMouseButton) {
             post(e)
             usleep(40_000)
         }
+    }
+}
+
+// A drag, timed as a hand would do it. Each value is matched by DRAG_HOLD and DRAG_MS in
+// overlay/marks.js, so the ghost cursor moves with the real pointer.
+// The hold before moving: apps start a drag session only after the button has been down a while,
+// and a text view waits longer before it treats a press on selected text as a drag rather than a
+// new selection. The text-view delay is not verified; the TextEdit check sets the final value.
+private let dragHoldUs: useconds_t = 300_000
+// The move: 20 dragged events 25 ms apart (500 ms), then a dwell over the drop target, which many
+// targets need before they highlight and accept the drop.
+private let dragSamples = 20
+private let dragStepUs: useconds_t = 25_000
+private let dragDwellUs: useconds_t = 200_000
+
+/// `n` points from a to b on a straight line, eased in and out, the last one at b. The first is
+/// 5 points off a, past the few points apps wait for before a press becomes a drag.
+func dragPath(from a: CGPoint, to b: CGPoint, samples n: Int) -> [CGPoint] {
+    let dx = b.x - a.x, dy = b.y - a.y, d = hypot(dx, dy)
+    let first = d > 0 ? CGPoint(x: a.x + dx / d * 5, y: a.y + dy / d * 5) : CGPoint(x: a.x + 5, y: a.y)
+    let ease = { (u: CGFloat) in u < 0.5 ? 4 * u * u * u : 1 - pow(-2 * u + 2, 3) / 2 }
+    return [first] + (1..<n).map { i in
+        let u = ease(CGFloat(i) / CGFloat(n - 1))
+        return CGPoint(x: first.x + (b.x - first.x) * u, y: first.y + (b.y - first.y) * u)
+    }
+}
+
+/// Presses the left button at `from`, holds, moves to `to` and lets go there. The button is let go
+/// on every path out once it is down, so a drag never leaves it held.
+func mouseDrag(from: CGPoint, to: CGPoint) {
+    posting {
+        post(CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: from, mouseButton: .left))
+        usleep(60_000) // the overlay re-checks the pointer at 30 Hz and turns click-through back on
+        post(CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left))
+        var at = from
+        defer { post(CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: at, mouseButton: .left)) }
+        usleep(dragHoldUs)
+        for p in dragPath(from: from, to: to, samples: dragSamples) {
+            post(CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left))
+            at = p
+            usleep(dragStepUs)
+        }
+        usleep(dragDwellUs)
     }
 }
 

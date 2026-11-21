@@ -3,6 +3,7 @@
 // Observe lists the elements of the app the step resolved and granted, so every result carries the
 // list the agent acts on next. see is the step that acts on nothing, so it has no mark wait:
 //   resolve → grant → attention → observe → return
+// drag is the step with two targets: resolve finds both, in one app, and the mark shows both.
 // See docs/protocol.md, "The hands pipeline". What differs per tool is in the table below; step()
 // runs it and knows no tool by name.
 import { cancelled, clip, sleep } from './util.mjs'
@@ -15,6 +16,11 @@ const has = v => v !== undefined && v !== null && v !== ''
 function need(cond, msg) {
   if (!cond) throw new Error(msg)
 }
+
+// A place a click or a drag end names: an element id (preferred) or a point in the last screenshot.
+const isPlace = x => typeof x === 'object' && x !== null && (has(x.element) || Array.isArray(x.point))
+const place = x => (has(x.element) ? { element: x.element } : { point: x.point })
+const placeText = x => (has(x.element) ? x.element : `point ${x.point.join(',')}`)
 
 // What every step returns: the action line, when it acted, then the facts that say whether the list
 // is enough (a screenshot or not, a list cut short, elements with no label, a screenshot older than
@@ -55,9 +61,10 @@ function scrolled(a, r, res) {
 // Per tool:
 //   target(args, current)  checks the args and says what to resolve (null: nothing to resolve).
 //                          `current` is the app of the last step; type, key and scroll go there.
+//   to(args)               a second target, resolved in the same app (drag's drop end)
 //   front(args, r)         whether acting needs the front, so it waits while the user is busy
 //   raise                  false when acting brings the app forward itself (default true)
-//   act(args, r)           the app op and its args; none for see
+//   act(args, r, to)       the app op and its args, from the resolved target(s); none for see
 //   did(args, r, res)      the line saying what the act did, from the op's result
 // A tool whose args decide which of two specs runs (open) is a function from the args to the spec.
 const TOOLS = {
@@ -68,9 +75,9 @@ const TOOLS = {
   // A right click is always a real click in front: a context menu opens only under the pointer.
   click: {
     target: a => {
-      need(has(a.element) || Array.isArray(a.point), 'click needs an element id or a point.')
+      need(isPlace(a), 'click needs an element id or a point.')
       need(a.button === undefined || a.button === 'left' || a.button === 'right', 'click button must be "left" or "right".')
-      return has(a.element) ? { element: a.element } : { point: a.point }
+      return place(a)
     },
     front: (a, r) => a.button === 'right' || !(has(a.element) && r.pressable),
     act: (a, r) => {
@@ -82,6 +89,18 @@ const TOOLS = {
       if (a.button !== 'right') return `Clicked ${what}.`
       return res.menu ? `Right-clicked ${what}.` : `Right-clicked ${what}; no menu opened.`
     },
+  },
+  // A real drag in front, with the left button, from one place to another of the same app. The
+  // list after it is how the agent confirms the drop: events delivered prove nothing.
+  drag: {
+    target: a => {
+      need(isPlace(a.from) && isPlace(a.to), 'drag needs from and to, each { element } or { point }.')
+      return place(a.from)
+    },
+    to: a => place(a.to),
+    front: () => true,
+    act: (a, r, to) => ['drag', { from: r.point, to: to.point }],
+    did: (a, r) => `Dragged ${placeText(a.from)} to ${placeText(a.to)} in ${r.app}.`,
   },
   type: {
     target: (a, current) => {
@@ -164,15 +183,17 @@ export function createHands({ store, app, grants, ask, log }) {
     const spec = typeof TOOLS[tool] === 'function' ? TOOLS[tool](args) : TOOLS[tool]
     const target = spec.target(args, store.data.focus?.app ?? null)
 
-    // 1. Resolve.
+    // 1. Resolve, and a drag's drop end, in the same app: a step has one app to grant and to act in.
     const r = target ? await app.request('resolve', target) : null
+    const to = spec.to ? await app.request('resolve', spec.to(args)) : null
+    if (to && to.app !== r.app) throw new Error(`A drag stays inside one app: it starts in ${r.app} but ends in ${to.app}.`)
     // 2. Grant.
     if (r?.app) await grant(r.app, signal)
 
     const id = ++seq
     const label = clip(args.label || tool)
     store.update(s => {
-      s.focus = { id, label, action: tool, app: r?.app ?? null, rect: r?.rect ?? null, point: r?.point ?? null, phase: 'moving', background: false, at: Date.now() }
+      s.focus = { id, label, action: tool, app: r?.app ?? null, rect: r?.rect ?? null, point: r?.point ?? null, to: to && { rect: to.rect, point: to.point }, phase: 'moving', background: false, at: Date.now() }
       if (s.turn?.phase === 'working') s.turn.status = label
     })
 
@@ -193,13 +214,14 @@ export function createHands({ store, app, grants, ask, log }) {
       }
       if (!background && r && !r.frontmost && spec.raise !== false) await app.request('front', { app: r.app })
 
-      // 4. Mark, so the ring and ghost arrive before something happens to the app, and 5. act.
+      // 4. Mark, so the ring and ghost (both ends of a drag) arrive before something happens to the
+      // app, and 5. act.
       // A step with no act has nothing to wait for; its ring is drawn all the same.
       let did = null
       if (spec.act) {
         await sleep(MARK_MS, signal)
         setFocus({ phase: 'acting' })
-        const [op, opArgs] = spec.act(args, r)
+        const [op, opArgs] = spec.act(args, r, to)
         did = spec.did(args, r, await app.request(op, opArgs)) // the op returns once its effect shows
       }
       setFocus({ phase: 'done' })

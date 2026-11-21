@@ -1,5 +1,5 @@
 // The tools every executor gives its agent, as JSON Schema in the { name, description, inputSchema }
-// shape that MCP and tool-use APIs take: say, the agent's only way to speak to the user, and the six
+// shape that MCP and tool-use APIs take: say, the agent's only way to speak to the user, and the seven
 // hands tools that core/hands.mjs runs. Every hands tool returns the app's element list, so every one
 // takes `screenshot`. An adapter hands them to its agent as they are and adds only what its agent
 // needs on top.
@@ -7,9 +7,10 @@
 const tool = (name, description, properties, required) => ({ name, description, inputSchema: { type: 'object', properties, required } })
 
 const label = { type: 'string', description: 'What this step does, in a few words in the language of the user\'s latest message, e.g. "Open #general". Shown on screen at the target.' }
-const screenshot = { type: 'boolean', description: 'Also return a screenshot of the app after this step. Ask only when the element list is not enough: a canvas, a map, unlabeled icons, a list that says it was cut, or to confirm a scroll you cannot read from the list. Default false.' }
+const screenshot = { type: 'boolean', description: 'Also return a screenshot of the app after this step. Ask only when the element list is not enough: a canvas, a map, unlabeled icons, a list that says it was cut, or to confirm a drag or a scroll you cannot read from the list. Default false.' }
 const element = { type: 'string', description: 'An element id from the latest list.' }
 const point = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[x, y] in the pixels of the last screenshot (screenshot: true on any call).' }
+const place = description => ({ type: 'object', properties: { element, point }, description })
 
 export const SAY = tool('say', 'Say one short sentence to the user, spoken and shown as a caption. The only way the user hears you.', {
   speech: { type: 'string', description: 'The sentence to speak, in the language of the user\'s latest message, with numbers written as spoken.' },
@@ -30,6 +31,12 @@ export const HANDS = [
     point,
     button: { type: 'string', enum: ['left', 'right'], description: 'Default left.' },
   }, ['label']),
+  tool('drag', 'Drag from one place to another inside one app, with the left button held: each end is an element id or a point in the last screenshot. Check the returned list, or ask for a screenshot, to confirm the drop.', {
+    label,
+    screenshot,
+    from: place('Where the drag starts: { "element": id } or { "point": [x, y] }.'),
+    to: place('Where it drops, in the same app: { "element": id } or { "point": [x, y] }.'),
+  }, ['label', 'from', 'to']),
   tool('type', 'Type text into the focused field of the app you are working in.', {
     label,
     screenshot,

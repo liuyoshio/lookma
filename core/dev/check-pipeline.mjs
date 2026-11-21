@@ -4,8 +4,9 @@
 // report entries, and the executor's cards), the overlay's requests and their acks, unknown
 // messages, the hands pipeline (grant, see with and without a screenshot, busy vs idle, the mark
 // wait only before an act, the list after every act and a failed list after a done act, ids kept
-// across lists, two queued clicks from one list, a right click and its menu, waiting plus go ahead,
-// stale element, bad args, scroll, open, stop, one step at a time), pause and resume, and quit.
+// across lists, two queued clicks from one list, a right click and its menu, a drag and its two
+// ends, waiting plus go ahead, stale element, bad args, scroll, open, stop, one step at a time),
+// pause and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
 import fs from 'node:fs'
 import os from 'node:os'
@@ -333,6 +334,29 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 }
 
 {
+  // Drag: both ends resolved in one app and both marked before the act; then a drag between their
+  // points and the list.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const ids = app.elementIds()
+  const n = app.ops.length
+  const s0 = states.length
+  const r = await settle(hands('drag', { label: 'Drag the file', from: { element: ids[2] }, to: { element: ids[0] } }))
+  const ops = app.ops.slice(n)
+  const drag = ops.find(o => o.op === 'drag')
+  const resolved = ops.filter(o => o.op === 'resolve').map(o => o.args.element)
+  check('drag: both ends resolved, then one drag between their points, then the list', r.ok && opsSince(n).join() === 'resolve,resolve,drag,see' && JSON.stringify(resolved) === JSON.stringify([ids[2], ids[0]]) && Array.isArray(drag.args.from) && Array.isArray(drag.args.to) && r.v.text.startsWith(`Dragged ${ids[2]} to ${ids[0]} in Finder.\nApp: Finder`), opsSince(n).join() + (r.v?.text || r.e?.message))
+  const marked = states.slice(s0).find(st => st.focus?.action === 'drag' && st.focus.phase === 'moving')
+  check('drag: the drop end is in focus while the step is still moving, and ~350 ms before the act', JSON.stringify(marked?.focus.to?.point) === JSON.stringify(drag?.args.to) && JSON.stringify(marked.focus.point) === JSON.stringify(drag.args.from) && drag.at - ops.findLast(o => o.op === 'resolve').at >= 340, JSON.stringify(marked?.focus))
+
+  // The two ends in two apps: refused before anything is marked or done.
+  await hands('see', { label: 'Look', app: 'Finder', screenshot: true })
+  await hands('see', { label: 'Look at Notes', app: 'Notes' })
+  const m = app.ops.length
+  const two = await settle(hands('drag', { label: 'Drag', from: { element: app.elementIds()[0] }, to: { point: [100, 50] } }))
+  check('drag across two apps: refused, nothing acted', !two.ok && /A drag stays inside one app: it starts in Notes but ends in Finder/.test(two.e.message) && opsSince(m).join() === 'resolve,resolve', two.e?.message || opsSince(m).join())
+}
+
+{
   // One step at a time.
   const n = app.ops.length
   await Promise.all([hands('see', { label: 'A', app: 'Finder' }), hands('see', { label: 'B', app: 'Notes' })])
@@ -363,7 +387,10 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
     ['type', {}, /type needs text/],
     ['key', {}, /key needs a combo/],
     ['open', {}, /open needs an app, a url or a path/],
-    ['drag', {}, /Unknown hands tool: drag/],
+    ['drag', {}, /drag needs from and to, each \{ element \} or \{ point \}/],
+    ['drag', { from: { element: 'e1' } }, /drag needs from and to/],
+    ['drag', { from: 'e1', to: { point: [1, 2] } }, /drag needs from and to/],
+    ['drag', { from: { element: 'e1' }, to: {} }, /drag needs from and to/],
   ]
   const wrong = []
   for (const [tool, args, msg] of bad) {

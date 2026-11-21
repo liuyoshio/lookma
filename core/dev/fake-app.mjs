@@ -68,7 +68,7 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
     if (args.point) {
       if (!shot) throw new Error('No screenshot yet; call see with screenshot: true.')
       const p = [Math.round(shot.rect.x + (args.point[0] * shot.rect.w) / shot.w), Math.round(shot.rect.y + (args.point[1] * shot.rect.h) / shot.h)]
-      return { app: frontApp, rect: { x: p[0] - 10, y: p[1] - 10, w: 20, h: 20 }, point: p, frontmost: true, pressable: false }
+      return { app: shot.app, rect: { x: p[0] - 10, y: p[1] - 10, w: 20, h: 20 }, point: p, frontmost: shot.app === frontApp, pressable: false }
     }
     if (args.dock) {
       if (!APPS[args.dock]) throw new Error(`${args.dock} is not in the Dock.`)
@@ -126,6 +126,10 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
       menuOpen = null
       const dock = Object.keys(APPS).find(name => inside(a.point, dockRect(name)))
       if (dock) frontApp = dock
+      return {}
+    },
+    drag: () => {
+      menuOpen = null
       return {}
     },
     type: () => ({}),

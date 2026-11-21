@@ -6,7 +6,8 @@
 //   3. a background task (yellow)
 //   4. the user is busy: background work, then waiting for the front, then resume
 //   5. an approval card, answered by click
-//   6. a correction mid-turn
+//   6. a drag: both ends marked before the press
+//   7. a correction mid-turn
 
 import { DOCK_ICONS, WINDOWS, SLACK, CHROME, FINDER, center } from './desk.js'
 
@@ -102,7 +103,19 @@ export async function scenario(s) {
   s.mark('report')
   await s.sleep(3)
 
-  // 6. A correction
+  // 6. A drag
+  s.heard('Put notes.txt in Documents')
+  await s.sleep(1.3)
+  await s.turn('Drag notes.txt from Downloads into Documents in Finder', async () => {
+    await s.sleep(1.2)
+    await s.step({ action: 'see', app: 'Finder', label: 'Look at Downloads', rect: WINDOWS.Finder })
+    const file = FINDER.file(4), folder = FINDER.places.Documents
+    await s.step({ action: 'drag', app: 'Finder', label: 'Drag notes.txt to Documents', rect: file, point: center(file), to: { rect: folder, point: center(folder) }, aim: 'drag-aim', mark: 'drag', hold: 1.3 })
+    s.say('notes.txt is in Documents.', 'Done, notes is in Documents.')
+  })
+  await s.sleep(3)
+
+  // 7. A correction
   s.heard('Open the Downloads folder in Finder')
   await s.sleep(1.3)
   await s.turn('Open the Downloads folder in Finder', async () => {
