@@ -76,12 +76,12 @@ The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Ea
    | Step | While you are busy |
    |---|---|
    | `see`, and `click` on an element that supports an AX press | Runs in the background. |
-   | `type`, `key`, `scroll`, `open`, and `click` at a point or on an element without an AX press | Waits until you pause for 3 s, or until you say “go ahead”. The tab says it is waiting. |
+   | `type`, `key`, `scroll`, `open`, a right `click`, and `click` at a point or on an element without an AX press | Waits until you pause for 3 s, or until you say “go ahead”. The tab says it is waiting. |
 
 4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. Before an action, the core waits about 350 ms so the marks arrive before anything happens. `see` only looks, so it does not wait.
-5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason. The app returns once the effect has had time to show (200 ms after the last event for a click, a key or text).
+5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason. The app returns once the effect has had time to show (200 ms after the last event for a click, a key or text; for a right click, once its menu is up).
 6. **Observe.** The core lists the app the step resolved and granted. So the agent does not need a `see` after every action: act, read the list, act again. If listing fails after an action, the action is still reported as done. `open` with a URL or a file lists nothing, since the app it opened in has not been granted yet; the agent's next `see` asks.
-7. **Return** to the agent: a line saying what was done, then a text list of elements (id, role, text, and states such as selected or disabled), headed by the facts that tell the agent whether the list is enough: whether it was cut short, how many elements have no label, and whether the last screenshot is older than this action. A screenshot comes only when the call asks for one (`screenshot: true`, on any tool): for a canvas, a map or unlabeled icons.
+7. **Return** to the agent: a line saying what was done, then a text list of elements (id, role, text, and states such as selected or disabled; an open menu's items first), headed by the facts that tell the agent whether the list is enough: whether it was cut short, how many elements have no label, and whether the last screenshot is older than this action. A screenshot comes only when the call asks for one (`screenshot: true`, on any tool): for a canvas, a map or unlabeled icons.
 
 Screenshots contain only the target app's windows, its menus and popups included. The overlay and anything covering the app are left out. The long edge is at most 1280 px.
 

@@ -1,6 +1,7 @@
 // see: the elements a person could act on or read in the app's window, with ids and states, and a
 // screenshot only when the call asks for one. Only elements inside the visible window and inside
-// their scroll area are listed. The result says why the list stopped early (`cut`) and how many
+// their scroll area are listed. An open menu (context, pop-up or menu bar) is listed first, and the
+// visible area grows to take it in. The result says why the list stopped early (`cut`) and how many
 // actionable elements have no label, so the agent can tell when the list is not enough.
 // An id names the same element for as long as it is listed: each see keeps the id of every element
 // it finds again (the same AX element), gives a new one to the rest, and drops what it did not find,
@@ -67,6 +68,7 @@ private struct Walk {
     var deadline: Double
     var out: [Found] = []
     var unlabeled = 0 // listed actionable elements with no text
+    var listed: [CFHashCode: [AXUIElement]] = [:] // so an element reached twice (an open menu) is listed once
     var cut: String? = nil // the limit that stopped the walk: "elements", "visits" or "time"
 
     /// True once a limit is reached; the first one reached is kept in `cut`.
@@ -113,7 +115,8 @@ private func walk(_ e: AXUIElement, depth: Int, clip: CGRect, inside: String?, _
         if let p = clean(v[5] as? String) { parts.append("placeholder: \(p)") }
         let text = clean(parts.joined(separator: " | "), 120) ?? ""
         let redundant = isText && (text.isEmpty || (inside?.contains(text) ?? false))
-        if !redundant && !(isScroll && text.isEmpty && role != "AXWebArea") {
+        if !redundant && !(isScroll && text.isEmpty && role != "AXWebArea") && !w.listed[CFHash(e), default: []].contains(where: { CFEqual($0, e) }) {
+            w.listed[CFHash(e), default: []].append(e)
             let r = subrole == "AXSearchField" ? "searchfield" : String(role.dropFirst(2)).lowercased()
             // Only what is set: most elements have no AXSelected, and text has no AXEnabled.
             var states: [String] = []
@@ -156,22 +159,28 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
         area = area.union(others[i].1)
         others.remove(at: i)
     }
+    // Open menus are windows of their own, often outside the app's window.
+    let menus: [(AXUIElement, CGRect)] = openMenus(pid).compactMap { m in axFrame(m).map { (m, $0) } }
+    for (_, f) in menus { area = area.union(f) }
     let visible = area.intersection(mainBounds())
     guard !visible.isNull, visible.width >= 1, visible.height >= 1 else { throw HandsError("\(appTitle)'s window is not on the main display.") }
 
-    func walkAll() -> Walk {
+    // The menus first, so their items lead the list; `inMenu` counts them.
+    func walkAll() -> (Walk, Int) {
         var w = Walk(deadline: now() + walkBudget)
+        for (el, f) in menus { walk(el, depth: 0, clip: f.intersection(visible), inside: nil, &w) }
+        let inMenu = w.out.count
         for (el, f) in wins.sorted(by: { $0.1.minY < $1.1.minY }) { walk(el, depth: 0, clip: f.intersection(visible), inside: nil, &w) }
-        return w
+        return (w, inMenu)
     }
-    let w: Walk
+    let (w, inMenu): (Walk, Int)
     var picture: (CGImage, CGRect)? = nil
     if screenshot {
         async let shot = capture(visible, pid: pid) // runs while the walk does
-        w = walkAll()
+        (w, inMenu) = walkAll()
         picture = try await shot
     } else {
-        w = walkAll()
+        (w, inMenu) = walkAll()
     }
 
     // The previous list by CFHash, so each element found again is matched with CFEqual cheaply.
@@ -191,6 +200,7 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
         "frontmost": appName(frontPid()),
         "window": ["title": axString(win, "AXTitle") ?? "", "rect": rectJSON(visible)],
         "elements": list,
+        "menu": inMenu,
         "cut": w.cut ?? NSNull(),
         "unlabeled": w.unlabeled,
     ]

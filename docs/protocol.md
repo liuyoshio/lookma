@@ -181,21 +181,21 @@ Core → app requests, and the app's replies:
 
 | op | args | result |
 |---|---|---|
-| `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, frontmost, window: { title, rect }, elements: [{ id, role, text, states, rect }], cut, unlabeled, shot?, image? }` |
+| `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, frontmost, window: { title, rect }, elements: [{ id, role, text, states, rect }], menu, cut, unlabeled, shot?, image? }` |
 | `resolve` | `{ element } \| { point:[x,y] } \| { dock: appName } \| { app }` | `{ app, rect, point, frontmost, pressable }` |
 | `front` | `{ app }` | `{}` (best effort: the ops that post input check the front themselves) |
 | `press` | `{ element }` | AX press: `{}` |
-| `click` | `{ point }` (screen points) | `{}` |
+| `click` | `{ point, button? }` (screen points; `button` `'left'` or `'right'`, default left) | `{}`; a right click: `{ menu }` |
 | `type` | `{ text }` | `{}` |
 | `key` | `{ combo }` e.g. `"cmd+t"` | `{}` |
 | `scroll` | `{ point, direction, pages }` | `{ pixels, position, moved }` |
 | `open` | `{ url } \| { path }` | `{ app }` |
 
-An act op (`press`, `click`, `type`, `key`, `scroll`, `open`) returns once its effect has had time to show, because the core lists the app right after it: `press`, `click`, `type` and `key` 200 ms after their last event, `scroll` once it has read its scroll bar again, `open` and a Dock `click` once the app has a window in front. The core adds no wait of its own.
+An act op (`press`, `click`, `type`, `key`, `scroll`, `open`) returns once its effect has had time to show, because the core lists the app right after it: `press`, a left `click`, `type` and `key` 200 ms after their last event, a right `click` once its menu is up (at most 500 ms; `menu: false` when none opened), `scroll` once it has read its scroll bar again, `open` and a Dock `click` once the app has a window in front. The core adds no wait of its own.
 
 **An id names the same element for as long as that element is listed.** Each `see` keeps the id of every element it finds again (the same AX element, matched with `CFEqual`), gives the others new ids, and drops the ones it did not find. So two calls sent from one list both work, and an id of an element that is no longer listed is an error: "call see again".
 
-`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. `frontmost` names the app with keyboard focus. `states` holds only what is set, from `disabled`, `selected` and `focused`. `cut` says why the walk stopped early (`'elements'` at 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) comes only with `screenshot: true`. `shot: { w, h, rect }` describes the last screenshot of this app, whenever there is one: with no `image`, it is older than this list. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
+`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. `frontmost` names the app with keyboard focus. `states` holds only what is set, from `disabled`, `selected` and `focused`. An open menu of the app (a context menu, a pop-up button's list, a menu-bar menu and its submenus) is listed first: `menu` counts those leading elements (0 when none is open), and the visible area, and a screenshot, grow to take the menu in. An element reached from both a menu and the window is listed once. `cut` says why the walk stopped early (`'elements'` at 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) comes only with `screenshot: true`. `shot: { w, h, rect }` describes the last screenshot of this app, whenever there is one: with no `image`, it is older than this list. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
 
 A `point` is in the pixels of the last screenshot taken, which a `see` without one does not replace. `resolve { point }` refuses it when there is none, or when the window it was taken of has moved or closed since.
 
@@ -203,13 +203,13 @@ A `point` is in the pixels of the last screenshot taken, which a `see` without o
 
 ## The hands pipeline (core, one function, one step at a time)
 
-The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language, and `screenshot` (default false), which asks for a screenshot with the step's list. Every call runs the same steps:
+The executor's GUI tools are `see`, `click` (left, or `button: 'right'` for a context menu), `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language, and `screenshot` (default false), which asks for a screenshot with the step's list. Every call runs the same steps:
 
 1. **Resolve** the target to `{ app, rect, point }`: an element, a screenshot point, a Dock item (`open` an app = press its Dock icon), or the app itself (`see`, `type`, `key`).
 2. **Grant.** If the hands have never touched this app, raise a `core` card ("Allow controlling Maps?") and wait. A no ends the step with an error the executor can read. Answers persist in `~/.lookma/apps.json`.
 3. **Attention.** Visible by default: if the user is not busy (idle ≥ 3 s), bring the target forward. If they are busy:
    - steps that can act in the background (AX `press`, `see`) proceed with `background: true` and an edge hint;
-   - steps that need the front (`type`, `key`, a coordinate `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
+   - steps that need the front (`type`, `key`, a coordinate `click`, a right `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
 4. **Mark.** Set `focus` (label, rect, point). Before an act, wait about 350 ms so the ring and ghost cursor arrive before anything happens. `see` acts on nothing, so it does not wait.
 5. **Act** through the app, then set `focus.phase` to `done` or `failed`. `see` has no act. The op returns once its effect shows (see the op table).
 6. **Observe**: the `see` op of the app this step resolved and granted, with `screenshot` when the call asks for it. This is the only place the core asks for `see`. Two rules:
@@ -218,7 +218,7 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
 7. **Return** to the executor, as text:
    - the action line, when the step acted: what happened. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put;
    - the facts that say whether the list is enough: the app, its window and the frontmost app; a screenshot or "No screenshot"; "The last screenshot is from before this action" when there is an older one; a list cut short; how many elements have no label;
-   - the elements, one per line: id, role, text and states.
+   - the elements, one per line: id, role, text and states. When a menu is open, its items come first, under "Menu open:", and the window's after them, under "Window:".
 
    The image comes only when the call asked for it.
 

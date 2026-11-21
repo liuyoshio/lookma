@@ -28,12 +28,13 @@ func userIdle() -> Double {
 
 private func post(_ e: CGEvent?) { e?.post(tap: .cghidEventTap) }
 
-func mouseClick(_ p: CGPoint) {
+func mouseClick(_ p: CGPoint, button: CGMouseButton) {
+    let types: [CGEventType] = button == .right ? [.rightMouseDown, .rightMouseUp] : [.leftMouseDown, .leftMouseUp]
     posting {
         post(CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left))
         usleep(60_000) // the overlay re-checks the pointer at 30 Hz and turns click-through back on
-        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-            let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+        for type in types {
+            let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: button)
             e?.setIntegerValueField(.mouseEventClickState, value: 1)
             post(e)
             usleep(40_000)

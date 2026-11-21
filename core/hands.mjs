@@ -18,8 +18,8 @@ function need(cond, msg) {
 
 // What every step returns: the action line, when it acted, then the facts that say whether the list
 // is enough (a screenshot or not, a list cut short, elements with no label, a screenshot older than
-// this action), then the elements as lines the agent picks ids from. Whether to ask for a screenshot
-// is the agent's call; nothing here guesses it.
+// this action), then the elements as lines the agent picks ids from, an open menu's items first.
+// Whether to ask for a screenshot is the agent's call; nothing here guesses it.
 function listing(did, res) {
   const win = res.window.title ? ` — window "${clip(res.window.title, 80)}"` : ''
   const lines = did ? [did] : []
@@ -32,10 +32,10 @@ function listing(did, res) {
     lines.push(`${why}. Scroll for the rest${res.image ? '' : ', or add screenshot: true'}.`)
   }
   if (res.unlabeled) lines.push(`${res.unlabeled} element${res.unlabeled === 1 ? ' has' : 's have'} no label.`)
-  lines.push(
-    'Elements (an id stays valid while its element is listed):',
-    ...res.elements.map(e => `${e.id} ${e.role}${e.text ? ` "${clip(e.text, 80)}"` : ''}${e.states.map(s => ` (${s})`).join('')}`),
-  )
+  const items = res.elements.map(e => `${e.id} ${e.role}${e.text ? ` "${clip(e.text, 80)}"` : ''}${e.states.map(s => ` (${s})`).join('')}`)
+  lines.push('Elements (an id stays valid while its element is listed):')
+  if (res.menu) lines.push('Menu open:', ...items.slice(0, res.menu), 'Window:', ...items.slice(res.menu))
+  else lines.push(...items)
   return { text: lines.join('\n'), image: res.image }
 }
 
@@ -65,14 +65,23 @@ const TOOLS = {
     target: a => ({ app: a.app || null }),
     front: () => false,
   },
+  // A right click is always a real click in front: a context menu opens only under the pointer.
   click: {
     target: a => {
       need(has(a.element) || Array.isArray(a.point), 'click needs an element id or a point.')
+      need(a.button === undefined || a.button === 'left' || a.button === 'right', 'click button must be "left" or "right".')
       return has(a.element) ? { element: a.element } : { point: a.point }
     },
-    front: (a, r) => !(has(a.element) && r.pressable),
-    act: (a, r) => (has(a.element) && r.pressable ? ['press', { element: a.element }] : ['click', { point: r.point }]),
-    did: (a, r) => `Clicked ${has(a.element) ? a.element : `at ${a.point.join(',')}`} in ${r.app}.`,
+    front: (a, r) => a.button === 'right' || !(has(a.element) && r.pressable),
+    act: (a, r) => {
+      if (a.button === 'right') return ['click', { point: r.point, button: 'right' }]
+      return has(a.element) && r.pressable ? ['press', { element: a.element }] : ['click', { point: r.point }]
+    },
+    did: (a, r, res) => {
+      const what = `${has(a.element) ? a.element : `at ${a.point.join(',')}`} in ${r.app}`
+      if (a.button !== 'right') return `Clicked ${what}.`
+      return res.menu ? `Right-clicked ${what}.` : `Right-clicked ${what}; no menu opened.`
+    },
   },
   type: {
     target: (a, current) => {

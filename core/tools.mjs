@@ -23,7 +23,13 @@ export const HANDS = [
     screenshot,
     app: { type: 'string', description: 'App name, e.g. "Slack". Omit for the frontmost app.' },
   }, ['label']),
-  tool('click', 'Click an element by id (preferred), or a point in the last screenshot.', { label, screenshot, element, point }, ['label']),
+  tool('click', 'Click an element by id (preferred), or a point in the last screenshot. `button: "right"` opens the context menu; its items come back first in the list, and key "escape" closes it.', {
+    label,
+    screenshot,
+    element,
+    point,
+    button: { type: 'string', enum: ['left', 'right'], description: 'Default left.' },
+  }, ['label']),
   tool('type', 'Type text into the focused field of the app you are working in.', {
     label,
     screenshot,

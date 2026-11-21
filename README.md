@@ -268,7 +268,7 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 ## Limitations
 
 - **macOS only, main display only.**
-- **No drag-and-drop or right-click menus yet.** The hands see, click, type, press keys, scroll and open apps, URLs and files.
+- **No drag-and-drop yet.** The hands see, click (right-click menus included), type, press keys, scroll and open apps, URLs and files.
 - **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking, plus about 350 ms per step so you see the target first.
 - **Claude Code runs headless**, through the Claude Agent SDK (checked against 2.1.330). On a Claude plan this counts against the plan's usage limits, as Anthropic counts headless use today; that may change, and `lookma doctor` shows the login in use.
 - **Voice approval understands English and Chinese**; in other languages, click.
@@ -301,7 +301,7 @@ Lookma is built to swap both ends: the agent that does the work, and the voice y
 
 1. **Gemini Live** as a second voice.
 2. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
-3. **Drag and drop, and right-click menus** for the hands.
+3. **Drag and drop** for the hands.
 4. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
 
 Adapters for other agents (Gemini CLI, Aider, OpenCode, …) and other voices are very welcome. See [Swap the agent, swap the voice](#swap-the-agent-swap-the-voice) and [CONTRIBUTING.md](CONTRIBUTING.md).

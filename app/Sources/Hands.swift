@@ -22,6 +22,15 @@ private func point(_ v: Any?) throws -> CGPoint {
     return CGPoint(x: x, y: y)
 }
 
+/// Left unless the core asks for right.
+private func button(_ v: Any?) throws -> CGMouseButton {
+    switch v as? String {
+    case nil, "left": return .left
+    case "right": return .right
+    default: throw HandsError("click button must be \"left\" or \"right\".")
+    }
+}
+
 private func text(_ args: [String: Any], _ key: String) -> String? {
     guard let s = args[key] as? String, !s.isEmpty else { return nil }
     return s
@@ -44,7 +53,7 @@ func runOp(_ op: String, _ args: [String: Any]) async throws -> [String: Any] {
     case "resolve": return try resolve(args)
     case "front": return try await front(text(args, "app"))
     case "press": return try await press(args)
-    case "click": return try await click(point(args["point"]))
+    case "click": return try await click(point(args["point"]), button: button(args["button"]))
     case "type": return try await typeInTarget(args)
     case "key": return try await keyInTarget(args)
     case "scroll": return try await scroll(args)
@@ -155,11 +164,19 @@ private func checkPointer(_ p: CGPoint, _ verb: String) throws {
     guard isFront(pid) else { throw HandsError("Did not \(verb): \(appName(frontPid())) is in front, not \(t.name).") }
 }
 
-private func click(_ p: CGPoint) async throws -> [String: Any] {
-    if let item = dockItems().first(where: { axFrame($0)?.contains(p) ?? false }) { return try await pressDockIcon(item) }
+// How long a right click waits for its menu. Menus open within a frame or two; a click where the
+// app has no context menu waits this long and reports none.
+private let menuWait = 0.5
+
+/// A left click returns when settled. A right click returns once its menu is up (`menu: true`), or
+/// after `menuWait` with `menu: false`. Only a left click on a Dock icon opens that app.
+private func click(_ p: CGPoint, button: CGMouseButton) async throws -> [String: Any] {
+    if button == .left, let item = dockItems().first(where: { axFrame($0)?.contains(p) ?? false }) { return try await pressDockIcon(item) }
     try checkPointer(p, "click")
-    mouseClick(p)
-    return try await settled()
+    mouseClick(p, button: button)
+    guard button == .right else { return try await settled() }
+    let pid = target!.pid!
+    return ["menu": await until(menuWait, { !openMenus(pid).isEmpty })]
 }
 
 /// Opening an app is pressing its Dock icon. Done when the app is in front with a window on screen.

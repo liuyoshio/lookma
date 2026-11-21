@@ -4,8 +4,8 @@
 // report entries, and the executor's cards), the overlay's requests and their acks, unknown
 // messages, the hands pipeline (grant, see with and without a screenshot, busy vs idle, the mark
 // wait only before an act, the list after every act and a failed list after a done act, ids kept
-// across lists, two queued clicks from one list, waiting plus go ahead, stale element, bad args,
-// scroll, open, stop, one step at a time), pause and resume, and quit.
+// across lists, two queued clicks from one list, a right click and its menu, waiting plus go ahead,
+// stale element, bad args, scroll, open, stop, one step at a time), pause and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
 import fs from 'node:fs'
 import os from 'node:os'
@@ -317,6 +317,22 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 }
 
 {
+  // Right click: always a real click in front, never an AX press; the menu it opened leads the list.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const row = app.elementIds()[2] // pressable
+  const n = app.ops.length
+  const r = await settle(hands('click', { label: 'Menu of the row', element: row, button: 'right' }))
+  const click = app.ops.slice(n).find(o => o.op === 'click')
+  check('right click on a pressable element: a real right click, never press', r.ok && !opsSince(n).includes('press') && click?.args.button === 'right' && Array.isArray(click.args.point) && opsSince(n).at(-1) === 'see', opsSince(n).join(','))
+  check('right click: the menu items are listed first', r.ok && r.v.text.startsWith(`Right-clicked ${row} in Finder.\n`) && /\nMenu open:\ne\d+ menuitem "Open"\ne\d+ menuitem "Get Info"\ne\d+ menuitem "Move to Trash" \(disabled\)\nWindow:\ne\d+ button "Back"/.test(r.v.text), r.v?.text || r.e?.message)
+  const esc = await hands('key', { label: 'Close the menu', combo: 'escape' })
+  check('a closed menu is no longer listed', !/Menu open|menuitem/.test(esc.text), esc.text)
+  await hands('see', { label: 'Look', app: 'Notes' })
+  const none = await settle(hands('click', { label: 'Menu', element: app.elementIds()[0], button: 'right' }))
+  check('right click where no menu opens: says so', none.ok && /^Right-clicked e\d+ in Notes; no menu opened\.\n/.test(none.v.text), none.v?.text || none.e?.message)
+}
+
+{
   // One step at a time.
   const n = app.ops.length
   await Promise.all([hands('see', { label: 'A', app: 'Finder' }), hands('see', { label: 'B', app: 'Notes' })])
@@ -337,6 +353,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const n = app.ops.length
   const bad = [
     ['click', {}, /click needs an element id or a point/],
+    ['click', { element: 'e1', button: 'middle' }, /click button must be "left" or "right"/],
     ['scroll', { direction: 'sideways' }, /scroll needs a direction/],
     ['scroll', { direction: 'down', pages: 0 }, /scroll pages must be a number above 0 and at most 10/],
     ['scroll', { direction: 'down', pages: 11 }, /scroll pages must be/],

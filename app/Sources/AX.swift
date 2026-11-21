@@ -1,6 +1,6 @@
 // Accessibility helpers: attributes, apps by name (running, installed or in the Dock) and their
-// windows, the app with keyboard focus, and the extra attributes web-based apps need before they
-// expose their tree (set only on apps the hands target).
+// windows and open menus, the app with keyboard focus, and the extra attributes web-based apps need
+// before they expose their tree (set only on apps the hands target).
 import AppKit
 import ApplicationServices
 
@@ -63,6 +63,25 @@ func axAncestor(_ e: AXUIElement, _ roles: Set<String>) -> AXUIElement? {
         cur = axElement(axGet(c, "AXParent"))
     }
     return nil
+}
+
+/// The app's open menus, front first: a context menu, a pop-up button's list, a menu-bar menu and
+/// its submenus. Each is a window of the app above the normal layer, found in the window list and
+/// hit-tested at its centre for the AXMenu it shows, because where an open menu hangs in the AX tree
+/// differs by kind of menu. Other raised windows (panels, tooltips) have no AXMenu there and are
+/// left out. One lookup for both callers: the right click's wait and see.
+func openMenus(_ pid: pid_t) -> [AXUIElement] {
+    guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+    let appEl = AXUIElementCreateApplication(pid)
+    var menus: [AXUIElement] = []
+    for w in info where (w[kCGWindowOwnerPID as String] as? pid_t) == pid && ((w[kCGWindowLayer as String] as? Int) ?? 0) > 0 {
+        guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b) else { continue }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(appEl, Float(r.midX), Float(r.midY), &hit) == .success, let hit,
+              let menu = axAncestor(hit, ["AXMenu"]), !menus.contains(where: { CFEqual($0, menu) }) else { continue }
+        menus.append(menu)
+    }
+    return menus
 }
 
 // MARK: - apps
