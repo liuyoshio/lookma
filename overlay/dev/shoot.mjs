@@ -3,7 +3,7 @@
 // headless Chrome and:
 //   - saves a screenshot at every scenario mark to overlay/dev/shots/
 //   - clicks Approve on the card and expects {type:'answer', via:'click', allow:true}
-//   - clicks Go ahead while the hands wait and expects {type:'goAhead'}
+//   - clicks Go ahead while the hands wait and expects {type:'control', action:'go_ahead'}
 //   - checks the card's rect was posted as a hitRect
 //   - types into the hidden input and expects {type:'tell', source:'typed'}; the app is told
 //     when the input opens and closes, so it gives the keyboard back
@@ -48,8 +48,9 @@ for (;;) {
   }
   if (mark === 'waiting') {
     await page.click('#goAhead')
-    await waitFor(() => sent('goAhead').length).catch(() => {})
-    check(sent('goAhead').length === 1, 'clicking Go ahead sends goAhead')
+    const goAhead = () => sent('control').filter(m => m.action === 'go_ahead')
+    await waitFor(() => goAhead().length).catch(() => {})
+    check(goAhead().length === 1, 'clicking Go ahead sends control go_ahead')
   }
   if (mark === 'end') break
 }

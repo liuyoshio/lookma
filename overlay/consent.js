@@ -1,12 +1,13 @@
 // What the user's words are allowed to do. Pure functions, no DOM, so they can be
 // tested in Node against recorded transcripts (overlay/dev/consent-check.mjs).
 //
-// Which turns get an answer (worthAnswering). Always listening, the server's VAD ends a turn at
-// every pause, for speech and noise alike. The page asks for a reply only when the turn's
-// transcript could be said to the butler: not silence, not hesitation alone ("um", "hmm"), not a
-// lone short fragment ("Tja", "you"), which is how noise and far-off speech come out. Short real
-// answers and commands ("stop", "no", "yes") are kept. With no transcript in time, the turn
-// is answered anyway: the model heard the audio itself.
+// Which turns could get an answer (worthAnswering): not in use. Every committed turn now gets a
+// reply and the butler judges whether it was meant for it (its pass tool). This is the fallback
+// for the turn gate (admit in voice.js), should the butler prove unable to tell noise from
+// requests: wait for the turn's transcript and admit only one that could be said to the butler,
+// not silence, not hesitation alone ("um", "hmm"), not a lone short fragment ("Tja", "you"),
+// which is how noise and far-off speech come out. Short real answers and commands ("stop",
+// "no", "yes") are kept. With no transcript in time (TURN_WAIT_MS), the turn is admitted anyway.
 //
 // Approvals, from the voice-consent experiments (data in overlay/dev/fixtures/voice-consent). The spoken protocol is
 // "yes, I approve", in English. A voiced approval (allow=true) is sent only when
@@ -49,7 +50,8 @@ const YES = ['yes', 'yeah', 'yep', 'ok', 'okay', 'sure', 'alright', 'all right']
 const FILLER = ['please', 'it', 'that', 'this', 'now', 'then', 'just', 'so', 'and', 'right']
 
 // Decline phrases: the whole utterance must be made of these and fillers.
-const DECLINE = ['no', 'nope', 'decline', 'declined', 'deny', "don't", 'do not', 'cancel', 'reject', 'not now',
+// "cancel" is not one: it is a stop (STOP below), which stops the work and takes its cards along.
+const DECLINE = ['no', 'nope', 'decline', 'declined', 'deny', "don't", 'do not', 'reject', 'not now',
   'no thanks', 'no thank you']
 
 const sortLongestFirst = list => list.sort((a, b) => b[0].length - a[0].length) // "approved" before "approve"
@@ -80,7 +82,7 @@ function classify(text, table) {
 }
 
 // Words of an utterance, lowercased; CJK text becomes single characters.
-export const words = text => (text || '').toLowerCase().replace(/[’`]/g, "'")
+export const words = text => text.toLowerCase().replace(/[’`]/g, "'")
   .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu, ' $& ')
   .split(/[^\p{L}\p{N}']+/u).filter(Boolean)
 
@@ -98,7 +100,7 @@ export function isExplicitApproval(text) {
   return !!n && (n.first > 0 || (n.approval > 0 && (n.yes > 0 || n.approval > 1)))
 }
 
-/** True when the whole utterance is an explicit no ("no", "cancel", "don't"). */
+/** True when the whole utterance is an explicit no ("no", "don't"). */
 export function isExplicitDecline(text) {
   const n = classify(text, DECLINE_TABLE)
   return !!n && n.decline > 0
@@ -129,7 +131,9 @@ export function judgeAnswer({ allow, shownAt, turn }) {
   return why ? { ok: false, why, reason: ASK_AGAIN } : { ok: true }
 }
 
-// Short control words that act at once, without waiting for the butler.
+// Typed control words. Spoken ones are the butler's (its control tool); typed input has no
+// butler, so this is a second reader of intent, for text only. The core decides whether the
+// command applies, so nothing here looks at state.
 const norm = s => s.toLowerCase().replace(/[.,!\s]+/g, ' ').trim()
 const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|please|now|alright) )*`
 const STOP = new RegExp(String.raw`^${LEAD}(stop|stop it|stop that|cancel|cancel that|cancel it|abort)(?: please)?$`)
@@ -137,22 +141,17 @@ const GO = new RegExp(String.raw`^${LEAD}(go ahead|continue|go on|carry on|keep 
 const PAUSE = new RegExp(String.raw`^${LEAD}(pause|pause listening)(?: please)?$`)
 
 /**
- * A whole utterance that is just "stop", "go ahead" or "pause" becomes a command.
- * With a card up, words answer the card instead. There is no spoken resume: paused, the mic is off.
- * @returns {'cancel' | 'goAhead' | 'pause' | null}
+ * A whole typed line that is just "stop", "go ahead" or "pause" becomes that control action.
+ * @returns {'stop' | 'go_ahead' | 'pause' | null}
  */
-export function commandFor(text, state) {
-  const t = norm(text || '')
-  if (!t || state?.cards?.length) return null
-  if (STOP.test(t) && state?.turn?.phase === 'working') return 'cancel'
-  if (GO.test(t) && state?.focus?.phase === 'waiting') return 'goAhead'
-  if (PAUSE.test(t) && !state?.paused) return 'pause'
-  return null
+export function commandFor(text) {
+  const t = norm(text)
+  return STOP.test(t) ? 'stop' : GO.test(t) ? 'go_ahead' : PAUSE.test(t) ? 'pause' : null
 }
 
-// ------------------------------------------------------------ which turns get an answer
+// ------------------------------------------------------------ which turns could get an answer (the fallback at admit)
 
-export const TURN_WAIT_MS = 2500 // a turn whose transcript has not come by then is answered anyway
+export const TURN_WAIT_MS = 2500 // a turn whose transcript has not come by then is admitted anyway
 
 // Hesitation: a turn of only these is not a request.
 const HESITATION = new Set(['um', 'umm', 'uh', 'uhh', 'uhm', 'er', 'erm', 'eh', 'ah', 'oh', 'hm', 'hmm', 'mm', 'mmm', 'mhm', 'huh'])

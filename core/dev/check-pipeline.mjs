@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Checks the core against the fake app and a stub executor (no Claude):
-// server rules, snapshot coalescing, routing, unknown messages, the hands pipeline (grant, busy vs
-// idle, waiting plus go ahead, stale element, bad args, scroll, open, cancel, one step at a time),
-// pause and resume, and quit.
+// server rules, snapshot coalescing, routing (with the outbox's say and report entries), the
+// overlay's requests and their acks, unknown messages, the hands pipeline (grant, busy vs idle,
+// waiting plus go ahead, stale element, bad args, scroll, open, stop, one step at a time), pause
+// and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
 import fs from 'node:fs'
 import os from 'node:os'
@@ -83,6 +84,15 @@ overlay.on('message', raw => {
 await new Promise(r => overlay.on('open', r))
 const last = () => states[states.length - 1]
 const tellOverlay = msg => overlay.send(JSON.stringify(msg))
+// An overlay request: sent with an id; resolves with its ack (null: none in time).
+let requests = 0
+async function request(msg) {
+  const id = `t${++requests}`
+  tellOverlay({ ...msg, id })
+  const ack = await until(() => events.find(e => e.type === 'ack' && e.id === id))
+  return ack && (({ type, id, ...rest }) => rest)(ack)
+}
+const acked = (ack, want) => JSON.stringify(ack) === JSON.stringify(want)
 await until(() => last()?.attention?.idle === 10)
 
 const post = (p, body, type = 'application/json') =>
@@ -123,24 +133,24 @@ const post = (p, body, type = 'application/json') =>
   check('POST /api/tell starts a turn and prompts', r.ok && JSON.stringify(calls.at(-1)) === '{"name":"prompt","args":["open slack",{"steer":false}]}' && !!(await until(() => last().turn?.phase === 'working')), `status ${r.status}`)
   await until(() => last().executor.status === 'busy')
   check('executor shows busy during a turn', last().executor.status === 'busy')
-  tellOverlay({ type: 'tell', text: 'actually open notes', source: 'voice' })
-  await until(() => calls.at(-1)?.args[0] === 'actually open notes')
-  check('tell during a turn steers', JSON.stringify(calls.at(-1)?.args) === '["actually open notes",{"steer":true}]' && !!(await until(() => last().turn.sent === 'actually open notes')))
+  const steered = await request({ type: 'tell', text: 'actually open notes', source: 'voice' })
+  check('tell during a turn steers, acked "added"', acked(steered, { ok: true, state: 'added' }) && JSON.stringify(calls.at(-1)?.args) === '["actually open notes",{"steer":true}]' && !!(await until(() => last().turn.sent === 'actually open notes')), JSON.stringify(steered))
   emit({ type: 'step', title: 'Read notes.txt' })
   check('a step updates turn.status', !!(await until(() => last().turn.status === 'Read notes.txt')))
   emit({ type: 'say', speech: 'On it.' })
-  check('say reaches the overlay, display and kind filled in', !!(await until(() => events.find(e => e.type === 'say' && e.speech === 'On it.' && e.display === 'On it.' && e.kind === 'info'))))
+  check('say is in the snapshot\'s outbox, as an entry of the turn', !!(await until(() => last().outbox?.find(e => e.speech === 'On it.' && e.display === 'On it.' && e.kind === 'info' && e.turnId === last().turn.id && e.delivered === null))))
   emit({ type: 'task', id: 'a1', title: 'Sum receipts', status: 'running' })
   emit({ type: 'task', id: 'a1', status: 'done', result: { speech: 'Twelve thousand yen.', display: '¥12,000' } })
-  check('a finished task sends a report', !!(await until(() => events.find(e => e.type === 'report' && e.taskId === 'a1' && e.display === '¥12,000'))))
+  check('the report is in the snapshot\'s outbox with taskId and title', !!(await until(() => last().outbox?.find(e => e.kind === 'report' && e.taskId === 'a1' && e.title === 'Sum receipts' && e.display === '¥12,000'))))
   check('the task row is done', !!(await until(() => last().tasks.find(t => t.id === 'a1')?.status === 'done')))
   emit({ type: 'approval', id: 'ap1', title: 'Allow Bash?', detail: 'ls' })
   await until(() => last().cards.some(c => c.id === 'ap1'))
   const { cards } = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json()
-  check('a card is id, title, detail, source and createdAt, nothing else', JSON.stringify(Object.keys(cards.find(c => c.id === 'ap1')).sort()) === '["createdAt","detail","id","source","title"]', JSON.stringify(cards))
-  tellOverlay({ type: 'answer', cardId: 'ap1', allow: true, via: 'voice' })
-  await until(() => calls.at(-1)?.name === 'answer')
-  check('answering an executor card goes to the executor', JSON.stringify(calls.at(-1)?.args) === '["ap1",true]' && !!(await until(() => !last().cards.some(c => c.id === 'ap1'))))
+  check('a card is id, title, detail, source, turnId and createdAt, nothing else; raised in a turn, it is that turn\'s', JSON.stringify(Object.keys(cards.find(c => c.id === 'ap1')).sort()) === '["createdAt","detail","id","source","title","turnId"]' && cards.find(c => c.id === 'ap1').turnId === last().turn.id, JSON.stringify(cards))
+  const answered = await request({ type: 'answer', cardId: 'ap1', allow: true, via: 'voice' })
+  check('answering an executor card goes to the executor, acked', acked(answered, { ok: true }) && JSON.stringify(calls.at(-1)?.args) === '["ap1",true]' && !!(await until(() => !last().cards.some(c => c.id === 'ap1'))), JSON.stringify(answered))
+  const again = await request({ type: 'answer', cardId: 'ap1', allow: true, via: 'click' })
+  check('answering a card that is gone: acked "gone"', acked(again, { ok: false, error: 'gone' }), JSON.stringify(again))
   emit({ type: 'approval', id: 'ap2', title: 'x' })
   await until(() => last().cards.some(c => c.id === 'ap2'))
   emit({ type: 'approvalGone', id: 'ap2' })
@@ -238,9 +248,11 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const m = app.ops.length
   const p = settle(hands('key', { label: 'New tab', combo: 'cmd+t' }))
   await until(() => last().focus?.phase === 'waiting' && last().focus.action === 'key')
-  tellOverlay({ type: 'goAhead' })
+  const ack = await request({ type: 'control', action: 'go_ahead' })
   const r = await p
-  check('waiting plus go ahead: "go ahead" lets the step act while busy', r.ok && opsSince(m).includes('key'), r.v?.text || r.e?.message)
+  check('waiting plus go ahead: "go ahead" lets the step act while busy, acked', acked(ack, { ok: true }) && r.ok && opsSince(m).includes('key'), r.v?.text || r.e?.message)
+  const late = await request({ type: 'control', action: 'go_ahead' })
+  check('go ahead with nothing waiting: acked "not_waiting"', acked(late, { ok: false, error: 'not_waiting' }), JSON.stringify(late))
 }
 
 {
@@ -316,28 +328,34 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 }
 
 {
-  // Cancel while waiting, and while a grant card is up.
-  tellOverlay({ type: 'tell', text: 'type something', source: 'voice' })
-  await until(() => last().turn?.phase === 'working')
+  // Stop while waiting, and while a grant card is up.
+  const started = await request({ type: 'tell', text: 'type something', source: 'voice' })
+  check('tell with no turn working starts one, acked "started"', acked(started, { ok: true, state: 'started' }) && !!(await until(() => last().turn?.phase === 'working')), JSON.stringify(started))
   app.setIdle(0)
   await until(() => last().attention.busy)
   const p = settle(hands('type', { label: 'Type', text: 'x' }))
   const q = settle(hands('see', { label: 'queued', app: 'Finder' }))
   await until(() => last().focus?.phase === 'waiting')
-  tellOverlay({ type: 'cancel' })
+  const stopped = await request({ type: 'control', action: 'stop' })
   const [r, r2] = await Promise.all([p, q])
-  check('cancel: the waiting step fails with "Cancelled"', !r.ok && /Cancelled/.test(r.e.message), r.e?.message)
-  check('cancel: queued steps are dropped too', !r2.ok && /Cancelled/.test(r2.e.message))
-  check('cancel: executor cancelled and turn cancelled', calls.some(c => c.name === 'cancel') && !!(await until(() => last().turn.phase === 'cancelled')))
+  check('stop: acked', acked(stopped, { ok: true }), JSON.stringify(stopped))
+  check('stop: the waiting step fails with "Cancelled"', !r.ok && /Cancelled/.test(r.e.message), r.e?.message)
+  check('stop: queued steps are dropped too', !r2.ok && /Cancelled/.test(r2.e.message))
+  check('stop: executor cancelled and turn cancelled', calls.some(c => c.name === 'cancel') && !!(await until(() => last().turn.phase === 'cancelled')))
+  const idle = await request({ type: 'control', action: 'stop' })
+  const odd = await request({ type: 'control', action: 'resume' })
+  check('stop with nothing running, and an unknown action: acked as errors', acked(idle, { ok: false, error: 'nothing_running' }) && acked(odd, { ok: false, error: 'unknown_action' }), `${JSON.stringify(idle)} ${JSON.stringify(odd)}`)
+
+  await request({ type: 'tell', text: 'look at notes', source: 'voice' })
 
   app.setIdle(10)
   fs.writeFileSync(config.appsFile, JSON.stringify({ Finder: true }))
   const g = settle(hands('see', { label: 'Look at Notes', app: 'Notes' }))
   await until(() => last().cards.some(c => c.source === 'core'))
-  tellOverlay({ type: 'cancel' })
+  await request({ type: 'control', action: 'stop' })
   const b = await g
-  check('cancel: a pending grant card is withdrawn', !b.ok && /Cancelled/.test(b.e.message) && !!(await until(() => !last().cards.some(c => c.source === 'core'))), b.e?.message)
-  check('cancel: a cancelled grant is not saved', !('Notes' in JSON.parse(fs.readFileSync(config.appsFile, 'utf8'))))
+  check('stop: a pending grant card is withdrawn', !b.ok && /Cancelled/.test(b.e.message) && !!(await until(() => !last().cards.some(c => c.source === 'core'))), b.e?.message)
+  check('stop: a cancelled grant is not saved', !('Notes' in JSON.parse(fs.readFileSync(config.appsFile, 'utf8'))))
 }
 
 // ---------------------------------------------------------------- pause, resume
@@ -349,15 +367,16 @@ let app2
   // Pause while a step waits for the front and another is queued: the turn stops as with "stop".
   app.setIdle(0)
   await until(() => last().attention.busy)
-  tellOverlay({ type: 'tell', text: 'write the summary', source: 'voice' })
+  await request({ type: 'tell', text: 'write the summary', source: 'voice' })
   await until(() => last().turn?.phase === 'working' && last().turn.sent === 'write the summary')
   const count = name => calls.filter(c => c.name === name).length
   const cancels = count('cancel')
   const p = settle(hands('type', { label: 'Type', text: 'x' }))
   const q = settle(hands('see', { label: 'queued', app: 'Finder' }))
   await until(() => last().focus?.phase === 'waiting')
-  tellOverlay({ type: 'pause' })
+  const paused = await request({ type: 'control', action: 'pause' })
   const [r, r2] = await Promise.all([p, q])
+  check('pause: acked', acked(paused, { ok: true }), JSON.stringify(paused))
   check('pause: the waiting step fails and the queued one is dropped', !r.ok && /Cancelled/.test(r.e.message) && !r2.ok && /Cancelled/.test(r2.e.message), r.e?.message)
   check('pause: the executor is cancelled and the turn too', count('cancel') === cancels + 1 && !!(await until(() => last().turn.phase === 'cancelled')))
   check('pause: paused is in the snapshot', !!(await until(() => last().paused === true)))
@@ -370,6 +389,8 @@ let app2
   check('paused: the hands refuse a step without touching the app', !h.ok && /paused/.test(h.e.message) && app.ops.length === n, h.e?.message)
   const t = await post('/api/tell', JSON.stringify({ text: 'open notes' }))
   check('paused: a tell is refused, saying how to resume', t.status === 409 && /Resume from the menu bar/.test((await t.json()).error), `status ${t.status}`)
+  const told = await request({ type: 'tell', text: 'open notes', source: 'typed' })
+  check('paused: an overlay tell is acked with the same error', told?.ok === false && /Resume from the menu bar/.test(told.error), JSON.stringify(told))
 
   // An app that connects while paused learns it at once.
   app.close()
@@ -386,9 +407,10 @@ let app2
 
   // Pause with no turn working, then resume: nothing is cancelled or told.
   const before = calls.length
-  tellOverlay({ type: 'pause' })
+  await request({ type: 'control', action: 'pause' })
   await until(() => last().paused === true)
-  tellOverlay({ type: 'pause' }) // already paused: nothing changes
+  const twice = await request({ type: 'control', action: 'pause' }) // already paused: nothing changes
+  check('pause while paused: acked, nothing changes', acked(twice, { ok: true }), JSON.stringify(twice))
   app2.send({ type: 'resume' })
   await until(() => last().paused === false)
   await sleep(50)

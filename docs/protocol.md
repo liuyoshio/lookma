@@ -38,12 +38,14 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
 ```js
 { type: 'state',
   executor: { name: 'claude', status: 'starting' | 'ready' | 'busy' | 'down', detail },
-  turn: null | { id, sent, status, phase: 'working' | 'done' | 'failed' | 'cancelled', startedAt, endedAt },
+  turn: null | { id, sent, status, phase: 'working' | 'done' | 'failed' | 'cancelled', said, startedAt, endedAt },
   focus: null | { id, label, action, app, rect, point, phase: 'moving' | 'waiting' | 'acting' | 'done' | 'failed', background, at },
   attention: { busy, idle },
   app: null | { version, permissions },          // the app's hello; null while it is not connected
-  cards: [ { id, title, detail, source: 'executor' | 'core', createdAt } ],
+  cards: [ { id, title, detail, source: 'executor' | 'core', turnId, createdAt } ],
   tasks: [ { id, title, status: 'running' | 'done' | 'failed', action, startedAt, endedAt } ],
+  outbox: [ { id, kind: 'info' | 'question' | 'confirm' | 'report' | 'card', speech, display,
+              title?, taskId?, cardId?, turnId, held, at, delivered: null | 'spoken' | 'cut' | 'shown' } ],
   paused: false | true }
 ```
 
@@ -53,52 +55,72 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
   - `rect` is the target's frame and `point` is where the ghost cursor goes;
   - `background: true` means it is acting without bringing the target forward, because the user is busy;
   - `phase: 'waiting'` means it needs the front and is waiting for the user to stop. The overlay shows the edge hint.
-- `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app.
+- `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app. `turnId` is the turn that was working when the card was raised (null outside a turn, e.g. a startup card); stopping that turn removes its cards.
 - `tasks` are background work with no screen presence. It is shown yellow.
+- `turn.said` counts the lines the work said during the turn (see the outbox below).
+- `outbox` is what the user is owed by voice, oldest first. See The outbox below.
 - `paused` is true while the user has paused. See Pause and quit below.
 
-Transient events:
+**The outbox** (`core/outbox.mjs`). Everything the work wants the user told is an entry, kept in the core so it outlives a pause, a voice failure and a page reload:
+
+- `info`, `question`, `confirm`: the executor's `say` (`kind` defaults to `info`, `display` to `speech`). Said while a turn is working, the entry carries that `turnId` and the turn's `said` goes up by one.
+- `report`: a background task finished with a result (`taskId`, the task's `title`).
+- `card`: the announcement of the card on screen, `cardId`, with the card's title and detail as its text. Only the head of `cards` has one; it is posted when that card becomes the head and removed when the card goes, delivered or not, and only then (`held: true`).
+- A turn always ends with something to tell: one that ends `done` or `failed` with `said` 0 gets one entry from the core, "Done." or "That did not work." (the voice says it in the user's language). A stopped turn (`cancelled`) drops its undelivered entries, along with its cards.
+
+Each entry gets exactly one receipt (`delivered`, first one wins): `spoken` (the user heard it), `cut` (the user talked over it), or `shown` (left on screen). An entry with no receipt is still owed. Delivered entries are kept for 5 minutes (the context a new voice session is given; the core trims the list whenever a voice key is minted, so that holds however quiet it has been), and the list keeps at most the newest 50. A held entry (a card's) is kept, receipt or not, until its card goes.
+
+The overlay reads the outbox from every snapshot. Its captions come from it (the newest entry that is not a card or report is the said line; report entries caption their task), and the voice announces what is owed when nobody is talking and sends the receipts. With no voice, everything owed gets `shown`. The overlay plays a soft chime when a new card appears.
+
+The answer to an overlay request (see Overlay → core) goes to the requesting socket only:
 
 ```js
-{ type: 'say', id, speech, display, kind: 'info' | 'question' | 'confirm' }  // executor wants this said
-{ type: 'report', id, taskId, speech, display }                           // a background task finished
+{ type: 'ack', id, ok: true, ... } | { type: 'ack', id, ok: false, error }
 ```
 
-The overlay speaks these through the voice session when it is quiet; with no voice, it uses on-screen captions. It plays a soft chime when a new card appears.
-
-**Voice session** (`overlay/voice.js`). Always listening, full duplex: while voice is on and not paused, one warm session is connected with the microphone attached.
+**Voice session** (`overlay/voice.js`, `overlay/voice/`). Always listening, full duplex: while voice is on and not paused, one warm session is connected with the microphone attached.
 
 - **Warm session.** One Realtime WebRTC session, its audio transceiver `sendrecv` with the microphone track. macOS shows its mic indicator. The voice speaks on the same session, and it keeps the conversation across turns.
-- **Turns** come from the server: `turn_detection` is `semantic_vad` with `eagerness: 'low'`, `create_response: false` and `interrupt_response: true`. Input `noise_reduction` is `far_field` (`LOOKMA_VOICE_NOISE`). Speech over the voice cuts it off (barge-in).
-- **Replies.** The page sends `response.create` only when the turn's transcript is meaningful, one pure tested function: empty transcripts, fillers ("um", "hmm") and short noise fragments ("Tja") are dropped; real short commands ("stop", "pause", "no", "yes, I approve") are kept. If the transcript has not arrived about 2.5 s after the turn, the page responds anyway.
-- **Turn records.** Each turn is recorded at `input_audio_buffer.speech_started`: its item id, `startedAt` (when the event arrived) and `overButler` (whether the voice's audio was playing then). Its transcript is matched by item id when it arrives.
-- **Health.** The session reconnects in the background when it closes or fails, with backoff. While idle (never mid-turn), it is renewed before the Realtime session limit, with its key minted ahead.
-- **Context.** A session that replaces a lost one is first given the pending cards and the `say` and `report` items of the last 5 minutes, as user items marked "from earlier" and with no `response.create`. So "yes, I approve" still answers a card announced on the old session.
-- **Queue.** A `say`, a `report` or a new card is spoken when nobody is talking: not while the user speaks, nor while the voice answers. Questions, confirmations and cards go first.
-- **Paused:** no session at all, and no microphone. **Voice off** (`LOOKMA_NO_VOICE=1`, no OpenAI key, or `?voice=0`): no session, captions only.
+- **Turns** come from the server: `turn_detection` is `semantic_vad` with `eagerness: 'medium'` and `create_response: false`. The audio setup (`LOOKMA_AUDIO`) sets the rest: `room` (the default) has `interrupt_response: false` and `far_field` noise reduction, so speech over the voice does not cut it off; `headset` has `interrupt_response: true` and `near_field`, so it does (barge-in).
+- **The floor** (`overlay/voice/floor.js`) decides who speaks: one reply at a time, and only once the user's turn is committed. What the voice owes is user turns (a reply) and outbox entries (an announcement). Every committed turn gets a `response.create` at once; the voice itself decides whether it was meant for it, and a reply that is a `pass` call, or has nothing in it, deletes that turn from the conversation. A turn is shown as heard when the reply's first output that is not a `pass` arrives.
+- **Replies.** `response.create` carries the key's `responses[kind]` and never instructions: a reply to new turns (`turn`) may call tools; every other reply (`speak`: an announcement, or a tool result to say) is speak-only (`tool_choice: 'none'`). A tool result the user has not heard (an error, `status`, or any result after a reply that said nothing) gets a speak-only reply.
+- **Announcements.** What the outbox owes is announced once nobody has talked for 0.7 s, after any user turn, all of it in one reply, in outbox order, as user items marked as updates. When its audio has played, the entries get `spoken`. Talked over by a user who then gets an answer (the reply to their turn is not a `pass`), they get `cut`. A reply that fails (cancelled by noise, rejected, cut off by a dropped session, or with no news for 30 s) is tried again; a reply the user's voice cancelled counts as failed only once the reply to their turn turns out not to be an answer, so a request spoken in pieces is never lost. After two failures an entry gets `shown`, and a request the voice never acted on shows "say that again". A receipt is sent again while a snapshot still shows the entry owed, so one lost with the core link heals itself.
+- **Turn records.** Each turn is recorded when its speech starts: its item id, `startedAt` (when the event arrived) and `overButler` (whether the voice's audio was playing then). Its transcript is matched by item id when it arrives.
+- **Health.** The session reconnects in the background when it closes or fails, with backoff. While idle (nothing heard, said or owed for 10 s), it is renewed before the Realtime session limit, with its key minted ahead.
+- **Context.** Every new session is first given the outbox entries that already have a receipt (the last 5 minutes, and the card on screen), as user items marked "from earlier" and with no `response.create`. So "yes, I approve" still answers a card announced on the old session, also after a page reload.
+- **Paused:** no session at all, and no microphone; what is owed stays in the outbox and is announced after resume. **Voice off** (`LOOKMA_NO_VOICE=1`, no OpenAI key): no session, captions only, and everything owed gets `shown`. A page opened with `?voice=0` is a spectator: no session, captions only, and no receipts, so it never settles what the app's voice still owes.
 
 **Voice approval** (`overlay/consent.js`): a spoken answer (approve or decline) counts only when all of these hold:
 - it was spoken at least 1 s after the card rendered (the turn's `startedAt`);
 - it cannot be the assistant's own voice: said over the voice (`overButler`), it counts unless the voice itself was saying an approval phrase;
-- its own transcript, matched by the turn's item id and awaited up to 3 s, is explicit: "yes, I approve", "approved, do it", or a clear "no", "cancel", "don't". A lone "approve" or "go ahead" is not enough, and any hesitation fails.
+- its own transcript, matched by the turn's item id and awaited up to 3 s, is explicit: "yes, I approve", "approved, do it", or a clear "no", "don't". A lone "approve" or "go ahead" is not enough, and any hesitation fails. "Cancel" is a stop, never a decline.
+- the core accepts it: the butler's `answer` sends an `answer` request, and the card shows Approved (or Declined) only after the ack says `ok`.
 
 Otherwise the voice asks again. The card's hint reads: Say “yes, I approve”. Clicking Approve always works.
 
 ## Overlay → core
 
+Requests carry an `id` (`r1`, `r2`, … per page) and get exactly one `ack`, to the requester only. The core alone decides whether a request applies; the page never does.
+
+| Request | Ack |
+|---|---|
+| `{ type: 'tell', id, text, source: 'voice' \| 'typed' }`: a new instruction; the core prompts, or steers if a turn is running | `{ ok: true, state: 'started' \| 'added' }`, or `{ ok: false, error }` (empty text, paused, the executor not running) |
+| `{ type: 'answer', id, cardId, allow, via: 'voice' \| 'click' }` | `{ ok: true }`, or `{ ok: false, error: 'gone' }` |
+| `{ type: 'control', id, action: 'stop' \| 'go_ahead' \| 'pause' }` | `{ ok: true }`, or `{ ok: false, error: 'nothing_running' \| 'not_waiting' \| 'unknown_action' }` |
+
+- `stop` stops the working turn (the executor's `cancel`, the waiting hands step fails, queued steps drop) and removes that turn's cards. `go_ahead` lets a step waiting with `focus.phase: 'waiting'` act now. `pause` is idempotent (see Pause and quit).
+- The page's `request` resolves `{ ok: false, error: 'not connected' }` when the socket is closed or closes before the ack, and `{ ok: false, error: 'no answer' }` after 3 s. It never resends.
+
+Without an ack:
+
 ```js
-{ type: 'tell', text, source: 'voice' | 'typed' }  // new instruction; the core prompts, or steers if a turn is running
-{ type: 'answer', cardId, allow, via: 'voice' | 'click' }
-{ type: 'cancel' }                                   // "stop"
-{ type: 'goAhead' }                                  // "go ahead" while focus.phase is 'waiting'
-{ type: 'pause' }                                    // "pause"
-{ type: 'resume' }                                   // end the pause (the page itself never sends it: paused, the mic is off)
+{ type: 'delivered', ids, how: 'spoken' | 'cut' | 'shown' }   // receipts for outbox entries; idempotent, seen in the next snapshot
 { type: 'log', text }                                // a line for the core's log (the voice's decisions)
 ```
 
-A whole utterance of just "stop", "go ahead" or "pause", spoken or typed, is sent as the command at once (`commandFor` in `overlay/consent.js`). While a card is up, words answer the card instead.
+Spoken "stop", "go ahead" and "pause" are the voice's: it calls its `control` tool. Every tool that reaches the core (`do` sends `tell`, `answer`, `control`) gets the ack as its output, verbatim, so the voice says what really happened. A typed line of just "stop", "go ahead" or "pause" is sent as that `control` request whatever the state (`commandFor` in `overlay/consent.js`); a failed typed request shows its error on screen.
 
-`POST /api/voice-key` → `{ value, model, expiresAt }`. This is an ephemeral OpenAI Realtime key, with the session config (the voice's instructions from `prompts/butler.md`, its tools from `prompts/butler-tools.json`, transcription (with `language` from `LOOKMA_VOICE_LANGUAGE` when set, and no prompt), server turn detection as above, `max_output_tokens` from `LOOKMA_VOICE_MAX_TOKENS` (default 200), and voice) baked in by the core. The real key never leaves the core.
+`POST /api/voice-key` → `{ value, model, expiresAt, responses: { turn: {}, speak: { tool_choice: 'none' } } }`. `value` is an ephemeral OpenAI Realtime key, with the session config (the voice's instructions from `prompts/butler.md`, its tools `do`, `status`, `answer`, `control` and `pass` from `prompts/butler-tools.json`, transcription (with `language` from `LOOKMA_VOICE_LANGUAGE` when set, and no prompt), server turn detection as above, `max_output_tokens` from `LOOKMA_VOICE_MAX_TOKENS` (default 200), and voice) baked in by the core. `responses` are the parameters of each kind of reply (`core/voice-key.mjs`); the page never builds one. The real key never leaves the core. A 503 means no voice, for good.
 
 **Overlay ↔ app (local, not the core).** The page posts `{ hitRects: [rect…], typing, voice, listening, speaking }` to `window.webkit.messageHandlers.lookma` whenever one of them changes:
 
@@ -136,11 +158,11 @@ Core → app, besides requests:
 
 The core is the only place where `paused` changes; the overlay and the app only ask.
 
-- **Pause** (`pause` from the overlay or the app). If a turn is working, the core cancels it exactly as `cancel` does (the executor's `cancel`, the waiting hands step fails, queued steps drop) and remembers that the pause interrupted it. Then `paused` becomes true. While paused:
-  - the overlay closes the voice session entirely (WebRTC closed, mic track stopped) and drops what it had queued to say, so nothing is heard, sent or billed, and the voice stops talking;
+- **Pause** (`control` `pause` from the overlay, or `pause` from the app). If a turn is working, the core stops it exactly as `stop` does (the executor's `cancel`, the waiting hands step fails, queued steps drop, its cards go). Then `paused` becomes true. While paused:
+  - the overlay closes the voice session entirely (WebRTC closed, mic track stopped), so nothing is heard, sent or billed, and the voice stops talking; what is owed stays in the outbox;
   - the capsule shows "Paused" and how to resume: the menu bar or ⌃⌥P;
   - marks clear, and the hands refuse every step;
-  - `tell` is refused with the same hint (`POST /api/tell` answers 409).
+  - `tell` is refused with the same hint (its ack's `error`; `POST /api/tell` answers 409).
 - **Resume** (`resume` from the app). `paused` becomes false. The overlay reconnects the warm voice session, with the microphone. Nothing else starts: a turn the pause stopped stays stopped until the user asks again.
 - **Quit** (`quit` from the app). The core runs its usual shutdown, the same as Ctrl-C: `{ type: 'quit' }` to the app, the executor's `stop`, the server closes and the process exits, so the `lookma` command ends. If the core is not reachable, or does not answer within 5 s, the app quits by itself.
 
@@ -176,7 +198,7 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
 2. **Grant.** If the hands have never touched this app, raise a `core` card ("Allow controlling Maps?") and wait. A no ends the step with an error the executor can read. Answers persist in `~/.lookma/apps.json`.
 3. **Attention.** Visible by default: if the user is not busy (idle ≥ 3 s), bring the target forward. If they are busy:
    - steps that can act in the background (AX `press`, `see`) proceed with `background: true` and an edge hint;
-   - steps that need the front (`type`, `key`, a coordinate `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`goAhead`).
+   - steps that need the front (`type`, `key`, a coordinate `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
 4. **Mark.** Set `focus` (label, rect, point). Wait about 350 ms so the ring and ghost cursor arrive before anything happens.
 5. **Act** through the app, then set `focus.phase` to `done` or `failed`.
 6. **Return** to the executor:

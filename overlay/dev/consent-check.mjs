@@ -10,17 +10,19 @@
 // (deny, hold, echo, early, and the lone ok/yeah/sure the spike called ambiguous)
 // that judgeAnswer lets through is a false approval. There must be none.
 //
-// First, worthAnswering: always listening, a turn gets a reply only when its transcript could
-// be said to the butler (no silence, hesitation or noise fragment), or when it has none in time.
-// Then commandFor: a whole utterance of just "stop", "go ahead" or "pause" acts at once,
-// and never while a card is up (then words answer the card).
+// First, worthAnswering, the documented fallback for the turn gate (admit in voice.js): a turn
+// is admitted only when its transcript could be said to the butler (no silence, hesitation or
+// noise fragment), or when it has none in time.
+// Then commandFor, for typed input: a whole line of just "stop", "go ahead" or "pause" is that
+// control action, whatever the state (the core decides whether it applies); "cancel" is a stop,
+// never a decline.
 //
 //   node overlay/dev/consent-check.mjs
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { judgeAnswer, isExplicitApproval, commandFor, worthAnswering } from '../consent.js'
+import { judgeAnswer, isExplicitApproval, isExplicitDecline, commandFor, worthAnswering } from '../consent.js'
 
 const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/voice-consent')
 const MUST_NOT = new Set(['deny', 'hold', 'echo', 'early', 'ambiguous'])
@@ -32,17 +34,14 @@ const wrongReplies = [...REPLY.filter(t => !worthAnswering(t)).map(t => `${JSON.
   ...SILENT.filter(t => worthAnswering(t)).map(t => `${JSON.stringify(t)}: a reply, want none`)]
 console.log(`${wrongReplies.length ? 'FAIL' : 'PASS'} replies: ${REPLY.length} turns answered, ${SILENT.length} not${wrongReplies.map(w => `\n  ${w}`).join('')}`)
 
-const working = { cards: [], turn: { phase: 'working' }, focus: { phase: 'waiting' }, paused: false }
-const withCard = { ...working, cards: [{ id: 'card1' }] }
 const COMMANDS = [
-  ['Pause.', working, 'pause'], ['Pause listening.', working, 'pause'], ['Pause, please.', working, 'pause'],
-  ['OK, pause please', { cards: [], turn: null }, 'pause'],
-  ['Pause.', withCard, null], ['Pause.', { ...working, paused: true }, null], ['Pause the video.', working, null],
-  ['Stop.', working, 'cancel'], ['Stop.', withCard, null], ['Go ahead.', working, 'goAhead'], ['Go ahead.', withCard, null],
+  ['Pause.', 'pause'], ['Pause listening.', 'pause'], ['Pause, please.', 'pause'], ['OK, pause please', 'pause'],
+  ['Stop.', 'stop'], ['Go ahead.', 'go_ahead'], ['Pause the video.', null],
 ]
-const wrongCommands = COMMANDS.filter(([text, state, want]) => commandFor(text, state) !== want)
-  .map(([text, state, want]) => `"${text}"${state.cards.length ? ' with a card up' : ''}${state.paused ? ' while paused' : ''}: ${commandFor(text, state)}, want ${want}`)
-console.log(`${wrongCommands.length ? 'FAIL' : 'PASS'} commands: ${COMMANDS.length} utterances${wrongCommands.map(w => `\n  ${w}`).join('')}`)
+const wrongCommands = COMMANDS.filter(([text, want]) => commandFor(text) !== want)
+  .map(([text, want]) => `"${text}": ${commandFor(text)}, want ${want}`)
+if (isExplicitDecline('cancel')) wrongCommands.push('"cancel" is a decline, want a stop only')
+console.log(`${wrongCommands.length ? 'FAIL' : 'PASS'} commands: ${COMMANDS.length} lines, "cancel" no decline${wrongCommands.map(w => `\n  ${w}`).join('')}`)
 
 if (!fs.existsSync(DIR)) {
   console.log(`SKIP ${DIR} not found`)

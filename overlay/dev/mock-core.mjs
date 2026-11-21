@@ -7,14 +7,18 @@
 //
 //   --from <mark>  fast-forward to that mark (cards are approved, waits resumed), then play.
 //                  Only the state is fast-forwarded: says, reports and heard lines on the way
-//                  are not sent, as a real core would not resend them to a new page.
+//                  are left out, so nothing from the skipped part is owed to the voice.
 //   --hold         stop at the --from mark
 //
 // stdout is JSON lines: {"mark":…} when the script passes a mark, {"from":"overlay","msg":…}
 // for every overlay -> core message, {"auto":…} for what the fast-forward answered itself.
+// Requests (tell, answer, control) are acked to the requester, as the core does. What the work
+// says goes into the outbox (the core's own core/outbox.mjs), with an entry for the card on screen,
+// and the page's receipts (delivered) are applied to it.
 // The scenario starts when the first overlay connects; POST /dev/restart {from?, hold?}
-// starts it again. POST /dev/paused {paused} stands in for the app's menu bar and ⌃⌥P.
-// POST /dev/say {speech, display?, kind?} sends one executor `say` now.
+// starts it again (the outbox lives on, as the core's would). POST /dev/paused {paused} stands in
+// for the app's menu bar and ⌃⌥P. POST /dev/say {speech, display?, kind?} posts one executor
+// `say` now. POST /dev/drop closes the overlay sockets, as a dropped link would.
 // GET /api/state returns the current snapshot.
 
 import http from 'node:http'
@@ -23,6 +27,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { scenario } from './scenario.mjs'
+import { createOutbox } from '../../core/outbox.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const opts = parseArgs(process.argv.slice(2))
@@ -52,6 +57,7 @@ const state = {
   attention: { busy: false, idle: 30 },
   cards: [],
   tasks: [],
+  outbox: [],
   paused: false,
 }
 
@@ -67,6 +73,28 @@ function broadcast(msg) {
   for (const ws of clients) ws.send(data)
 }
 
+// ------------------------------------------------------------ outbox and cards
+
+let ids = 0
+const outbox = createOutbox({ store: { data: state, update: fn => { fn(state); changed() } }, nextId: prefix => `${prefix}${++ids}` })
+
+/** What the work says: an entry of the working turn, if any. */
+function say(speech, display = speech, kind = 'info') {
+  outbox.post({ kind, speech, display, turnId: state.turn?.phase === 'working' ? state.turn.id : null })
+}
+
+// Like the core's changeCards: the card on screen (the head) has an outbox entry, held, and an
+// entry goes when its card goes.
+function changeCards(fn) {
+  state.cards = fn(state.cards)
+  outbox.drop(e => e.cardId && !state.cards.some(c => c.id === e.cardId))
+  const head = state.cards[0]
+  if (head && !state.outbox.some(e => e.cardId === head.id)) {
+    outbox.post({ kind: 'card', cardId: head.id, turnId: head.turnId, held: true, speech: [head.title, head.detail].filter(Boolean).join('\n') })
+  }
+  changed()
+}
+
 // ------------------------------------------------------------ the script's side
 
 class Aborted extends Error {}
@@ -74,12 +102,11 @@ class Cancelled extends Error {}
 
 let run = null // { gen, ff, from, hold, waits: Map }
 let gen = 0
-let ids = 0
 
 function startScenario({ from = null, hold = false } = {}) {
   if (run) for (const w of run.waits.values()) w.reject(new Aborted())
-  Object.assign(state, { turn: null, focus: null, attention: { busy: false, idle: 30 }, cards: [], tasks: [], paused: false })
-  changed()
+  Object.assign(state, { turn: null, focus: null, attention: { busy: false, idle: 30 }, tasks: [], paused: false })
+  changeCards(() => [])
   const r = run = { gen: ++gen, ff: !!from, from, hold, waits: new Map() }
   const ctx = makeContext(r)
   scenario(ctx).then(() => out({ done: true }), err => { if (!(err instanceof Aborted)) out({ error: String(err.stack || err) }) })
@@ -111,7 +138,7 @@ function makeContext(r) {
       }
     },
     heard(text) { live(); if (!r.ff) broadcast({ type: 'mock:heard', text }) },
-    say(display, speech = display, kind = 'info') { live(); if (!r.ff) broadcast({ type: 'say', id: `say-${++ids}`, speech, display, kind }) },
+    say(display, speech = display, kind = 'info') { live(); if (!r.ff) say(speech, display, kind) },
     attention(busy) { live(); state.attention = { busy, idle: busy ? 0.3 : 30 }; changed() },
     status(text) { guard(); state.turn.status = text; changed() },
     steer(sent) { guard(); state.turn.sent = sent; changed() },
@@ -164,15 +191,13 @@ function makeContext(r) {
     // An approval card; resolves with the user's answer.
     async card({ title, detail, options = null, source = 'executor', mark }) {
       guard()
-      const c = { id: `card-${++ids}`, title, detail, options, source, createdAt: now() }
-      state.cards.push(c)
-      changed()
+      const c = { id: `card-${++ids}`, title, detail, options, source, turnId: r.turnId ?? null, createdAt: now() }
+      changeCards(cards => [...cards, c])
       if (mark) s.mark(mark)
       let allow = true
       if (r.ff) out({ auto: 'answer', cardId: c.id, allow })
       else allow = await wait(`answer:${c.id}`)
-      state.cards = state.cards.filter(x => x.id !== c.id)
-      changed()
+      changeCards(cards => cards.filter(x => x.id !== c.id))
       guard()
       return allow
     },
@@ -189,7 +214,7 @@ function makeContext(r) {
       const t = state.tasks.find(x => x.id === id)
       Object.assign(t, { status: 'done', action: '', endedAt: now() })
       changed()
-      if (!r.ff) broadcast({ type: 'report', id: `report-${++ids}`, taskId: id, speech, display })
+      if (!r.ff) outbox.post({ kind: 'report', taskId: id, title: t.title, speech, display })
     },
   }
   return s
@@ -197,43 +222,69 @@ function makeContext(r) {
 
 // ------------------------------------------------------------ overlay -> core
 
-function cancelTurn() {
-  if (state.turn?.phase !== 'working') return
+// Like the core's stop(): false when no turn is working; the stopped turn's cards and untold
+// lines go with it.
+function stopTurn() {
+  if (state.turn?.phase !== 'working') return false
+  const id = state.turn.id
   Object.assign(state.turn, { phase: 'cancelled', endedAt: Date.now() })
   if (state.focus) state.focus.phase = 'done'
-  state.cards = []
-  changed()
+  outbox.drop(e => e.turnId === id && !e.delivered)
+  changeCards(cards => cards.filter(c => c.turnId !== id))
   for (const [k, w] of run?.waits || []) if (k.startsWith('answer:') || k === 'resume') w.resolve(null)
+  return true
 }
 
 // Like the core: pausing stops a working turn as "stop" does.
 function setPaused(paused) {
   if (state.paused === paused) return
-  if (paused) cancelTurn()
+  if (paused) stopTurn()
   state.paused = paused
   changed()
 }
 
-function onOverlayMessage(msg) {
-  out({ from: 'overlay', msg })
-  const waits = run?.waits
-  if (msg.type === 'answer') waits?.get(`answer:${msg.cardId}`)?.resolve(msg.allow === true)
-  else if (msg.type === 'goAhead') waits?.get('resume')?.resolve('resume')
-  else if (msg.type === 'cancel') cancelTurn()
-  else if (msg.type === 'pause' || msg.type === 'resume') setPaused(msg.type === 'pause')
-  else if (msg.type === 'tell') {
+const ok = (extra = {}) => ({ ok: true, ...extra })
+const fail = error => ({ ok: false, error })
+
+// Each returns the request's ack, as the core's REQUESTS do.
+const REQUESTS = {
+  tell(m) {
+    if (state.paused) return fail('Paused. Resume from the menu bar or with ⌃⌥P first.')
     // Steer a running turn; otherwise answer with a tiny turn so typed input shows something.
-    if (state.turn?.phase === 'working') { state.turn.sent = msg.text; changed(); return }
+    if (state.turn?.phase === 'working') { state.turn.sent = m.text; changed(); return ok({ state: 'added' }) }
     const id = `turn-${++ids}`
-    state.turn = { id, sent: msg.text, status: 'Mock core: no executor here', phase: 'working', startedAt: Date.now(), endedAt: null }
+    state.turn = { id, sent: m.text, status: 'Mock core: no executor here', phase: 'working', startedAt: Date.now(), endedAt: null }
     changed()
     setTimeout(() => {
-      if (state.turn?.id !== id) return
+      if (state.turn?.id !== id || state.turn.phase !== 'working') return // stopped meanwhile
+      say(`Got it: ${m.text}`, `(mock) Got: ${m.text}`)
       Object.assign(state.turn, { phase: 'done', endedAt: Date.now() })
       changed()
-      broadcast({ type: 'say', id: `say-${++ids}`, speech: `Got it: ${msg.text}`, display: `(mock) Got: ${msg.text}`, kind: 'info' })
     }, 1500)
-  }
+    return ok({ state: 'started' })
+  },
+  answer(m) {
+    if (!state.cards.some(c => c.id === m.cardId)) return fail('gone')
+    run?.waits.get(`answer:${m.cardId}`)?.resolve(m.allow === true)
+    return ok()
+  },
+  control: m => (Object.hasOwn(CONTROLS, m.action) ? CONTROLS[m.action]() : fail('unknown_action')),
+}
+const CONTROLS = {
+  stop: () => (stopTurn() ? ok() : fail('nothing_running')),
+  go_ahead() {
+    const w = run?.waits.get('resume')
+    if (!w) return fail('not_waiting')
+    w.resolve('resume')
+    return ok()
+  },
+  pause: () => (setPaused(true), ok()),
+}
+
+function onOverlayMessage(msg, reply) {
+  out({ from: 'overlay', msg })
+  if (Object.hasOwn(REQUESTS, msg.type)) reply({ type: 'ack', id: msg.id, ...REQUESTS[msg.type](msg) })
+  if (msg.type === 'delivered') outbox.deliver(msg.ids, msg.how)
 }
 
 // ------------------------------------------------------------ HTTP + WebSocket
@@ -266,7 +317,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/dev/say') {
     const b = await readJson(req)
-    broadcast({ type: 'say', id: `say-${++ids}`, speech: b.speech, display: b.display || b.speech, kind: b.kind || 'info' })
+    say(b.speech, b.display || b.speech, b.kind || 'info')
+    return json(res, 200, { ok: true })
+  }
+  if (req.method === 'POST' && url.pathname === '/dev/drop') {
+    for (const ws of clients) ws.close()
     return json(res, 200, { ok: true })
   }
   if (req.method === 'POST' && url.pathname === '/dev/paused') {
@@ -288,7 +343,8 @@ server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, ws => {
     clients.add(ws)
     ws.send(JSON.stringify({ type: 'state', ...state }))
-    ws.on('message', data => { try { onOverlayMessage(JSON.parse(data)) } catch {} })
+    const reply = body => ws.send(JSON.stringify(body))
+    ws.on('message', data => { try { onOverlayMessage(JSON.parse(data), reply) } catch {} })
     ws.on('close', () => clients.delete(ws))
     if (!run) startScenario({ from: opts.from, hold: opts.hold })
   })

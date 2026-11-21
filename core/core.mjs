@@ -1,11 +1,14 @@
-// The core: one place that decides. Holds turn, focus, attention, cards, tasks and paused; runs the
-// hands pipeline; routes tell, answer, cancel, go ahead, pause, resume and quit; talks to one
-// executor through its adapter. Transport is server.mjs's: it hands each socket to an entry point.
+// The core: one place that decides. Holds turn, focus, attention, cards, tasks, the outbox and
+// paused; runs the hands pipeline; answers the overlay's requests (tell, answer, control: stop,
+// go ahead, pause) with one ack each, takes its receipts for the outbox, and the app's pause,
+// resume and quit; talks to one executor through its adapter. Transport is server.mjs's: it hands
+// each socket to an entry point.
 import { createLog, logUnknown, cancelled } from './util.mjs'
 import { createStore } from './state.mjs'
 import { createAppLink } from './app-link.mjs'
 import { createGrants } from './grants.mjs'
 import { createHands } from './hands.mjs'
+import { createOutbox, RECEIPTS } from './outbox.mjs'
 import { mintVoiceKey } from './voice-key.mjs'
 
 const MAX_TASKS = 8
@@ -17,24 +20,42 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   const store = createStore()
   let n = 0
   const nextId = prefix => `${prefix}${++n}`
+  const outbox = createOutbox({ store, nextId })
 
-  // A line for the user, spoken and shown as a caption. display defaults to speech, kind to info.
+  // A line for the user, spoken and shown as a caption: an outbox entry. display defaults to
+  // speech, kind to info. Said during a turn, it is that turn's (turnId) and counts in turn.said.
   function say({ speech = '', display, kind }) {
-    const event = { type: 'say', id: nextId('say'), speech, display: display || speech, kind: kind || 'info' }
-    store.send(event)
-    return event
+    const turn = working() ? store.data.turn : null
+    const entry = outbox.post({ kind: kind || 'info', speech, display, turnId: turn?.id ?? null })
+    if (turn) store.update(s => (s.turn.said += 1))
+    return entry
   }
 
   // ---------------------------------------------------------------- cards
 
   const waiters = new Map() // core card id -> answer(allow)
 
-  function removeCard(id) {
-    store.update(s => (s.cards = s.cards.filter(c => c.id !== id)))
+  // Every change of cards goes through here, so the announcements follow: the head card (the one
+  // on screen) has an outbox entry, and an entry goes when its card goes, and only then (held: a
+  // new voice session is told of the card for as long as it is up). A card is announced only
+  // while it is the one on screen.
+  function changeCards(fn) {
+    store.update(s => (s.cards = fn(s.cards)))
+    const { cards } = store.data
+    outbox.drop(e => e.cardId && !cards.some(c => c.id === e.cardId))
+    const head = cards[0]
+    if (head && !store.data.outbox.some(e => e.cardId === head.id)) {
+      outbox.post({ kind: 'card', cardId: head.id, turnId: head.turnId, held: true, speech: [head.title, head.detail].filter(Boolean).join('\n') })
+    }
   }
 
+  function removeCard(id) {
+    changeCards(cards => cards.filter(c => c.id !== id))
+  }
+
+  // A card raised during a turn belongs to it (turnId) and goes when that turn is stopped.
   function addCard(card) {
-    store.update(s => s.cards.push({ detail: '', ...card, createdAt: Date.now() }))
+    changeCards(cards => [...cards, { ...card, turnId: working() ? store.data.turn.id : null, createdAt: Date.now() }])
     log('card', { id: card.id, source: card.source, title: card.title })
   }
 
@@ -48,10 +69,10 @@ export async function createCore(config, { log = createLog(), createExecutor, on
         reject(cancelled())
       }
       waiters.set(id, allow => {
-        signal?.removeEventListener('abort', onAbort)
+        signal.removeEventListener('abort', onAbort)
         resolve(allow)
       })
-      signal?.addEventListener('abort', onAbort, { once: true })
+      signal.addEventListener('abort', onAbort, { once: true })
       addCard({ id, title, detail, source: 'core' })
     })
   }
@@ -83,35 +104,47 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   const working = () => store.data.turn?.phase === 'working'
 
   function newTurn(sent) {
-    store.update(s => (s.turn = { id: nextId('turn'), sent, status: '', phase: 'working', startedAt: Date.now(), endedAt: null }))
+    store.update(s => (s.turn = { id: nextId('turn'), sent, status: '', phase: 'working', said: 0, startedAt: Date.now(), endedAt: null }))
   }
 
+  // A turn that ends always leaves something to tell: when the work said nothing, the core says
+  // it ended. The count is on the turn, not read back from the outbox, which prunes what was
+  // delivered. A stopped turn's untold lines and its cards are moot; cards from outside a turn
+  // (startup) stay.
   function endTurn(phase) {
+    const turn = store.data.turn
+    if (turn?.phase !== 'working') return
+    if (phase !== 'cancelled' && !turn.said) say({ speech: phase === 'done' ? 'Done.' : 'That did not work.' })
     store.update(s => {
-      if (s.turn?.phase !== 'working') return
       s.turn.phase = phase
       s.turn.endedAt = Date.now()
     })
+    if (phase === 'cancelled') {
+      outbox.drop(e => e.turnId === turn.id && !e.delivered)
+      changeCards(cards => cards.filter(c => c.turnId !== turn.id))
+    }
   }
 
+  // A finished task's result is a report in the outbox.
   function upsertTask(e) {
+    let task
     store.update(s => {
-      let t = s.tasks.find(x => x.id === e.id)
-      if (!t) {
-        t = { id: e.id, title: '', status: 'running', action: '', startedAt: Date.now(), endedAt: null }
-        s.tasks.push(t)
+      task = s.tasks.find(x => x.id === e.id)
+      if (!task) {
+        task = { id: e.id, title: '', status: 'running', action: '', startedAt: Date.now(), endedAt: null }
+        s.tasks.push(task)
       }
-      for (const k of ['title', 'status', 'action']) if (e[k]) t[k] = e[k]
-      if (t.status !== 'running' && !t.endedAt) t.endedAt = Date.now()
+      for (const k of ['title', 'status', 'action']) if (e[k]) task[k] = e[k]
+      if (task.status !== 'running' && !task.endedAt) task.endedAt = Date.now()
       while (s.tasks.length > MAX_TASKS) {
         const i = s.tasks.findIndex(x => x.status !== 'running')
         s.tasks.splice(i < 0 ? 0 : i, 1)
       }
     })
-    if (e.status && e.status !== 'running' && e.result?.speech) {
+    if (e.status !== 'running' && e.result?.speech) {
       const { speech, display } = e.result
-      store.send({ type: 'report', id: nextId('report'), taskId: e.id, speech, display: display || speech })
-      log('report', e.id, display || speech)
+      const entry = outbox.post({ kind: 'report', taskId: e.id, title: task.title, speech, display })
+      log('report', e.id, entry.display)
     }
   }
 
@@ -190,7 +223,7 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     log('answer', { cardId, allow: !!allow, via })
     removeCard(cardId)
     if (card.source === 'core') {
-      waiters.get(cardId)?.(!!allow)
+      waiters.get(cardId)(!!allow)
       waiters.delete(cardId)
     } else {
       executor.answer(cardId, !!allow)
@@ -198,11 +231,14 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     return true
   }
 
-  function cancel() {
-    log('cancel')
+  // "Stop": false when no turn is working.
+  function stop() {
+    if (!working()) return false
+    log('stop')
     hands.abort()
     executor.cancel()
     endTurn('cancelled')
+    return true
   }
 
   // ---------------------------------------------------------------- pause
@@ -218,7 +254,7 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   function pause() {
     if (store.data.paused) return
     log('pause')
-    if (working()) cancel()
+    stop()
     setPaused(true)
   }
 
@@ -231,37 +267,48 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   // ---------------------------------------------------------------- overlay
 
   const unknownOverlay = logUnknown(log, 'overlay')
+  const ok = (extra = {}) => ({ ok: true, ...extra })
+  const fail = error => ({ ok: false, error })
 
-  function onOverlayMessage(msg) {
-    switch (msg.type) {
-      case 'tell':
-        try {
-          tell(msg.text, msg.source || 'typed')
-        } catch (err) {
-          say({ speech: err.message }) // why the tell did not go through
-        }
-        break
-      case 'answer':
-        answer(msg.cardId, msg.allow, msg.via)
-        break
-      case 'cancel':
-        cancel()
-        break
-      case 'goAhead':
-        hands.goAhead()
-        break
-      case 'pause':
-        pause()
-        break
-      case 'resume':
-        resume()
-        break
-      case 'log': // the overlay's own log line (voice decisions), shown in this terminal
-        log('overlay', String(msg.text || '').slice(0, 500))
-        break
-      default:
-        unknownOverlay(msg.type)
+  // Each request's handler returns its ack; a throw (a refused tell) is the error ack.
+  const REQUESTS = {
+    tell: m => {
+      const steer = working()
+      tell(m.text, m.source)
+      return ok({ state: steer ? 'added' : 'started' })
+    },
+    answer: m => (answer(m.cardId, m.allow, m.via) ? ok() : fail('gone')),
+    control: m => (Object.hasOwn(CONTROLS, m.action) ? CONTROLS[m.action]() : fail('unknown_action')),
+  }
+  const CONTROLS = {
+    stop: () => (stop() ? ok() : fail('nothing_running')),
+    go_ahead: () => (hands.goAhead() ? ok() : fail('not_waiting')),
+    pause: () => (pause(), ok()),
+  }
+
+  // Messages without an ack. A malformed one throws: connectOverlay logs it.
+  const NOTES = {
+    // A receipt for outbox entries; idempotent, it shows in the next snapshot.
+    delivered: m => {
+      if (!Array.isArray(m.ids) || !RECEIPTS.includes(m.how)) throw new Error(`delivered needs ids and one of ${RECEIPTS}`)
+      outbox.deliver(m.ids, m.how)
+    },
+    log: m => log('overlay', String(m.text || '').slice(0, 500)), // the voice's decisions, in this terminal
+  }
+
+  // reply: to the requester only.
+  function onOverlayMessage(msg, reply) {
+    if (Object.hasOwn(REQUESTS, msg.type)) {
+      let ack
+      try {
+        ack = REQUESTS[msg.type](msg)
+      } catch (err) {
+        ack = fail(err.message)
+      }
+      return reply({ type: 'ack', id: msg.id, ...ack })
     }
+    if (Object.hasOwn(NOTES, msg.type)) return NOTES[msg.type](msg)
+    unknownOverlay(msg.type)
   }
 
   // ---------------------------------------------------------------- API
@@ -269,14 +316,16 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   return {
     store,
     tell,
-    voiceKey: () => mintVoiceKey(config),
+    // Every voice session starts with a key: trimming here keeps its seed to the last KEEP_MS.
+    voiceKey: () => (outbox.prune(), mintVoiceKey(config)),
 
     // The three sockets, each handed over by the server once accepted.
     connectOverlay(ws) {
       store.addClient(ws)
+      const reply = body => ws.send(JSON.stringify(body))
       ws.on('message', raw => {
         try {
-          onOverlayMessage(JSON.parse(raw))
+          onOverlayMessage(JSON.parse(raw), reply)
         } catch (err) {
           log('bad overlay message', err.message)
         }

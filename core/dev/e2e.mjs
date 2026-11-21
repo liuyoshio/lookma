@@ -3,10 +3,10 @@
 //   node core/dev/e2e.mjs [port]     (default 8791; tmux session lookma-test; model sonnet)
 // Starts `core/cli.mjs start`, answers every card yes through the overlay socket (logged), then:
 //   1. the startup development-channel warning shows up as a card;
-//   2. "say hello in one short sentence" → a say event;
+//   2. "say hello in one short sentence" → a say in the outbox;
 //   3. "look at the screen and tell me what app is in front" → see through the pipeline;
 //   4. a Bash permission prompt gives exactly one card, answered through the relay;
-//   5. cancel interrupts a running turn.
+//   5. stop interrupts a running turn.
 // The test session runs in permission mode "default" so that step 4 has a prompt to answer.
 // Cleans up the tmux session and its processes at the end.
 import fs from 'node:fs'
@@ -101,20 +101,25 @@ if (!ws) {
   process.exit(1)
 }
 const last = () => states.at(-1)
+const seen = new Set() // outbox entry ids
 ws.on('message', raw => {
   const m = JSON.parse(raw)
-  if (m.type !== 'state') {
-    events.push({ ...m, at: Date.now() })
-    say(`event ${m.type} ${m.kind || ''} ${JSON.stringify(m.display || m.speech)}`)
-    return
-  }
+  if (m.type !== 'state') return
   states.push(m)
+  // Each new say in the outbox is an event (cards and reports are not says).
+  for (const e of m.outbox) {
+    if (seen.has(e.id)) continue
+    seen.add(e.id)
+    if (e.kind === 'card' || e.kind === 'report') continue
+    events.push({ type: 'say', ...e, at: Date.now() })
+    say(`say ${e.kind} ${JSON.stringify(e.display)}`)
+  }
   for (const c of m.cards) {
     if (answered.has(c.id)) continue
     answered.add(c.id)
     cards.push(c)
     say(`card ${c.id} [${c.source}] ${JSON.stringify(c.title)} → answering yes`)
-    setTimeout(() => ws.send(JSON.stringify({ type: 'answer', cardId: c.id, allow: true, via: 'voice' })), 500)
+    setTimeout(() => ws.send(JSON.stringify({ type: 'answer', id: `answer-${c.id}`, cardId: c.id, allow: true, via: 'voice' })), 500)
   }
 })
 const tell = async text => {
@@ -136,7 +141,7 @@ try {
   let n = events.length
   await tell('say hello in one short sentence')
   const hello = await until(() => events.slice(n).find(e => e.type === 'say'), 90000)
-  check('tell "say hello" → a say event reaches the overlay', !!hello, hello?.speech)
+  check('tell "say hello" → a say reaches the overlay\'s outbox', !!hello, hello?.speech)
   const t1 = await turnEnded(60000)
   check('the Stop hook ends the turn (hooks reach /hook)', t1?.phase === 'done', t1?.phase)
 
@@ -165,20 +170,20 @@ try {
   check('answered yes → the command ran and Claude reported', !!counted, counted?.speech)
   await turnEnded(60000)
 
-  // 5. Cancel.
+  // 5. Stop.
   n = events.length
   await tell('Count from 1 to 40. Call say once per number, one call at a time, and nothing else.')
   const first = await until(() => events.slice(n).find(e => e.type === 'say'), 90000)
   check('a long turn starts saying numbers', !!first, first?.speech)
-  ws.send(JSON.stringify({ type: 'cancel' }))
+  ws.send(JSON.stringify({ type: 'control', id: 'stop1', action: 'stop' }))
   const cancelAt = Date.now()
-  say('sent cancel')
+  say('sent stop')
   const c = await until(() => last().turn?.phase === 'cancelled' && last().turn, 5000)
-  check('cancel → turn.phase cancelled', !!c)
+  check('stop → turn.phase cancelled', !!c)
   await sleep(8000)
   const after = events.filter(e => e.type === 'say' && e.at > cancelAt + 1500)
   const screen = pane()
-  check('cancel stops Claude (no more says, terminal shows the interrupt)', after.length === 0 && /Interrupted/i.test(screen), `${after.length} says after; ${/Interrupted/i.test(screen) ? 'interrupted' : 'no interrupt mark'}`)
+  check('stop stops Claude (no more says, terminal shows the interrupt)', after.length === 0 && /Interrupted/i.test(screen), `${after.length} says after; ${/Interrupted/i.test(screen) ? 'interrupted' : 'no interrupt mark'}`)
 } catch (err) {
   check('e2e ran to the end', false, err.message)
 } finally {

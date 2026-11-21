@@ -12,6 +12,7 @@ export function createStore() {
     attention: { busy: false, idle: null },
     cards: [],
     tasks: [],
+    outbox: [], // what the work wants the user told (core/outbox.mjs)
     paused: false, // the user paused: no voice and no hands until they resume
   }
   const clients = new Set()
@@ -30,6 +31,7 @@ export function createStore() {
       app: data.app,
       cards: data.cards,
       tasks: data.tasks,
+      outbox: data.outbox,
       paused: data.paused,
     }
   }
@@ -54,7 +56,6 @@ export function createStore() {
     data,
     snapshot,
     update,
-    send: event => broadcast(JSON.stringify(event)), // transient events: say, report
     watch(fn) {
       watchers.add(fn)
       return () => watchers.delete(fn)
@@ -70,7 +71,7 @@ export function createStore() {
 // Resolves once pred() holds, re-checked on every state change; rejects when signal aborts.
 export function waitUntil(store, pred, signal) {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(cancelled())
+    if (signal.aborted) return reject(cancelled())
     if (pred()) return resolve()
     const onAbort = () => {
       stop()
@@ -83,8 +84,8 @@ export function waitUntil(store, pred, signal) {
     })
     const stop = () => {
       unwatch()
-      signal?.removeEventListener('abort', onAbort)
+      signal.removeEventListener('abort', onAbort)
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }

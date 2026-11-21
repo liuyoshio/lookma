@@ -32,7 +32,7 @@ to the voice, and macOS shows its microphone indicator. To approve a card, say
 Settings, from the environment or ${path.join(ROOT, '.env')}:
   OPENAI_API_KEY           turns on voice; without it you type instead
   LOOKMA_VOICE_LANGUAGE    the language you speak, e.g. en or zh; unset, it is detected
-  LOOKMA_VOICE_NOISE       noise reduction: far_field (default) or near_field for a headset
+  LOOKMA_AUDIO             room (speakers, the default) or headset (talking over the voice stops it)
   LOOKMA_VOICE_MAX_TOKENS  the longest a spoken reply can be, in tokens (default 200)
   LOOKMA_EXECUTOR          the agent: claude (Claude Code, the default) or codex (Codex CLI)
   LOOKMA_MODEL             the Claude Code model, e.g. opus

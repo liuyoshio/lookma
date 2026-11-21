@@ -1,6 +1,6 @@
 // The overlay page: renders the core's snapshots (docs/protocol.md, "Core -> overlay")
-// and runs the voice butler. Full-screen and transparent in the app's WKWebView;
-// also opens in a normal browser for development.
+// and runs the voice butler, which it hands every snapshot (voice.update). Full-screen and
+// transparent in the app's WKWebView; also opens in a normal browser for development.
 //   ?scale=1.75     one size factor for TV distance
 //   ?voice=0        captions only, no realtime voice
 //   ?backdrop=1     draw a neutral fake desktop underneath (development screenshots)
@@ -23,14 +23,15 @@ const voiceOn = params.get('voice') !== '0'
 // Everything the page shows is a function of this: the core's last snapshot plus
 // what only the page knows (the voice session, what the user said, local answers).
 const ui = {
-  state: { executor: { name: 'claude', status: 'starting' }, turn: null, focus: null, attention: { busy: false, idle: 0 }, cards: [], tasks: [] },
+  state: { executor: { name: 'claude', status: 'starting' }, turn: null, focus: null, attention: { busy: false, idle: 0 }, cards: [], tasks: [], outbox: [] },
   link: 'connecting',
   voice: 'off',     // the glyph: off | listening | thinking | speaking
   hearing: false,  // the user is talking now (the voice's VAD heard speech start)
   voiceAvailable: voiceOn,
   user: null,      // { text, at, prev }   the user's last line (voice transcript or typed)
-  said: null,      // { display, kind, at } the executor's last `say`
-  reports: {},     // taskId -> { display, at }
+  said: null,      // { display, kind, at } the work's last line (the newest outbox entry that is not a card or report)
+  notice: null,    // { display, at }       a request that did not go through, or one the voice lost (shown like a said line)
+  reports: {},     // taskId -> { display, at }, from the outbox's report entries
   heard: null,     // { cardId, text }      an utterance that did not count as an answer
   answered: {},    // cardId -> { allow, via, at }
   cardShown: {},   // cardId -> when the card was rendered (the user could first see it)
@@ -100,20 +101,13 @@ const HANDLERS = {
     if (t?.sent && !ui.sentFirst[t.id]) ui.sentFirst[t.id] = t.sent
     if (t && (t.id !== prev.turn?.id || t.status !== prev.turn?.status || t.phase !== prev.turn?.phase)) ui.statusAt = now
     ui.state = next
-    followPause(!!next.paused)
+    // Captions come from the outbox, whatever the voice does with it.
+    const said = next.outbox.findLast(e => e.kind !== 'card' && e.kind !== 'report')
+    ui.said = said ? { display: said.display, kind: said.kind, at: said.at } : null
+    ui.reports = Object.fromEntries(next.outbox.filter(e => e.kind === 'report').map(e => [e.taskId, { display: e.display, at: e.at }]))
+    voice.update(next)
     schedule()
     window.dispatchEvent(new CustomEvent('lookma:state', { detail: next })) // for the dev backdrop
-  },
-  say(msg) {
-    ui.said = { display: msg.display || msg.speech, kind: msg.kind, at: Date.now() }
-    schedule()
-    voice.enqueue({ kind: msg.kind || 'info', speech: msg.speech || msg.display, display: msg.display || msg.speech })
-  },
-  report(msg) {
-    ui.reports[msg.taskId] = { display: msg.display || msg.speech, at: Date.now() }
-    schedule()
-    const task = (ui.state.tasks || []).find(x => x.id === msg.taskId)
-    voice.enqueue({ kind: 'report', title: task?.title, speech: msg.speech || msg.display, display: msg.display || msg.speech })
   },
   // Development only: the mock core stands in for the voice session's transcripts.
   'mock:heard'(msg) { heardUser(msg.text) },
@@ -122,16 +116,19 @@ const HANDLERS = {
 /** A whole line from the user. Said while a turn is running (and not in answer to a
  *  card), it is a correction: the previous line stays above it as one grey line. */
 function heardUser(text) {
-  const correcting = ui.state.turn?.phase === 'working' && !ui.state.cards?.length
+  const correcting = ui.state.turn?.phase === 'working' && !ui.state.cards.length
   ui.user = { text, at: Date.now(), prev: correcting && ui.user ? ui.user.text : '' }
   schedule()
 }
 
-function answerCard(cardId, allow, via) {
-  if (ui.answered[cardId]) return
-  if (!link.send({ type: 'answer', cardId, allow, via })) return
-  ui.answered[cardId] = { allow, via, at: Date.now() }
-  schedule()
+/** Click or voice. Shown as answered only once the core agreed; resolves with its ack. */
+async function answerCard(cardId, allow, via) {
+  const ack = await link.request({ type: 'answer', cardId, allow, via })
+  if (ack.ok) {
+    ui.answered[cardId] = { allow, via, at: Date.now() }
+    schedule()
+  }
+  return ack
 }
 
 // ------------------------------------------------------------ voice
@@ -140,7 +137,8 @@ function answerCard(cardId, allow, via) {
 const voice = createVoice({
   enabled: voiceOn,
   getState: () => ui.state,
-  send: msg => link.send(msg),
+  request: link.request,
+  send: link.send,
   cardShownAt: id => ui.cardShown[id] ?? Infinity,
   answerCard,
   onVoice(s) {
@@ -148,33 +146,27 @@ const voice = createVoice({
     Object.assign(ui, { voice: s.glyph, hearing: s.hearing, voiceAvailable: s.available })
     schedule()
   },
-  onUser: heardUser,
-  onHeard(heard) { ui.heard = heard; schedule() },
-  log: msg => { console.info(`[lookma] ${msg}`); link.send({ type: 'log', text: String(msg) }) },
+  onLine(line) {
+    if (line.kind === 'user') return heardUser(line.text)
+    if (line.kind === 'unheard') ui.heard = { cardId: line.cardId, text: line.text }
+    else ui.notice = { display: NOTICES.missed, at: Date.now() }
+    schedule()
+  },
+  log: msg => { console.info(`[lookma] ${msg}`); link.send({ type: 'log', text: msg }) },
 })
-
-// The core's paused flag, from the first snapshot on. Paused closes the voice entirely (mic off,
-// the butler silent, nothing sent or billed) until the core resumes.
-let paused = null
-function followPause(next) {
-  if (next === paused) return
-  paused = next
-  voice.setPaused(next)
-}
 
 // ------------------------------------------------------------ card, go ahead, typed input
 
 initCard({
   onAnswer: (id, allow) => answerCard(id, allow, 'click'),
-  // On screen now: a voiced answer counts from here, and the butler asks about this card.
+  // On screen now: a voiced answer counts from here. (The butler asks about it from the outbox.)
   onShow(c) {
     ui.cardShown[c.id] = Date.now()
     chime()
-    voice.enqueue({ kind: 'card', cardId: c.id })
   },
   afterMove: postToApp,
 })
-$('goAhead').addEventListener('click', () => link.send({ type: 'goAhead' }))
+$('goAhead').addEventListener('click', () => link.request({ type: 'control', action: 'go_ahead' }))
 
 const typed = $('typed'), typedInput = $('typedInput')
 function toggleTyping(show = typed.hidden) {
@@ -182,14 +174,26 @@ function toggleTyping(show = typed.hidden) {
   if (show) typedInput.focus()
   postToApp()
 }
-typed.addEventListener('submit', e => {
+// The on-screen wording of a failed request's error code (other errors are already sentences),
+// and of a request the voice lost.
+const NOTICES = {
+  missed: 'Sorry, I lost that. Please say it again.',
+  nothing_running: 'Nothing is running.',
+  not_waiting: 'Nothing is waiting for you.',
+  'not connected': 'Not connected to the core.',
+  'no answer': 'The core did not answer.',
+}
+typed.addEventListener('submit', async e => {
   e.preventDefault()
   const text = typedInput.value.trim()
   if (!text) return
   typedInput.value = ''
-  const cmd = commandFor(text, ui.state) // "stop", "go ahead" and "pause" act at once, typed or spoken
-  link.send(cmd ? { type: cmd } : { type: 'tell', text, source: 'typed' })
   heardUser(text)
+  const action = commandFor(text) // a bare "stop", "go ahead" or "pause"; the core decides if it applies
+  const ack = await link.request(action ? { type: 'control', action } : { type: 'tell', text, source: 'typed' })
+  if (ack.ok) return
+  ui.notice = { display: NOTICES[ack.error] || ack.error, at: Date.now() }
+  schedule()
 })
 addEventListener('keydown', e => {
   if (e.key === '`' && document.activeElement !== typedInput) { e.preventDefault(); toggleTyping() }

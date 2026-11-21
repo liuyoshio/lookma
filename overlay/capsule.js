@@ -15,7 +15,9 @@ const rSent = cap.querySelector('.r-sent'), rStatus = cap.querySelector('.r-stat
 const tasksEl = $('tasks')
 
 export function capsuleModel(ui, now, wake) {
-  const { state, voice, user, said } = ui
+  const { state, voice, user } = ui
+  // A notice (a typed request that did not go through, or one the voice lost) shows on the said line, when it is the newer.
+  const said = ui.notice && ui.notice.at > (ui.said?.at || 0) ? ui.notice : ui.said
   // Paused: one calm line and how to resume. Not by voice: the mic is off.
   if (state.paused && ui.link !== 'closed') {
     return { voice: 'paused', prev: '', user: 'Paused', ph: false, sent: '', tag: '', fix: false, min: false, hidden: true,
@@ -23,7 +25,7 @@ export function capsuleModel(ui, now, wake) {
   }
   const turn = state.turn
   const working = turn?.phase === 'working'
-  const ended = turn && !working ? (turn.endedAt || now) : 0
+  const ended = turn && !working ? turn.endedAt : 0
   const movedOn = !!(turn && !working && user && user.at > ended)
   const lastWord = Math.max(ended, said?.at || 0)
   const turnLive = !!turn && !movedOn && (working || now - lastWord < LINGER)
@@ -36,25 +38,25 @@ export function capsuleModel(ui, now, wake) {
 
   const m = { voice, prev: '', user: '', ph: false, sent: '', tag: '', fix: false, status: null }
   if (ui.hearing) { m.user = 'Listening…'; m.ph = true } // the user is talking
-  else if (userLive) { m.user = `“${user.text}”`; m.prev = user.prev || '' }
+  else if (userLive) { m.user = `“${user.text}”`; m.prev = user.prev }
 
   if (turnLive && turn.sent) {
     m.sent = turn.sent
     m.fix = !!ui.sentFirst[turn.id] && ui.sentFirst[turn.id] !== turn.sent
     m.tag = m.fix ? 'Corrected' : 'Doing'
   }
-  m.status = statusLine(ui, turnLive, saidLive)
+  m.status = statusLine(ui, said, turnLive, saidLive)
   m.min = !m.user && !m.sent && !m.status && !['listening', 'speaking', 'thinking'].includes(voice)
   return m
 }
 
 // The user sees one assistant, so no executor name appears here.
-function statusLine(ui, turnLive, saidLive) {
-  const { state, said, link } = ui
+function statusLine(ui, said, turnLive, saidLive) {
+  const { state, link } = ui
   const turn = state.turn, focus = state.focus
   if (!turnLive) {
     if (link === 'closed') return { kind: 'think', ic: 'dim', text: 'Not connected to the core' }
-    const ex = state.executor || {}
+    const ex = state.executor
     if (ex.status === 'starting') return { kind: 'think', ic: 'dim', text: 'Starting…' }
     if (ex.status === 'down') return { kind: 'fail', ic: 'fail', text: `Not running${ex.detail ? ` · ${ex.detail}` : ''}` }
     if (saidLive) return { kind: 'said', ic: 'said', text: said.display }
@@ -62,15 +64,15 @@ function statusLine(ui, turnLive, saidLive) {
   }
   const focusHere = focus && focus.at > turn.startedAt
   if (turn.phase === 'working') {
-    if (state.cards?.length) return { kind: 'await', ic: 'wait', text: 'Waiting for your approval' }
+    if (state.cards.length) return { kind: 'await', ic: 'wait', text: 'Waiting for your approval' }
     if (focusHere && focus.phase === 'waiting') return { kind: 'await', ic: 'wait', text: 'Waiting for you to pause', meta: focus.app || '' }
     if (saidLive && said.at > ui.statusAt) return { kind: 'said', ic: 'said', text: said.display }
     if (turn.status) return { kind: 'step', ic: 'spin', text: turn.status, meta: focusHere && focus.app ? focus.app : '' }
     return { kind: 'think', ic: 'dim', text: 'Thinking…' }
   }
-  const ic = { done: 'done', failed: 'fail', cancelled: 'no' }[turn.phase] || 'done'
-  const word = { done: 'Done', failed: 'Failed', cancelled: 'Stopped' }[turn.phase] || 'Done'
-  const secs = turn.endedAt && turn.startedAt ? `${Math.max(1, Math.round((turn.endedAt - turn.startedAt) / 1000))} s` : ''
+  const ic = { done: 'done', failed: 'fail', cancelled: 'no' }[turn.phase]
+  const word = { done: 'Done', failed: 'Failed', cancelled: 'Stopped' }[turn.phase]
+  const secs = `${Math.max(1, Math.round((turn.endedAt - turn.startedAt) / 1000))} s`
   const text = turn.phase === 'cancelled' ? word : saidLive ? said.display : (turn.status || word)
   return { kind: 'done', ic, text, meta: secs }
 }
@@ -80,7 +82,7 @@ export function renderCapsule(ui, now, wake) {
   const vgc = `vg ${m.voice}`
   if (vg.className !== vgc) vg.className = vgc
   cls(cap, 'min', m.min)
-  cls(cap, 'hidden', !!m.hidden)
+  cls(cap, 'hidden', m.hidden)
 
   txt(rPrev, m.prev)
   const uk = m.user + m.ph
@@ -138,9 +140,9 @@ export function renderCapsule(ui, now, wake) {
 }
 
 function renderTasks(ui, now, wake) {
-  const shown = (ui.state.tasks || []).filter(t => {
+  const shown = ui.state.tasks.filter(t => {
     if (t.status === 'running') return true
-    const end = Math.max(t.endedAt || 0, ui.reports[t.id]?.at || 0) || now
+    const end = Math.max(t.endedAt, ui.reports[t.id]?.at || 0)
     if (now - end < TASK_LINGER) { wake(end + TASK_LINGER); return true }
     return false
   })

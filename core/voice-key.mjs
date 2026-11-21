@@ -1,5 +1,6 @@
-// Mints short-lived OpenAI Realtime keys for the overlay, with the butler session baked in.
-// The real key never leaves the core.
+// Mints short-lived OpenAI Realtime keys for the overlay, with the butler session baked in (set
+// up for a room or a headset), and the parameters each kind of reply is asked for with. The real
+// key never leaves the core.
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -18,9 +19,29 @@ function readPrompt(root, name, parse) {
   }
 }
 
+// Each constant below is the single place to change if the OpenAI behaviour it assumes proves wrong.
+
+// Audio setups (LOOKMA_AUDIO). In a room the butler's voice comes back through the microphone, so
+// sound never cancels a reply: it finishes its one or two sentences. With a headset the user's
+// voice cuts it off (barge-in). Noise reduction matches the microphone's distance.
+const SETUPS = {
+  room: { noise: 'far_field', interrupt: false },
+  headset: { noise: 'near_field', interrupt: true },
+}
+
+// How soon the server ends a turn at a pause. A sentence split in two is still one reply: the
+// floor's next reply covers every turn that is owed.
+const EAGERNESS = 'medium'
+
+// Per-reply parameters, by the kind of reply the overlay's floor asks for (overlay/voice/floor.js):
+// a reply to the user's turns may call tools; every other reply (an announcement, a tool result
+// to say) is speak-only, which assumes tool_choice 'none' still yields speech.
+export const RESPONSES = { turn: {}, speak: { tool_choice: 'none' } }
+
 /** The butler's Realtime session: always listening, and replying only when the overlay asks. */
 export function butlerSession(config) {
-  const { model, voice, transcribe, language, noise, maxTokens } = config.voice
+  const { model, voice, transcribe, language, audio, maxTokens } = config.voice
+  const setup = SETUPS[audio]
   const tools = readPrompt(config.root, 'butler-tools.json', true)
   if (!Array.isArray(tools)) throw fail(500, 'prompts/butler-tools.json must be a JSON array of tools')
   // No transcription prompt: it makes the transcriber drop the "?" the approval check relies on.
@@ -35,17 +56,16 @@ export function butlerSession(config) {
     audio: {
       input: {
         transcription,
-        noise_reduction: { type: noise },
-        // The server finds each turn, patiently, and stops the butler when the user talks over it.
-        // It never replies by itself: the overlay asks only for turns worth answering.
-        turn_detection: { type: 'semantic_vad', eagerness: 'low', create_response: false, interrupt_response: true },
+        noise_reduction: { type: setup.noise },
+        // The server finds each turn and never replies by itself: the overlay asks for every reply.
+        turn_detection: { type: 'semantic_vad', eagerness: EAGERNESS, create_response: false, interrupt_response: setup.interrupt },
       },
       output: { voice },
     },
   }
 }
 
-// → { value, model, expiresAt }, or throws an error with a status.
+// → { value, model, expiresAt, responses }, or throws an error with a status.
 export async function mintVoiceKey(config) {
   const { enabled, apiKey, model } = config.voice
   // Voice off: the overlay falls back to captions and typed input, and nothing reaches OpenAI.
@@ -59,5 +79,5 @@ export async function mintVoiceKey(config) {
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw fail(res.status, data.error?.message || `key request failed (${res.status})`)
-  return { value: data.value, model, expiresAt: data.expires_at }
+  return { value: data.value, model, expiresAt: data.expires_at, responses: RESPONSES }
 }

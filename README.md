@@ -170,7 +170,7 @@ And one agent:
 | **Type instead** | **Type a Request…** in the menu bar. Enter sends, Escape closes. |
 | **Quit** | **Quit** in the menu bar, or Ctrl-C in the terminal that started it. |
 
-**One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you. Talk over it to interrupt.
+**One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you. With a headset, talk over it to interrupt.
 
 **The menu bar seal** fills its ring while you talk, shows a pause sign while paused, and dims when the app has lost the core.
 
@@ -226,7 +226,7 @@ Set these in your shell or in `.env` at the repo root. Real environment variable
 | `LOOKMA_VOICE` | `marin` | The voice. |
 | `LOOKMA_TRANSCRIBE_MODEL` | `gpt-4o-transcribe` | Writes down what you say, for captions and the approval check. |
 | `LOOKMA_VOICE_LANGUAGE` | detected | The language you speak, as an ISO code (`en`, `zh`, `ja`), for a better transcript. |
-| `LOOKMA_VOICE_NOISE` | `far_field` | Microphone noise reduction: `far_field` for a room, `near_field` for a headset. |
+| `LOOKMA_AUDIO` | `room` | How you hear the voice: `room` (speakers) or `headset`. With a headset, talking over the voice cuts it off; in a room it finishes its sentence. Sets the microphone's noise reduction to match. |
 | `LOOKMA_VOICE_MAX_TOKENS` | `200` | The longest a spoken reply can be, in tokens. |
 | `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
 | `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |

@@ -97,11 +97,11 @@ The rest of this section is about Claude Code. Codex asks through its app-server
 
 ## When it listens
 
-While Lookma runs, voice is on and it is not paused, it listens. You just talk, from the desk or from across the room, and you can talk over the voice to interrupt it. macOS shows its microphone indicator the whole time. Pause from the menu bar, with ⌃⌥P or by saying “pause”, and the microphone is off until you resume.
+While Lookma runs, voice is on and it is not paused, it listens. You just talk, from the desk or from across the room. With a headset you can talk over the voice to interrupt it. macOS shows its microphone indicator the whole time. Pause from the menu bar, with ⌃⌥P or by saying “pause”, and the microphone is off until you resume.
 
 **One warm session.** The overlay (`overlay/voice.js`) keeps one OpenAI Realtime session connected over WebRTC, with the microphone attached. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_NO_VOICE=1` or no OpenAI key) there is no session and no microphone.
 
-**Turns.** The server finds them: semantic voice activity detection, at low eagerness, so a pause to think does not cut you off. Noise reduction is set for a room (`far_field`; `near_field` for a headset, with `LOOKMA_VOICE_NOISE`). Your speech stops the voice at once, but a turn does not answer itself: the server creates no reply on its own.
+**Turns.** The server finds them: semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the server creates no reply on its own.
 
 **No replies to silence or noise.** A microphone that is always on hears the whole room. So the page asks for a reply only when the turn's transcript means something:
 

@@ -37,7 +37,7 @@ export function loadConfig() {
       voice: env.LOOKMA_VOICE || 'marin',
       transcribe: env.LOOKMA_TRANSCRIBE_MODEL || 'gpt-4o-transcribe',
       language: env.LOOKMA_VOICE_LANGUAGE || '', // ISO 639-1, e.g. zh; unset, the transcriber detects it
-      noise: env.LOOKMA_VOICE_NOISE === 'near_field' ? 'near_field' : 'far_field', // near_field: a headset
+      audio: env.LOOKMA_AUDIO === 'headset' ? 'headset' : 'room', // the setup in core/voice-key.mjs
       maxTokens: Number(env.LOOKMA_VOICE_MAX_TOKENS) || 200, // the longest a spoken reply can be
     },
   }
