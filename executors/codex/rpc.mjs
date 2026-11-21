@@ -35,7 +35,7 @@ export function openServer({ command, args, env, log, onNotification, onRequest,
   function gone(code) {
     if (exited) return
     exited = true
-    for (const p of pending.values()) p.reject(new Error('Codex exited.'))
+    for (const p of pending.values()) p.reject(new Error(`Codex exited (${code}).`))
     pending.clear()
     onExit(code)
   }

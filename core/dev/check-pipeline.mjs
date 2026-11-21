@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Checks the core against the fake app and a stub executor (no Claude):
-// server rules, snapshot coalescing, routing (with the outbox's say and report entries), the
-// overlay's requests and their acks, unknown messages, the hands pipeline (grant, busy vs idle,
+// Checks the core against the fake app and a stub executor adapter, with this script as its tools
+// bridge on /ws/executor: server rules, snapshot coalescing, routing (with the outbox's say and
+// report entries, and the executor's cards), the overlay's requests and their acks, unknown
+// messages, the hands pipeline (grant, busy vs idle,
 // waiting plus go ahead, stale element, bad args, scroll, open, stop, one step at a time), pause
 // and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
@@ -39,20 +40,14 @@ const settle = p => p.then(v => ({ ok: true, v }), e => ({ ok: false, e }))
 
 // ---------------------------------------------------------------- setup
 
-// The stub keeps the ctx the core gives an executor: emit its events, and call the hands as the
-// agent's tool calls would.
+// The stub adapter records what the host asks of it and keeps the ctx: emit its events, and ask
+// the user as an agent's question would.
 const calls = []
-let emit, hands
+let emit, ask
 function stubExecutor(ctx) {
-  ;({ emit, hands } = ctx)
-  const rec = name => (...args) => calls.push({ name, args })
-  return {
-    start: async () => (ctx.emit({ type: 'status', status: 'ready' }), { name: 'stub' }),
-    prompt: rec('prompt'),
-    cancel: rec('cancel'),
-    answer: rec('answer'),
-    stop: async () => rec('stop')(),
-  }
+  ;({ emit, ask } = ctx)
+  const rec = name => async (...args) => void calls.push({ name, args })
+  return { start: rec('start'), prompt: rec('prompt'), interrupt: rec('interrupt'), close: rec('close') }
 }
 
 const config = await loadConfig()
@@ -73,6 +68,23 @@ fs.writeFileSync(config.appsFile, JSON.stringify({ Notes: true, Finder: true }))
 
 const app = startFakeApp({ port: PORT, idle: 10 })
 await app.ready
+
+// The tools bridge's side of /ws/executor: say and the hands, as the agent's tool calls would.
+const bridge = new WebSocket(`ws://127.0.0.1:${PORT}/ws/executor`)
+await new Promise(r => bridge.on('open', r))
+const replies = new Map() // call id -> { resolve, reject }
+bridge.on('message', raw => {
+  const m = JSON.parse(raw)
+  if (m.ok) replies.get(m.id).resolve(m.result)
+  else replies.get(m.id).reject(new Error(m.error))
+})
+let callIds = 0
+function hands(tool, args) {
+  const id = ++callIds
+  bridge.send(JSON.stringify({ type: 'call', id, tool, args }))
+  return new Promise((resolve, reject) => replies.set(id, { resolve, reject }))
+}
+const say = (speech, extra) => hands('say', { speech, ...extra })
 
 const overlay = new WebSocket(`ws://127.0.0.1:${PORT}/ws/overlay`, { origin: `http://127.0.0.1:${PORT}` })
 const states = []
@@ -130,31 +142,34 @@ const post = (p, body, type = 'application/json') =>
 
 {
   const r = await post('/api/tell', JSON.stringify({ text: 'open slack' }))
-  check('POST /api/tell starts a turn and prompts', r.ok && JSON.stringify(calls.at(-1)) === '{"name":"prompt","args":["open slack",{"steer":false}]}' && !!(await until(() => last().turn?.phase === 'working')), `status ${r.status}`)
+  check('POST /api/tell starts a turn and prompts', r.ok && JSON.stringify(calls.at(-1)) === '{"name":"prompt","args":["open slack"]}' && !!(await until(() => last().turn?.phase === 'working')), `status ${r.status}`)
   await until(() => last().executor.status === 'busy')
   check('executor shows busy during a turn', last().executor.status === 'busy')
   const steered = await request({ type: 'tell', text: 'actually open notes', source: 'voice' })
-  check('tell during a turn steers, acked "added"', acked(steered, { ok: true, state: 'added' }) && JSON.stringify(calls.at(-1)?.args) === '["actually open notes",{"steer":true}]' && !!(await until(() => last().turn.sent === 'actually open notes')), JSON.stringify(steered))
+  check('tell during a turn goes to the agent as a prompt too, acked "added"', acked(steered, { ok: true, state: 'added' }) && JSON.stringify(calls.at(-1)?.args) === '["actually open notes"]' && !!(await until(() => last().turn.sent === 'actually open notes')), JSON.stringify(steered))
   emit({ type: 'step', title: 'Read notes.txt' })
   check('a step updates turn.status', !!(await until(() => last().turn.status === 'Read notes.txt')))
-  emit({ type: 'say', speech: 'On it.' })
-  check('say is in the snapshot\'s outbox, as an entry of the turn', !!(await until(() => last().outbox?.find(e => e.speech === 'On it.' && e.display === 'On it.' && e.kind === 'info' && e.turnId === last().turn.id && e.delivered === null))))
+  const said = await say('On it.')
+  check('say through the bridge is in the snapshot\'s outbox, as an entry of the turn', said.text === 'said' && !!(await until(() => last().outbox?.find(e => e.speech === 'On it.' && e.display === 'On it.' && e.kind === 'info' && e.turnId === last().turn.id && e.delivered === null))))
+  const bad = await settle(say('Hm.', { kind: 'shout' }))
+  check('a say with a bad kind is refused, in words the agent reads', !bad.ok && /kind is one of info, question, confirm/.test(bad.e.message), bad.e?.message)
   emit({ type: 'task', id: 'a1', title: 'Sum receipts', status: 'running' })
   emit({ type: 'task', id: 'a1', status: 'done', result: { speech: 'Twelve thousand yen.', display: '¥12,000' } })
   check('the report is in the snapshot\'s outbox with taskId and title', !!(await until(() => last().outbox?.find(e => e.kind === 'report' && e.taskId === 'a1' && e.title === 'Sum receipts' && e.display === '¥12,000'))))
   check('the task row is done', !!(await until(() => last().tasks.find(t => t.id === 'a1')?.status === 'done')))
-  emit({ type: 'approval', id: 'ap1', title: 'Allow Bash?', detail: 'ls' })
-  await until(() => last().cards.some(c => c.id === 'ap1'))
+  const asked = ask({ title: 'Allow Bash?', detail: 'ls' })
+  const ap1 = (await until(() => last().cards.find(c => c.title === 'Allow Bash?')))?.id
   const { cards } = await (await fetch(`http://127.0.0.1:${PORT}/api/state`)).json()
-  check('a card is id, title, detail, source, turnId and createdAt, nothing else; raised in a turn, it is that turn\'s', JSON.stringify(Object.keys(cards.find(c => c.id === 'ap1')).sort()) === '["createdAt","detail","id","source","title","turnId"]' && cards.find(c => c.id === 'ap1').turnId === last().turn.id, JSON.stringify(cards))
-  const answered = await request({ type: 'answer', cardId: 'ap1', allow: true, via: 'voice' })
-  check('answering an executor card goes to the executor, acked', acked(answered, { ok: true }) && JSON.stringify(calls.at(-1)?.args) === '["ap1",true]' && !!(await until(() => !last().cards.some(c => c.id === 'ap1'))), JSON.stringify(answered))
-  const again = await request({ type: 'answer', cardId: 'ap1', allow: true, via: 'click' })
+  check('a card is id, title, detail, source, turnId and createdAt, nothing else; raised in a turn, it is that turn\'s', JSON.stringify(Object.keys(cards.find(c => c.id === ap1)).sort()) === '["createdAt","detail","id","source","title","turnId"]' && cards.find(c => c.id === ap1).turnId === last().turn.id && cards.find(c => c.id === ap1).source === 'executor', JSON.stringify(cards))
+  const answered = await request({ type: 'answer', cardId: ap1, allow: true, via: 'voice' })
+  check('answering an executor card resolves its ask, acked', acked(answered, { ok: true }) && (await asked) === true && !!(await until(() => !last().cards.some(c => c.id === ap1))), JSON.stringify(answered))
+  const again = await request({ type: 'answer', cardId: ap1, allow: true, via: 'click' })
   check('answering a card that is gone: acked "gone"', acked(again, { ok: false, error: 'gone' }), JSON.stringify(again))
-  emit({ type: 'approval', id: 'ap2', title: 'x' })
-  await until(() => last().cards.some(c => c.id === 'ap2'))
-  emit({ type: 'approvalGone', id: 'ap2' })
-  check('approvalGone removes the card', !!(await until(() => !last().cards.some(c => c.id === 'ap2'))))
+  const ctl = new AbortController()
+  const closed = ask({ title: 'x' }, ctl.signal)
+  await until(() => last().cards.some(c => c.title === 'x'))
+  ctl.abort()
+  check('a card the agent closes itself goes, and its ask is null', (await closed) === null && !!(await until(() => !last().cards.some(c => c.title === 'x'))))
   emit({ type: 'turnEnd', ok: true })
   check('turnEnd ends the turn', !!(await until(() => last().turn.phase === 'done')))
 }
@@ -341,7 +356,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   check('stop: acked', acked(stopped, { ok: true }), JSON.stringify(stopped))
   check('stop: the waiting step fails with "Cancelled"', !r.ok && /Cancelled/.test(r.e.message), r.e?.message)
   check('stop: queued steps are dropped too', !r2.ok && /Cancelled/.test(r2.e.message))
-  check('stop: executor cancelled and turn cancelled', calls.some(c => c.name === 'cancel') && !!(await until(() => last().turn.phase === 'cancelled')))
+  check('stop: executor interrupted and turn cancelled', calls.some(c => c.name === 'interrupt') && !!(await until(() => last().turn.phase === 'cancelled')))
   const idle = await request({ type: 'control', action: 'stop' })
   const odd = await request({ type: 'control', action: 'resume' })
   check('stop with nothing running, and an unknown action: acked as errors', acked(idle, { ok: false, error: 'nothing_running' }) && acked(odd, { ok: false, error: 'unknown_action' }), `${JSON.stringify(idle)} ${JSON.stringify(odd)}`)
@@ -370,7 +385,7 @@ let app2
   await request({ type: 'tell', text: 'write the summary', source: 'voice' })
   await until(() => last().turn?.phase === 'working' && last().turn.sent === 'write the summary')
   const count = name => calls.filter(c => c.name === name).length
-  const cancels = count('cancel')
+  const cancels = count('interrupt')
   const p = settle(hands('type', { label: 'Type', text: 'x' }))
   const q = settle(hands('see', { label: 'queued', app: 'Finder' }))
   await until(() => last().focus?.phase === 'waiting')
@@ -378,7 +393,7 @@ let app2
   const [r, r2] = await Promise.all([p, q])
   check('pause: acked', acked(paused, { ok: true }), JSON.stringify(paused))
   check('pause: the waiting step fails and the queued one is dropped', !r.ok && /Cancelled/.test(r.e.message) && !r2.ok && /Cancelled/.test(r2.e.message), r.e?.message)
-  check('pause: the executor is cancelled and the turn too', count('cancel') === cancels + 1 && !!(await until(() => last().turn.phase === 'cancelled')))
+  check('pause: the executor is interrupted and the turn cancelled', count('interrupt') === cancels + 1 && !!(await until(() => last().turn.phase === 'cancelled')))
   check('pause: paused is in the snapshot', !!(await until(() => last().paused === true)))
   check('pause: the app is told', !!(await until(() => JSON.stringify(app.notices.at(-1)) === '{"type":"paused","paused":true}')))
 
@@ -442,13 +457,14 @@ if (process.env.LOOKMA_LIVE_TESTS === '1') {
   await until(() => quitDone)
   const listening = await fetch(`http://127.0.0.1:${PORT}/api/state`).then(() => true, () => false)
   check('quit from the app: the core runs its shutdown', quitDone)
-  check('quit: the app is told to quit and the executor stops', app2.notices.at(-1)?.type === 'quit' && calls.at(-1)?.name === 'stop', `${JSON.stringify(app2.notices.at(-1))} ${calls.at(-1)?.name}`)
+  check('quit: the app is told to quit and the executor closes', app2.notices.at(-1)?.type === 'quit' && calls.at(-1)?.name === 'close', `${JSON.stringify(app2.notices.at(-1))} ${calls.at(-1)?.name}`)
   check('quit: the server stops listening', !listening)
 }
 
 // ---------------------------------------------------------------- done
 
 overlay.close()
+bridge.close()
 app2.close()
 fs.rmSync(DATA, { recursive: true, force: true })
 console.log(failures ? `${failures} FAILED` : 'all passed')

@@ -9,12 +9,12 @@ How the pieces talk. The core holds one model: the turn, the focus (the current 
   <img src="images/architecture.svg" width="100%" alt="You talk to the overlay in Lookma.app, which streams your microphone to OpenAI Realtime while it listens. The overlay and the app connect to the core on 127.0.0.1, which prompts Claude Code and runs each hands step through the app.">
 </picture>
 
-Three WebSockets meet at the core: the overlay page on `/ws/overlay`, the app on `/ws/app`, and the executor adapter's own connection on `/ws/executor` (the agent's tools bridge).
+Three WebSockets meet at the core: the overlay page on `/ws/overlay`, the app on `/ws/app`, and the agent's tools bridge on `/ws/executor`.
 
-- **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/hook`, `/api/state`, `/api/tell` and `/api/voice/grant`. Beside the overlay it serves the selected voice provider's page half, `/voices/<name>/page.js` (and `/voices/<name>/page/*`), and nothing else of that folder.
+- **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/api/state`, `/api/tell` and `/api/voice/grant`. Beside the overlay it serves the selected voice provider's page half, `/voices/<name>/page.js` (and `/voices/<name>/page/*`), and nothing else of that folder.
 - **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, and the menu bar item (pause, resume, type, quit), and makes no decisions.
 - **overlay** (`overlay/`) is a page loaded by the app's full-screen, click-through WKWebView. It renders core state and runs the realtime voice session. It also opens in a normal browser for development.
-- **executor adapter** (`executors/<name>/`) wraps one agent behind the contract below. v1 ships `claude` and `codex`.
+- **executor adapter** (`executors/<name>/`) wraps one agent behind the contract below, and the core's executor host (`core/executor/host.mjs`) is the only code that runs it. `claude` and `codex` ship.
 
 Port: `LOOKMA_PORT`, default 8790. During development use another port (the dev scripts default to 8791), because your everyday Lookma may still hold 8790.
 
@@ -55,7 +55,7 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
   - `rect` is the target's frame and `point` is where the ghost cursor goes;
   - `background: true` means it is acting without bringing the target forward, because the user is busy;
   - `phase: 'waiting'` means it needs the front and is waiting for the user to stop. The overlay shows the edge hint.
-- `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app. `turnId` is the turn that was working when the card was raised (null outside a turn, e.g. a startup card); stopping that turn removes its cards.
+- `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app. `turnId` is the turn that was working when the card was raised (null outside a turn, e.g. a startup card). A stop withdraws every open card.
 - `tasks` are background work with no screen presence. It is shown yellow.
 - `turn.said` counts the lines the work said during the turn (see the outbox below).
 - `outbox` is what the user is owed by voice, oldest first. See The outbox below.
@@ -108,7 +108,7 @@ Requests carry an `id` (`r1`, `r2`, … per page) and get exactly one `ack`, to 
 | `{ type: 'answer', id, cardId, allow, via: 'voice' \| 'click' }` | `{ ok: true }`, or `{ ok: false, error: 'gone' }` |
 | `{ type: 'control', id, action: 'stop' \| 'go_ahead' \| 'pause' }` | `{ ok: true }`, or `{ ok: false, error: 'nothing_running' \| 'not_waiting' \| 'unknown_action' }` |
 
-- `stop` stops the working turn (the executor's `cancel`, the waiting hands step fails, queued steps drop) and removes that turn's cards. `go_ahead` lets a step waiting with `focus.phase: 'waiting'` act now. `pause` is idempotent (see Pause and quit).
+- `stop` stops the working turn: the executor host interrupts the agent behind its stop gate (see Executor contract), the waiting hands step fails, queued steps drop and every open card is withdrawn. `go_ahead` lets a step waiting with `focus.phase: 'waiting'` act now. `pause` is idempotent (see Pause and quit).
 - The page's `request` resolves `{ ok: false, error: 'not connected' }` when the socket is closed or closes before the ack, and `{ ok: false, error: 'no answer' }` after 3 s. It never resends.
 
 Without an ack:
@@ -174,13 +174,13 @@ Core → app, besides requests:
 
 The core is the only place where `paused` changes; the overlay and the app only ask.
 
-- **Pause** (`control` `pause` from the overlay, or `pause` from the app). If a turn is working, the core stops it exactly as `stop` does (the executor's `cancel`, the waiting hands step fails, queued steps drop, its cards go). Then `paused` becomes true. While paused:
+- **Pause** (`control` `pause` from the overlay, or `pause` from the app). If a turn is working, the core stops it exactly as `stop` does. Then `paused` becomes true. While paused:
   - the overlay closes the voice session entirely (WebRTC closed, mic track stopped), so nothing is heard, sent or billed, and the voice stops talking; what is owed stays in the outbox;
   - the capsule shows "Paused" and how to resume: the menu bar or ⌃⌥P;
   - marks clear, and the hands refuse every step;
   - `tell` is refused with the same hint (its ack's `error`; `POST /api/tell` answers 409).
 - **Resume** (`resume` from the app). `paused` becomes false. The overlay reconnects the warm voice session, with the microphone. Nothing else starts: a turn the pause stopped stays stopped until the user asks again.
-- **Quit** (`quit` from the app). The core runs its usual shutdown, the same as Ctrl-C: `{ type: 'quit' }` to the app, the executor's `stop`, the server closes and the process exits, so the `lookma` command ends. If the core is not reachable, or does not answer within 5 s, the app quits by itself.
+- **Quit** (`quit` from the app). The core runs its usual shutdown, the same as Ctrl-C: `{ type: 'quit' }` to the app, the executor's `close`, the server closes and the process exits, so the `lookma` command ends. If the core is not reachable, or does not answer within 5 s, the app quits by itself.
 
 The app's menu bar item, the seal, shows the state the core and the page last sent: its ring filled while the user speaks, a pause sign while paused, and dimmed while not connected. Its menu has Pause or Resume (⌃⌥P), Type a Request…, and Quit.
 
@@ -223,40 +223,67 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
 
 ## Executor contract
 
+An executor adapter is a driver for one agent session. The core owns the user's turn, the cards, the tools and the outbox; the executor host (`core/executor/host.mjs`) loads the adapter, and the adapter only translates: prompts and an interrupt go down, the agent's activity comes up.
+
 ```js
 // executors/<name>/index.mjs
-export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promise<result>, config, options, log }
-  → { start({ dirs }) → Promise<{ name }>,
-      prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
-      connect?(ws), hook?(body) }
+export function create(ctx) → {
+  start({ dirs }) → Promise   // resolves when the agent can take a prompt and call its tools;
+                              // rejects in words. Called again after close() (a restart).
+  prompt(text) → Promise      // deliver one user message; rejects if it could not
+  interrupt() → Promise       // stop the current work; resolves when the agent is idle and nothing
+                              // of the stopped work will be emitted or called any more
+  close() → Promise           // end the session and every child process
+}
+
+ctx = {
+  emit(event),
+  tools: { server: 'lookma', mcp(extras?) → { command, args, env } },   // the tools bridge to spawn
+  ask({ title, detail }, signal?) → Promise<true | false | null>,        // a card; null: withdrawn
+  options,        // the adapter's settings, from its manifest, validated
+  instructions,   // the text of prompts/executor.md
+  sessionDir,     // <data>/sessions/<name>, created, the adapter's to fill
+  env,            // the environment for child processes, without other plug-ins' secrets
+  log,
+}
 ```
 
-- `prompt` gets `steer: true` when a turn is already running: the text is a correction to it.
-- `connect` gets each socket accepted on `/ws/executor`, and `hook` each body POSTed to `/hook`. An adapter that needs neither leaves them out; the core then closes `/ws/executor` sockets (code 4004).
-- `executors/<name>/manifest.mjs` (a voice has one too, in `voices/<name>/`) exports `default { title, settings, checks? }`, read and validated only by `core/plugins.mjs`. A setting is `{ default, help, env?, secret?, required? }`: its type is the type of `default` (string, boolean written `1` or `0`, number), its name is `LOOKMA_<NAME>_<KEY>` unless `env` names a well-known variable (`OPENAI_API_KEY`), an empty value is unset, and `secret` is never printed. The adapter gets the checked values as `ctx.options`. `checks` is a list of functions `options => finding`, run by `lookma doctor` and before `lookma start`. A manifest may import only Node's own modules and the helpers `ok`, `warn`, `fail`, `sh` and `atLeast` from `core/doctor.mjs`, so it works before `npm install`.
-
-The adapter emits:
+Events:
 
 ```js
-{ type: 'status', status: 'starting' | 'ready' | 'down', detail }
-{ type: 'turnStart' }  { type: 'turnEnd', ok }
-{ type: 'step', title }                          // non-GUI step of the main turn
-{ type: 'say', speech, display, kind }
+{ type: 'turnStart' }                       // the agent became busy without a prompt from the core
+{ type: 'turnEnd', ok, summary?, error? }   // the agent became idle; error says why it failed
+{ type: 'step', title }                     // a step of the main work that is not on screen
 { type: 'task', id, title, status: 'running' | 'done' | 'failed', action, result: { speech, display } }
-{ type: 'approval', id, title, detail }          // one per dialog; the adapter merges its own routes
-{ type: 'approvalGone', id }                      // answered elsewhere or closed
+{ type: 'down', detail }                    // the session died by itself
 ```
 
-GUI steps are not in the contract. They arrive as hands tool calls, which the adapter forwards to `ctx.hands`.
+- **Steering.** `prompt` while the agent works adds the text to the running work as soon as the agent can take it; it never restarts the conversation and is never lost.
+- **Cards.** `await ctx.ask(card)` is `true` or `false`, the user's answer, or `null` when the card was withdrawn (a stop, a restart, close, or the adapter's own `signal`, for a request the agent closed itself); the adapter then answers its agent "deny". Approve means once: an adapter never maps a yes to an "always allow" option.
+- **Steps.** `step.title` comes from `core/executor/steps.mjs`, `title(kind, detail)`; calls to `ctx.tools.server` are never steps (the hands show themselves).
+- **The host** owns everything else, once:
+  - **status** `starting` until `start()` resolves, then `ready`; `down` when a start fails, after `close`, or when recovery is used up;
+  - **the prompt line**: prompts go to the adapter one at a time, in order, only while `ready` and not stopping; a rejected `prompt` fails the turn with its reason;
+  - **the stop gate**: from the core's stop until `interrupt()` resolves, the adapter's events are dropped, tool calls are refused, open cards are withdrawn, the hands stop, and prompts told before the stop are discarded;
+  - **recovery**: a `down` event, or an `interrupt()` that has not resolved after 10 s, fails the running turn with the reason, closes the session and starts it again (status `starting`, "…; restarting"); a second failure within a minute leaves it `down`;
+  - **the turn text**: a failed turn that said nothing tells "That did not work: <error>."; `summary` goes to the log only.
+- `lookma start` launches the app without waiting for the executor: prompts told while it starts wait in the host.
+- `executors/<name>/manifest.mjs` (a voice has one too, in `voices/<name>/`) exports `default { title, settings, checks? }`, read and validated only by `core/plugins.mjs`. A setting is `{ default, help, env?, secret?, required? }`: its type is the type of `default` (string, boolean written `1` or `0`, number), its name is `LOOKMA_<NAME>_<KEY>` unless `env` names a well-known variable (`OPENAI_API_KEY`), an empty value is unset, and `secret` is never printed and kept out of other plug-ins' `ctx.env`. The adapter gets the checked values as `ctx.options`. `checks` is a list of functions `options => finding`, run by `lookma doctor` and before `lookma start`. A manifest may import only Node's own modules and the helpers `ok`, `warn`, `fail`, `sh` and `atLeast` from `core/doctor.mjs`, so it works before `npm install`.
 
-**The tools bridge.** Both adapters give their agent `say` and the hands through `core/executor/bridge.mjs`, a stdio MCP server that the agent spawns with `LOOKMA_CORE_URL` set. It exposes the tools as `core/tools.mjs` defines them and connects to `/ws/executor`, the adapter's `connect`, where `core/executor/tool-link.mjs` serves them:
+GUI steps are not in the contract. They arrive as hands tool calls through the tools bridge.
 
-- bridge → core: `{ type: 'say', speech, display, kind }` and `{ type: 'hands', id, tool, args }`;
-- core → bridge: `{ type: 'res', id, ok, result | error }`, the hands call's result (`{ text, image? }`) or its error.
+**The tools bridge.** The agent gets `say` and the hands from `core/executor/bridge.mjs`, a stdio MCP server it spawns from `ctx.tools.mcp(extras)`. The spec's environment carries `LOOKMA_CORE_URL` and `LOOKMA_TOOLS` (the server's name, its tools as `core/tools.mjs` defines them, and the `extras`: `toolMeta`, merged into each tool's `_meta`, and the server's `instructions`). The bridge dials `/ws/executor` before it answers MCP, then pipes every call:
 
-The bridge returns `see`'s screenshot as an MCP image, and an error as a tool error the agent reads.
+- bridge → host: `{ type: 'call', id, tool, args }`;
+- host → bridge: `{ type: 'res', id, ok, result | error }`: `{ text, image? }` (a `say` is `{ text: 'said' }`), or the error the agent reads.
+
+The bridge returns `see`'s screenshot as an MCP image, and an error as a tool error.
+
+**Conformance.** `core/dev/check-executors.mjs` runs one list of scenarios over every executor with a `dev/fake-agent.mjs`, a script that speaks the agent's protocol in place of its binary: ready, prompts, tools through the bridge, cards allowed, declined and withdrawn, steering, a stop and its stragglers, a stop that never resolves, the agent dying, and `close`.
 
 ### Claude Code adapter (`executors/claude/`)
+
+Not yet on the contract above: this tmux adapter is still the earlier one (with `connect`, `hook` and `approval` events), and a headless adapter on the current contract replaces it. Until then, use `--agent codex`.
 
 - **Run.** Interactive `claude` runs in a tmux session (`lookma`; `tmux attach -t lookma` to watch). Its working dir is a generated session dir holding `.mcp.json`, `settings.json` and the executor prompt (`executor.md`, copied from `prompts/executor.md`).
   - Flags: `--model`, `--permission-mode`, `--settings`, `--append-system-prompt-file`, `--dangerously-load-development-channels server:lookma`, then `LOOKMA_CLAUDE_FLAGS` (the user's folders are in the settings, see Folders below).
@@ -278,25 +305,28 @@ The bridge returns `see`'s screenshot as an MCP image, and an error as a tool er
 
 ### Codex adapter (`executors/codex/`)
 
-- **Run.** `codex app-server` runs as a child process, speaking newline-delimited JSON-RPC on stdio (`rpc.mjs`), with `--strict-config`, the login kept in a file (`cli_auth_credentials_store="file"`), and the features `apps`, `plugins`, `computer_use`, `browser_use`, `multi_agent`, `memories` and `image_generation` turned off. Lookma's own OpenAI key is not passed on. It is checked against Codex 0.163.0; app-server is experimental.
+- **Run.** `codex app-server` runs as a child process, speaking newline-delimited JSON-RPC on stdio (`rpc.mjs`), with `--strict-config`, the login kept in a file (`cli_auth_credentials_store="file"`), and the features `apps`, `plugins`, `computer_use`, `browser_use`, `multi_agent`, `memories` and `image_generation` turned off. Its environment is `ctx.env`, so the voice's OpenAI key is not passed on. It is checked against Codex 0.163.0; app-server is experimental.
 - **Isolation.** `CODEX_HOME` is `<data>/sessions/codex/home`, which holds only a link to the user's `auth.json`: the login is shared, while the user's own config, MCP servers and plugins stay out. The thread's working dir is the empty `<data>/sessions/codex/work`, so no `AGENTS.md` is read.
-- **Handshake.** `initialize` (with `experimentalApi`, and the streaming deltas and usage notifications opted out), `initialized`, then one `thread/start` for the whole run:
+- **Start.** `initialize` (with `experimentalApi`, and the streaming deltas and usage notifications opted out), `initialized`, then one `thread/start` per session:
   - `cwd`: the work dir; `model`: `LOOKMA_CODEX_MODEL` or Codex's default; `ephemeral: true`;
   - `approvalPolicy: 'on-request'`, `sandbox: 'workspace-write'`, `config.sandbox_workspace_write: { writable_roots: <the user's dirs>, network_access: false }`;
-  - `developerInstructions`: `prompts/executor.md`, after Codex's own base prompt;
-  - `config.mcp_servers.lookma`: `mcp.mjs` (the tools bridge) with `LOOKMA_CORE_URL`, `default_tools_approval_mode: 'approve'` and `tool_timeout_sec: 600`, since a hands call may wait on the user's card.
-- **Ready** once the thread has started and the bridge has connected; prompts told before that are queued. `mcpServer/startupStatus/updated` with `failed` for `lookma`, or app-server exiting, is `down`.
-- **Turns.** The adapter runs prompts and cancels one after another, and picks steer or start from its own record of the running Codex turn:
-  - `prompt` → `turn/start { threadId, input: [{ type: 'text', text, text_elements: [] }] }`, or `turn/steer { threadId, input, expectedTurnId }` while a turn runs; a refused steer (the turn has just ended) becomes a `turn/start`;
-  - `cancel` → `turn/interrupt { threadId, turnId }`. The core has already ended its turn, so the interrupted turn's `turn/completed` gives no `turnEnd`, and the next prompt waits for it (at most 5 s);
-  - `turn/started` → `turnStart`, `turn/completed` → `turnEnd` with `ok` when its status is `completed`; a failed `turn/start`, or app-server exiting mid-turn, is `turnEnd` with `ok: false`;
-  - `item/started` → `step`: a command (as Codex reads it, e.g. "Read notes.txt", else the command line), a file change, a web search. The hands, reasoning and messages give none; the model's text replies are only logged.
-- **Approvals.** One card per request, id `codex-<request id>`:
+  - `developerInstructions`: `ctx.instructions`, after Codex's own base prompt;
+  - `config.mcp_servers.lookma`: `ctx.tools.mcp()`, with `default_tools_approval_mode: 'approve'` and `tool_timeout_sec: 600`, since a hands call may wait on the user's card.
 
-  | Request | Card | Approve | Decline |
+  `start` resolves once `mcpServer/startupStatus/updated` says `lookma` is `ready` (and rejects if it failed). A restart begins a fresh thread.
+- **Turns.**
+  - `prompt` → `turn/start { threadId, input: [{ type: 'text', text, text_elements: [] }] }`, or `turn/steer { threadId, input, expectedTurnId }` while a Codex turn runs; a refused steer (the turn has just ended) becomes a `turn/start`;
+  - `interrupt` → `turn/interrupt { threadId, turnId }`, resolving on that turn's `turn/completed`;
+  - `turn/started` → `turnStart`; `turn/completed` → `turnEnd` with `ok` when its status is `completed`, `error` from the turn's error, and the last agent message as `summary`;
+  - `item/started` → `step`: a command (as Codex reads it, e.g. "Read notes.txt", else the command line), a file change, a web search, another MCP server's tool. The hands, reasoning and messages give none;
+  - app-server exiting by itself is `down`.
+- **Cards.** One per request, through `ctx.ask`:
+
+  | Request | Card | Approve | Decline or withdrawn |
   |---|---|---|---|
   | `item/commandExecution/requestApproval` | "Run this command?" (or network access, or input to a running command), with the command and Codex's reason | `{ decision: 'accept' }` | `{ decision: 'decline' }` |
   | `item/fileChange/requestApproval` | "Change these files?", with the paths of its file change | `{ decision: 'accept' }` | `{ decision: 'decline' }` |
+  | `item/permissions/requestApproval` | "Allow more access?", with what is asked for and why | `{ permissions: <as asked>, scope: 'turn' }` | `{ permissions: {}, scope: 'turn' }` |
 
-  Never `acceptForSession`: Approve is this once. If a request does not offer `accept`, Approve answers `decline`. A card closes on `serverRequest/resolved`, at the end of its turn, or when app-server exits. Without a card: `item/permissions/requestApproval` gets no extra permissions, `mcpServer/elicitation/request` is declined and `currentTime/read` is answered. Any other request gets the JSON-RPC error `-32601`, so no request can block a turn.
-- **Not used.** `hook`, `task` (Codex's subagents are off) and a startup card.
+  Never `acceptForSession` or `scope: 'session'`: Approve is this once. If a request does not offer `accept`, Approve answers `decline`. A card is withdrawn, with no answer, on `serverRequest/resolved`, at the end of its turn, or when app-server exits. Without a card: `mcpServer/elicitation/request` is declined and `currentTime/read` is answered. Any other request gets the JSON-RPC error `-32601`, so no request can block a turn.
+- **Not used.** `task` (Codex's subagents are off).

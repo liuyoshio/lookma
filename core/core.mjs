@@ -1,11 +1,9 @@
 // The core: one place that decides. Holds turn, focus, attention, cards, tasks, the outbox and
 // paused; runs the hands pipeline; answers the overlay's requests (tell, answer, control: stop,
 // go ahead, pause) with one ack each, takes its receipts for the outbox, and the app's pause,
-// resume and quit; talks to one executor through its adapter, and grants the overlay its voice
-// sessions through the voice host (voice/host.mjs). Transport is server.mjs's: it hands each
-// socket to an entry point.
-import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+// resume and quit; talks to one executor through the executor host (executor/host.mjs), and grants
+// the overlay its voice sessions through the voice host (voice/host.mjs). Transport is
+// server.mjs's: it hands each socket to an entry point.
 import { createLog, logUnknown, cancelled } from './util.mjs'
 import { createStore } from './state.mjs'
 import { createAppLink } from './app-link.mjs'
@@ -13,13 +11,15 @@ import { createGrants } from './grants.mjs'
 import { createHands } from './hands.mjs'
 import { createOutbox, RECEIPTS } from './outbox.mjs'
 import { createVoiceHost } from './voice/host.mjs'
+import { createExecutorHost } from './executor/host.mjs'
 
 const MAX_TASKS = 8
 // The user counts as busy until this long after their last input; steps that need the front wait.
 const IDLE_S = 3
 
-// onQuit: the app asked to quit; the CLI runs its graceful shutdown.
-export async function createCore(config, { log = createLog(), createExecutor, onQuit = () => {} } = {}) {
+// onQuit: the app asked to quit; the CLI runs its graceful shutdown. createExecutor and timing go
+// to the executor host, for checks.
+export async function createCore(config, { log = createLog(), createExecutor, timing, onQuit = () => {} } = {}) {
   const store = createStore()
   let n = 0
   const nextId = prefix => `${prefix}${++n}`
@@ -37,7 +37,7 @@ export async function createCore(config, { log = createLog(), createExecutor, on
 
   // ---------------------------------------------------------------- cards
 
-  const waiters = new Map() // core card id -> answer(allow)
+  const waiters = new Map() // card id -> answer(allow): every card has one
 
   // Every change of cards goes through here, so the announcements follow: the head card (the one
   // on screen) has an outbox entry, and an entry goes when its card goes, and only then (held: a
@@ -57,14 +57,15 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     changeCards(cards => cards.filter(c => c.id !== id))
   }
 
-  // A card raised during a turn belongs to it (turnId) and goes when that turn is stopped.
+  // A card raised during a turn belongs to it (turnId).
   function addCard(card) {
     changeCards(cards => [...cards, { ...card, turnId: working() ? store.data.turn.id : null, createdAt: Date.now() }])
     log('card', { id: card.id, source: card.source, title: card.title })
   }
 
-  // A card the core raises for itself; resolves with the answer.
-  function ask({ title, detail }, signal) {
+  // A card; resolves with the answer, rejects when signal aborts (and the card goes). source:
+  // 'core' when the core asks for itself (the hands), 'executor' for the agent's questions.
+  function ask({ title, detail, source = 'core' }, signal) {
     return new Promise((resolve, reject) => {
       const id = nextId('card')
       const onAbort = () => {
@@ -77,7 +78,7 @@ export async function createCore(config, { log = createLog(), createExecutor, on
         resolve(allow)
       })
       signal.addEventListener('abort', onAbort, { once: true })
-      addCard({ id, title, detail, source: 'core' })
+      addCard({ id, title, detail, source })
     })
   }
 
@@ -112,21 +113,23 @@ export async function createCore(config, { log = createLog(), createExecutor, on
   }
 
   // A turn that ends always leaves something to tell: when the work said nothing, the core says
-  // it ended. The count is on the turn, not read back from the outbox, which prunes what was
-  // delivered. A stopped turn's untold lines and its cards are moot; cards from outside a turn
-  // (startup) stay.
-  function endTurn(phase) {
+  // it ended, and why it failed when the executor knows. The count is on the turn, not read back
+  // from the outbox, which prunes what was delivered. A stopped turn's untold lines are moot (its
+  // cards went with the stop: the host withdraws every open card).
+  function endTurn(phase, error) {
     const turn = store.data.turn
     if (turn?.phase !== 'working') return
-    if (phase !== 'cancelled' && !turn.said) say({ speech: phase === 'done' ? 'Done.' : 'That did not work.' })
+    if (phase !== 'cancelled' && !turn.said) say({ speech: phase === 'done' ? 'Done.' : failed(error) })
     store.update(s => {
       s.turn.phase = phase
       s.turn.endedAt = Date.now()
     })
-    if (phase === 'cancelled') {
-      outbox.drop(e => e.turnId === turn.id && !e.delivered)
-      changeCards(cards => cards.filter(c => c.turnId !== turn.id))
-    }
+    if (phase === 'cancelled') outbox.drop(e => e.turnId === turn.id && !e.delivered)
+  }
+
+  function failed(error) {
+    if (!error) return 'That did not work.'
+    return `That did not work: ${error}${/[.!?]$/.test(error) ? '' : '.'}`
   }
 
   // A finished task's result is a report in the outbox.
@@ -154,58 +157,46 @@ export async function createCore(config, { log = createLog(), createExecutor, on
 
   // ---------------------------------------------------------------- executor
   //
-  // The contract (docs/protocol.md): executors/<name>/index.mjs exports
-  //   create({ emit, hands(tool, args), config, options, log }), options being its own settings
-  //     → { start({ dirs }) → Promise<{ name }>, prompt(text, { steer }), cancel(), answer(id, allow),
-  //         stop(), connect?(ws), hook?(body) }
-  // connect gets the sockets on /ws/executor, hook the bodies POSTed to /hook; an adapter that
-  // needs neither leaves them out. The adapter emits the events handled here.
+  // The host owns the adapter, its status, the tools bridge and the stop gate; what reaches here
+  // belongs to the work that is running.
 
   const unknownEvent = logUnknown(log, 'executor')
 
   function onExecutorEvent(e) {
     switch (e.type) {
-      case 'status':
-        store.update(s => (s.executor = { name: s.executor.name, status: e.status, detail: e.detail || '' }))
-        log('executor', e.status, e.detail || '')
-        break
       case 'turnStart':
         if (!working()) newTurn('')
         break
       case 'turnEnd':
-        endTurn(e.ok === false ? 'failed' : 'done')
+        endTurn(e.ok ? 'done' : 'failed', e.error)
         break
       case 'step':
         store.update(s => {
           if (s.turn?.phase === 'working') s.turn.status = e.title
         })
         break
-      case 'say': {
-        const said = say(e)
-        log('say', said.kind, said.display)
-        break
-      }
       case 'task':
         upsertTask(e)
-        break
-      case 'approval':
-        addCard({ id: e.id, title: e.title, detail: e.detail || '', source: 'executor' })
-        break
-      case 'approvalGone':
-        if (store.data.cards.some(c => c.id === e.id)) {
-          removeCard(e.id)
-          log('card gone', e.id)
-        }
         break
       default:
         unknownEvent(e.type)
     }
   }
 
-  const { name, dir, options } = config.executor
-  const factory = createExecutor || (await import(pathToFileURL(path.join(dir, 'index.mjs')).href)).create
-  const executor = factory({ emit: onExecutorEvent, hands: hands.run, config, options, log: createLog(name) })
-  store.update(s => (s.executor = { name, status: 'starting', detail: '' }))
+  store.update(s => (s.executor = { name: config.executor.name, status: 'starting', detail: '' }))
+  const executor = await createExecutorHost(config, {
+    onEvent: onExecutorEvent,
+    onStatus: (status, detail) => store.update(s => (s.executor = { name: s.executor.name, status, detail })),
+    say(line) {
+      const said = say(line)
+      log('say', said.kind, said.display)
+    },
+    hands,
+    ask,
+    log,
+    create: createExecutor,
+    timing,
+  })
 
   // ---------------------------------------------------------------- routing
 
@@ -215,10 +206,9 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     if (store.data.paused) throw new Error('Paused. Resume from the menu bar or with ⌃⌥P first.')
     if (store.data.executor.status === 'down') throw new Error('The executor is not running.')
     log('tell', source, text)
-    const steer = working()
-    if (steer) store.update(s => (s.turn.sent = text))
+    if (working()) store.update(s => (s.turn.sent = text))
     else newTurn(text)
-    executor.prompt(text, { steer })
+    executor.prompt(text)
     return store.data.turn
   }
 
@@ -227,21 +217,17 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     if (!card) return false
     log('answer', { cardId, allow: !!allow, via })
     removeCard(cardId)
-    if (card.source === 'core') {
-      waiters.get(cardId)(!!allow)
-      waiters.delete(cardId)
-    } else {
-      executor.answer(cardId, !!allow)
-    }
+    waiters.get(cardId)(!!allow)
+    waiters.delete(cardId)
     return true
   }
 
-  // "Stop": false when no turn is working.
+  // "Stop": false when no turn is working. The host stops the hands and the agent; the turn ends
+  // now, and the gate covers the time until the agent confirms.
   function stop() {
     if (!working()) return false
     log('stop')
-    hands.abort()
-    executor.cancel()
+    executor.interrupt()
     endTurn('cancelled')
     return true
   }
@@ -340,16 +326,13 @@ export async function createCore(config, { log = createLog(), createExecutor, on
       app.attach(ws)
       app.send({ type: 'paused', paused: store.data.paused })
     },
-    connectExecutor(ws) {
-      if (executor.connect) executor.connect(ws)
-      else ws.close(4004, 'this executor takes no connection')
-    },
-    hook: body => executor.hook?.(body),
+    connectExecutor: ws => executor.connect(ws),
 
-    startExecutor: dirs => executor.start({ dirs }),
+    // Resolves once the executor is ready or down; the CLI does not wait for it.
+    startExecutor: dirs => executor.start(dirs),
     async stop() {
       app.quit()
-      await executor.stop()
+      await executor.close()
     },
   }
 }

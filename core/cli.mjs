@@ -107,29 +107,25 @@ async function start(args) {
   const { createCore } = await import('./core.mjs')
   const { startServer } = await import('./server.mjs')
 
-  // Ctrl-C, SIGTERM, Quit in the app's menu bar, or an executor that does not start: the app
-  // quits, the executor stops, we exit.
+  // Ctrl-C, SIGTERM or Quit in the app's menu bar: the app quits, the executor stops, we exit.
   let stopping = false
-  async function shutdown(why, code = 0) {
+  async function shutdown(why) {
     if (stopping) return
     stopping = true
     log('stopping', why)
     await core.stop().catch(err => log('stop failed', err.message))
     server.close()
-    process.exit(code)
+    process.exit(0)
   }
 
   const core = await createCore(config, { log, onQuit: () => shutdown('quit from the app') })
   const server = await startServer({ config, core, log })
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
-  try {
-    log('executor started', await core.startExecutor(dirs))
-  } catch (err) {
-    console.error(`lookma: the executor did not start: ${err.message}`)
-    return shutdown('the executor did not start', 1)
-  }
-  // Last, so that a start that fails leaves no app behind: one not yet connected cannot be told to quit.
+  // Not awaited: the overlay shows the executor starting, prompts told meanwhile wait in the host,
+  // and a card raised during the start has an overlay to appear in. A start that fails leaves the
+  // executor down, with the reason in the overlay and this log.
+  core.startExecutor(dirs)
   if (config.launchApp) launchApp(config)
   else log('LOOKMA_NO_APP=1: not launching the app')
 }

@@ -75,6 +75,11 @@ async function declared() {
   return names
 }
 
+function envFor(names, owner) {
+  const theirs = name => names.get(name)?.secret && names.get(name).owner !== owner
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !theirs(name)))
+}
+
 // An empty value counts as unset, as for every setting.
 function oneOf(name, values, fallback = values[0]) {
   const v = process.env[name]
@@ -115,7 +120,9 @@ export async function loadConfig(settings = {}) {
     port: Number(env.LOOKMA_PORT || 8790),
     dataDir,
     appsFile: path.join(dataDir, 'apps.json'),
-    executor, // executors/<name>, loaded (core/plugins.mjs)
+    // executors/<name>, loaded (core/plugins.mjs), with the environment for its child processes:
+    // everything but the secrets other plug-ins declared (the voice's API key stays with the core).
+    executor: { ...executor, env: envFor(names, `executors/${executor.name}`) },
     voice: {
       provider, // voices/<name>, loaded; null with LOOKMA_VOICE=off (text only, nothing goes to a voice service)
       // Why there is no voice, or null. The overlay then shows captions and takes typed requests.

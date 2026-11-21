@@ -68,11 +68,6 @@ export function startServer({ config, core, log }) {
       }
       const route = `${req.method} ${url.pathname}`
 
-      if (route === 'POST /hook') {
-        json(res, 200, {}) // a hook blocks its tool call until it is answered
-        core.hook(body)
-        return
-      }
       if (route === 'GET /api/state') return json(res, 200, core.store.snapshot())
       if (route === 'POST /api/tell') {
         try {

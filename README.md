@@ -282,12 +282,11 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 The agent is anything behind a small adapter in `executors/<name>/`: a `manifest.mjs` that declares its settings and checks, and an `index.mjs`:
 
 ```js
-export function create(ctx)  // ctx: { emit(event), hands(tool, args), config, options, log }
-  → { start({ dirs }), prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
-      connect?(ws), hook?(body) }
+export function create(ctx)  // ctx: { emit, tools: { server, mcp(extras) }, ask, options, instructions, sessionDir, env, log }
+  → { start({ dirs }), prompt(text), interrupt(), close() }   // each returns a promise
 ```
 
-It emits `status`, `turnStart` / `turnEnd`, `step`, `say`, `task` and `approval` / `approvalGone`. On-screen steps are not part of the contract: the agent calls the hands tools, and the adapter forwards each call to `ctx.hands`. Two ship today, `claude` and `codex`; pick one with `LOOKMA_EXECUTOR`. The full contract is in [docs/protocol.md](docs/protocol.md#executor-contract).
+It emits `turnStart` / `turnEnd`, `step`, `task` and `down`, and asks you with `ctx.ask`. The agent gets `say` and the hands from Lookma's tools bridge, which it spawns from `ctx.tools.mcp()`, so on-screen steps are not part of the adapter at all. Lookma's executor host owns the rest for every agent: readiness, the order of prompts, the stop gate and one restart. Two ship today, `claude` and `codex`; pick one with `LOOKMA_EXECUTOR`. The full contract is in [docs/protocol.md](docs/protocol.md#executor-contract).
 
 ## Roadmap
 

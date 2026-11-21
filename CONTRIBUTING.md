@@ -42,6 +42,8 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | 8790 | the core (default `LOOKMA_PORT`) |
 | 8791 | `npm run test:e2e` (tmux session `lookma-test`) |
 | 8792 | `core/dev/check-pipeline.mjs`, part of `npm test` |
+| 8793 | `executors/codex/dev/check.mjs --handshake` |
+| 8794 | `core/dev/check-executors.mjs`, part of `npm test` |
 | 8795, 8796 | `overlay/dev/check-voices.mjs` (mock core, Chrome DevTools) |
 | 8797, 8798 | `overlay/dev/mock-core.mjs` and `shoot.mjs` (mock core, Chrome DevTools) |
 
@@ -50,7 +52,7 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | Command | Checks | Needs |
 |---|---|---|
 | `npm run check` | `node --check` on every script | Node |
-| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, the Claude adapter on recorded terminal screens, the session each voice provider asks for, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome. tmux is optional: one check is skipped without it |
+| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, the Claude adapter on recorded terminal screens, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome. tmux is optional: one check is skipped without it |
 | `node overlay/dev/check-voices.mjs` | the voice client with each voice provider, against its fake service (`voices/<name>/dev/fake.mjs`) | Google Chrome in `/Applications` (runs headless) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:e2e` | a real Claude Code session with the fake app | tmux and a logged-in Claude Code; uses your Claude plan |
@@ -78,12 +80,11 @@ Match the code around you. In short:
 ## Add an executor adapter
 
 1. Create `executors/<name>/manifest.mjs`: a title, your settings and your checks, as `executors/codex/manifest.mjs` has them. A setting's name is derived (`LOOKMA_<NAME>_<KEY>`), and `lookma --help` and `lookma doctor` list it; the loader, `core/plugins.mjs`, validates the manifest and the values.
-2. Create `executors/<name>/index.mjs` exporting `create(ctx)`, where `ctx` is `{ emit, hands, config, options, log }` and `options` are your settings, typed and checked. Return `{ start({ dirs }), prompt(text, { steer }), cancel(), answer(cardId, allow), stop() }`. `start` resolves to `{ name }`; `steer` is true when a turn is already running. Add `connect(ws)` if your agent connects back on `/ws/executor`, and `hook(body)` if it POSTs to `/hook`.
-3. Emit the contract's events: `status`, `turnStart` / `turnEnd`, `step`, `say`, `task`, and one `approval` per question for the user, with `approvalGone` once it is answered elsewhere or closed.
-4. Give the agent `say` and the six hands tools (`see`, `click`, `type`, `key`, `scroll`, `open`), as `core/tools.mjs` defines them, and forward each hands call to `ctx.hands(tool, args)`. Never touch the screen any other way: the pipeline is what makes every step visible and granted.
-5. Run it with `LOOKMA_EXECUTOR=<name>` or `--agent <name>`.
-
-The stub executor at the top of `core/dev/check-pipeline.mjs` is the smallest working adapter. Test your adapter's pure parts against recorded fixtures, as `core/dev/check-claude.mjs` does, and give it a section in docs/protocol.md like the Claude Code one.
+2. Create `executors/<name>/index.mjs` exporting `create(ctx)` and returning `{ start({ dirs }), prompt(text), interrupt(), close() }`, each a promise kept exactly as the [executor contract](docs/protocol.md#executor-contract) says. `ctx.options` are your settings, typed and checked; `ctx.sessionDir` is your folder; give child processes `ctx.env`.
+3. Give the agent `say` and the hands by having it spawn the tools bridge from `ctx.tools.mcp()`. Never touch the screen any other way: the pipeline is what makes every step visible and granted.
+4. Emit `turnStart` / `turnEnd`, `step` (titles from `core/executor/steps.mjs`), `task` and `down`, and ask the user with `ctx.ask`.
+5. Write `executors/<name>/dev/fake-agent.mjs`, a script that speaks your agent's protocol and plays the commands listed at the top of `core/dev/check-executors.mjs`; that check then runs the conformance scenarios over your adapter. Put checks of your adapter's own parts in `executors/<name>/dev/check.mjs`, which `npm test` runs.
+6. Run it with `LOOKMA_EXECUTOR=<name>` or `--agent <name>`, and give it a section in docs/protocol.md like the Codex one.
 
 ## Commits and pull requests
 

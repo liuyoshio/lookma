@@ -23,7 +23,7 @@ const voiceOn = params.get('voice') !== '0'
 // Everything the page shows is a function of this: the core's last snapshot plus
 // what only the page knows (the voice session, what the user said, local answers).
 const ui = {
-  state: { executor: { name: 'claude', status: 'starting' }, turn: null, focus: null, attention: { busy: false, idle: 0 }, cards: [], tasks: [], outbox: [] },
+  state: { executor: { name: '', status: 'starting' }, turn: null, focus: null, attention: { busy: false, idle: 0 }, cards: [], tasks: [], outbox: [] },
   link: 'connecting',
   voice: 'off',     // the glyph: off | listening | thinking | speaking
   hearing: false,  // the user is talking now (the voice's VAD heard speech start)

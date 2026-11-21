@@ -152,28 +152,24 @@ Long work with nothing to show on screen goes to Claude Code's background subage
 
 ## The executor contract
 
-The core talks to the agent only through an adapter in `executors/<name>/index.mjs`:
+The core talks to the agent only through an adapter in `executors/<name>/index.mjs`, which the executor host (`core/executor/host.mjs`) loads and runs:
 
 ```js
-export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promise<result>, config, options, log }
-  → { start({ dirs }) → Promise<{ name }>,
-      prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
-      connect?(ws), hook?(body) }
+export function create(ctx)  // ctx: { emit, tools: { server, mcp(extras) }, ask, options, instructions, sessionDir, env, log }
+  → { start({ dirs }), prompt(text), interrupt(), close() }   // each returns a promise
 ```
 
-`steer` is true when a turn is already running. `connect` gets the sockets on `/ws/executor` and `hook` the bodies POSTed to `/hook`; an adapter that needs neither leaves them out. The adapter emits `status`, `turnStart` and `turnEnd`, `step` (a non-GUI step), `say`, `task` (background work), and `approval` and `approvalGone`. GUI steps are not in the contract: the agent calls the hands tools, and the adapter forwards each call to `ctx.hands`. Field-level details are in [protocol.md](protocol.md#executor-contract).
+The adapter only translates. Prompts and an interrupt go down; up come `turnStart`, `turnEnd` (with the failure's reason), `step` (a non-GUI step), `task` (background work) and `down`. The agent gets `say` and the hands from the tools bridge, which it spawns from `ctx.tools.mcp()`; the host serves those calls, so the adapter never touches the screen or the outbox. A question for you is `await ctx.ask(card)`. The host owns the rest once, for every agent: the status, the order of prompts, the stop gate (from "stop" until the agent confirms, nothing of the stopped work reaches you or the screen) and one restart when the agent dies or does not stop. Field-level details are in [protocol.md](protocol.md#executor-contract).
 
-How the Claude Code adapter fills it in:
+The Claude Code adapter is still on the earlier contract, and a headless one on this contract replaces it. It fills the earlier one in like this:
 
 | Contract | Claude Code |
 |---|---|
 | `start` | Writes a session folder (`~/.lookma/sessions/lookma/`: `.mcp.json`, `settings.json`, `executor.md` from `prompts/`) and starts interactive `claude` in the tmux session `lookma`, with `--dangerously-load-development-channels server:lookma`. |
-| `prompt` | A channel message from `channel.mjs`, a stdio MCP server that Claude Code spawns. It is a thin pipe to the core that also exposes `say` and the hands tools. A correction (`steer`) is sent the same way: Claude Code takes a message that arrives during a turn into that turn. |
-| `connect` | The socket `channel.mjs` opens on `/ws/executor`. |
+| `prompt` | A channel message from `channel.mjs`, a stdio MCP server that Claude Code spawns. It is a thin pipe to the core that also exposes `say` and the hands tools. A correction is sent the same way: Claude Code takes a message that arrives during a turn into that turn. |
 | `cancel` | Escape, sent to the tmux pane. |
 | `answer` | The relay, or keys in the terminal (see Approvals). |
-| `hook` → `step`, `task`, `turnStart`, `turnEnd` | Claude Code's http hooks, posted to the core's `/hook`. |
-| `say` | The `say` tool. |
+| `hook` → `step`, `task`, `turnStart`, `turnEnd` | Claude Code's http hooks. |
 
 The session settings allow the hands tools, and deny Claude Code's built-in computer use (the hands are ours) and `AskUserQuestion` (you could not answer it from a card; Claude asks with `say` instead). The folders you pass to `lookma` go into `permissions.additionalDirectories`, so starting asks no trust question per folder.
 
@@ -181,17 +177,16 @@ How the Codex adapter fills it in:
 
 | Contract | Codex |
 |---|---|
-| `start` | Writes a session folder (`~/.lookma/sessions/codex/`: `home/`, holding only a link to your `auth.json`, and an empty `work/`), starts `codex app-server` with that home, and starts one thread for the whole run, with `executor.md` as its developer instructions. |
+| `start` | Writes a session folder (`~/.lookma/sessions/codex/`: `home/`, holding only a link to your `auth.json`, and an empty `work/`), starts `codex app-server` with that home, and starts one thread for the session, with `executor.md` as its developer instructions and the tools bridge as its one MCP server. Resolves once that server is up. |
 | `prompt` | `turn/start`, or `turn/steer` while a Codex turn runs, so a correction lands in that turn. |
-| `connect` | The socket of `mcp.mjs`, the MCP server in the thread's config that gives Codex `say` and the hands tools. |
-| `cancel` | `turn/interrupt`. The next prompt waits until Codex reports the turn ended. |
-| `answer` | The reply to Codex's approval request: `accept` or `decline`. |
+| `interrupt` | `turn/interrupt`, resolving when Codex reports the turn ended. |
+| `ask` | Codex's approval requests (a command, a file change, more permissions); the answer goes back as `accept` or `decline`. |
 | `step`, `turnStart`, `turnEnd` | `item/started`, `turn/started` and `turn/completed` notifications. |
-| `say` | The `say` tool. |
+| `down` | app-server exiting by itself. |
 
 Besides its own shell, file edits and web search, Codex gets only Lookma's tools: its own home keeps your Codex MCP servers, plugins and settings out, and Lookma turns off its connectors, plugins, computer and browser use, subagents, memories and image generation. Its commands run in the workspace-write sandbox, which may write only in the folders you pass to `lookma` (plus its `work/` folder and tmp), with no network; anything beyond that is a card.
 
-**Adding an executor.** Write `executors/<name>/manifest.mjs` with its title, settings and checks: the settings reach your adapter as `ctx.options`, named `LOOKMA_<NAME>_<KEY>`, and `lookma doctor` and the start run the checks. Then write `executors/<name>/index.mjs`. Give your agent `say` and the hands tools: if it takes MCP servers, have it spawn a script that calls `serve()` from `core/executor/bridge.mjs` (as `codex/mcp.mjs` does). That server connects to `/ws/executor`; in your `connect`, hand its messages to `serveTools` from `core/executor/tool-link.mjs`, which forwards each call to `ctx.hands`. Then start with `LOOKMA_EXECUTOR=<name>`.
+**Adding an executor.** Write `executors/<name>/manifest.mjs` with its title, settings and checks: the settings reach your adapter as `ctx.options`, named `LOOKMA_<NAME>_<KEY>`, and `lookma doctor` and the start run the checks. Then write `executors/<name>/index.mjs` on the contract above, and have your agent spawn the tools bridge from `ctx.tools.mcp()` as one of its MCP servers. Write `executors/<name>/dev/fake-agent.mjs`, a script that speaks your agent's protocol, and `core/dev/check-executors.mjs` runs the same scenarios over your adapter as over the others. Then start with `LOOKMA_EXECUTOR=<name>`.
 
 ## Local only
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Checks the outbox (core/outbox.mjs) on its own with an injected clock, then the core's use of
-// it with a stub executor and a fake overlay socket (no ports, no app): receipts, pruning by age
+// it with a stub executor, a fake tools bridge and a fake overlay socket (no ports, no app):
+// receipts, pruning by age
 // and cap (a held entry stays), a stopped turn's entries and cards, the line a turn ends with,
 // card announcements, and the control acks.
 //   node core/dev/check-outbox.mjs      (a scratch data dir is used)
@@ -60,21 +61,22 @@ let skew = 0
 const realNow = Date.now
 Date.now = () => realNow() + skew
 
-let emit
+let emit, ask
 function stubExecutor(ctx) {
-  emit = ctx.emit
-  return {
-    start: async () => (ctx.emit({ type: 'status', status: 'ready' }), { name: 'stub' }),
-    prompt() {},
-    cancel() {},
-    answer() {},
-    stop: async () => {},
-  }
+  ;({ emit, ask } = ctx)
+  return { start: async () => {}, prompt: async () => {}, interrupt: async () => {}, close: async () => {} }
 }
 
 const logs = []
 const core = await createCore(await loadConfig(), { log: (...a) => logs.push(a.join(' ')), createExecutor: stubExecutor })
 await core.startExecutor([])
+
+// A fake tools bridge: the core posts a say before the call returns.
+let onCall
+core.connectExecutor({ readyState: 1, send: () => {}, on: (ev, fn) => ev === 'message' && (onCall = fn) })
+const say = speech => onCall(JSON.stringify({ type: 'call', id: 1, tool: 'say', args: { speech } }))
+// A card the agent asks for; its id is the core's.
+const card = (title, detail) => (ask({ title, detail }), data.cards.at(-1).id)
 
 // A fake overlay socket: requests are handled at once, so each ack is there when send returns.
 const received = []
@@ -111,7 +113,7 @@ const startTurn = text => (request({ type: 'tell', text, source: 'typed' }), dat
 
 {
   const turn = startTurn('find the receipts')
-  emit({ type: 'say', speech: 'Looking in Downloads.' })
+  say('Looking in Downloads.')
   const said = data.outbox.at(-1)
   check('say: an entry of the working turn, counted on it', said.speech === 'Looking in Downloads.' && said.turnId === turn.id && turn.said === 1, show(said))
   overlay({ type: 'delivered', ids: [said.id], how: 'spoken' })
@@ -127,39 +129,41 @@ const startTurn = text => (request({ type: 'tell', text, source: 'typed' }), dat
 
 {
   // Cards: only the head card is announced, and its entry goes with it.
-  emit({ type: 'approval', id: 'c1', title: 'Allow Bash?', detail: 'ls' })
-  emit({ type: 'approval', id: 'c2', title: 'Change these files?' })
+  const ctl = new AbortController()
+  const c1 = card('Allow Bash?', 'ls')
+  ask({ title: 'Change these files?' }, ctl.signal)
+  const c2 = data.cards.at(-1).id
   const cardEntries = () => data.outbox.filter(e => e.kind === 'card')
-  check('a card entry exists only for the head card', show(cardEntries().map(e => [e.cardId, e.speech, e.turnId])) === '[["c1","Allow Bash?\\nls",null]]', show(cardEntries()))
-  check('answering the head card: acked, its entry goes, the next card is announced', show(request({ type: 'answer', cardId: 'c1', allow: true, via: 'click' })) === '{"ok":true}' && show(cardEntries().map(e => e.cardId)) === '["c2"]', show(cardEntries()))
+  check('a card entry exists only for the head card', show(cardEntries().map(e => [e.cardId, e.speech, e.turnId])) === show([[c1, 'Allow Bash?\nls', null]]), show(cardEntries()))
+  check('answering the head card: acked, its entry goes, the next card is announced', show(request({ type: 'answer', cardId: c1, allow: true, via: 'click' })) === '{"ok":true}' && show(cardEntries().map(e => e.cardId)) === show([c2]), show(cardEntries()))
   overlay({ type: 'delivered', ids: [cardEntries()[0].id], how: 'spoken' })
   skew += KEEP_MS + 1000
-  emit({ type: 'say', speech: 'Meanwhile.' }) // a post trims the outbox
-  check('a delivered card entry stays past KEEP_MS while its card is up', show(cardEntries().map(e => e.cardId)) === '["c2"]', show(cardEntries()))
-  emit({ type: 'approvalGone', id: 'c2' })
+  say('Meanwhile.') // a post trims the outbox
+  check('a delivered card entry stays past KEEP_MS while its card is up', show(cardEntries().map(e => e.cardId)) === show([c2]), show(cardEntries()))
+  ctl.abort() // the agent closed it
   check('a delivered card entry goes with its card too', cardEntries().length === 0, show(cardEntries()))
 }
 
 {
-  // A stopped turn drops its untold entries and its cards; a card from outside a turn stays.
-  emit({ type: 'approval', id: 'boot', title: 'Trust this folder?' })
+  // A stopped turn drops its untold entries; a stop withdraws every card.
+  card('Trust this folder?')
   const turn = startTurn('clean the desktop')
-  emit({ type: 'say', speech: 'Moving the screenshots.' })
+  say('Moving the screenshots.')
   const told = data.outbox.at(-1)
-  emit({ type: 'say', speech: 'Now the PDFs.' })
+  say('Now the PDFs.')
   overlay({ type: 'delivered', ids: [told.id], how: 'spoken' })
-  emit({ type: 'approval', id: 'c3', title: 'Delete 4 files?' })
-  check('a card raised in a turn is that turn\'s', data.cards.find(c => c.id === 'c3')?.turnId === turn.id)
+  const c3 = card('Delete 4 files?')
+  check('a card raised in a turn is that turn\'s', data.cards.find(c => c.id === c3)?.turnId === turn.id)
   const stopped = request({ type: 'control', action: 'stop' })
   check('stop: acked', show(stopped) === '{"ok":true}', show(stopped))
   check('stop: the turn\'s undelivered entries go, the delivered one stays, and no "Done."', show(entriesOf(turn.id).map(e => e.speech)) === '["Moving the screenshots."]', show(entriesOf(turn.id)))
-  check('stop: the turn\'s cards go, a card from outside the turn stays and is still announced', show(data.cards.map(c => c.id)) === '["boot"]' && show(data.outbox.filter(e => e.kind === 'card').map(e => e.cardId)) === '["boot"]', show(data.cards))
-  request({ type: 'answer', cardId: 'boot', allow: true, via: 'click' })
+  check('stop: every open card is withdrawn, from the turn or not', data.cards.length === 0 && !data.outbox.some(e => e.kind === 'card'), show(data.cards))
+  await new Promise(r => setImmediate(r)) // the stub's interrupt resolves: the stop gate opens
 }
 
 {
   // Receipts from the overlay: idempotent, and a malformed one changes nothing.
-  emit({ type: 'say', speech: 'Unrelated news.' })
+  say('Unrelated news.')
   const e = data.outbox.at(-1)
   overlay({ type: 'delivered', ids: [e.id], how: 'louder' })
   check('a receipt with an unknown how is refused and logged', e.delivered === null && logs.some(l => /bad overlay message/.test(l)), logs.at(-1))

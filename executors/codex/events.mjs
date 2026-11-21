@@ -1,35 +1,31 @@
-// Codex thread items → the step line the capsule shows: one readable line per item that does
-// something, null for the rest (reasoning, messages, plans). Pure.
-import path from 'node:path'
-import { clip } from '../../core/util.mjs'
+// Codex thread items → steps (core/executor/steps.mjs): one per item that does something, null
+// for the rest (reasoning, messages, plans) and for Lookma's own tools, which show themselves. Pure.
+import { title } from '../../core/executor/steps.mjs'
 
 // Codex runs each command through the login shell: "/bin/zsh -lc 'ls -la'" reads as "ls -la".
 export function unwrap(command) {
   return command.match(/^\S*\b(?:ba|z)?sh -l?c (['"])([\s\S]*)\1$/)?.[2] ?? command
 }
 
-export function stepTitle(item) {
+const EDITS = { add: 'write', delete: 'delete' } // a change kind's step; any other is an edit
+
+// server: the name of Lookma's own MCP server.
+export function stepTitle(item, server) {
   switch (item.type) {
     case 'commandExecution': {
       const a = item.commandActions[0] // Codex's reading of the command, when it has one
-      if (a?.type === 'read') return `Read ${a.name}`
-      if (a?.type === 'listFiles') return a.path && a.path !== '.' ? `List ${path.basename(a.path)}` : 'List files'
-      if (a?.type === 'search') return a.query ? `Search for ${clip(a.query, 40)}` : 'Search files'
-      return clip(unwrap(item.command))
+      if (a?.type === 'read') return title('read', a.name)
+      if (a?.type === 'listFiles') return title('list', a.path)
+      if (a?.type === 'search') return title('search', a.query)
+      return title('run', unwrap(item.command))
     }
-    case 'fileChange': {
-      const [first, ...rest] = item.changes
-      if (!first) return 'Edit files'
-      const verb = { add: 'Write', delete: 'Delete' }[first.kind.type] || 'Edit'
-      return `${verb} ${path.basename(first.path)}${rest.length ? ` + ${rest.length} more` : ''}`
-    }
-    case 'webSearch': {
-      const url = item.action?.type === 'openPage' && item.action.url
-      if (url) return `Read ${URL.canParse(url) ? new URL(url).host : clip(url, 40)}`
-      return item.query ? `Search the web for ${clip(item.query, 40)}` : 'Search the web'
-    }
+    case 'fileChange':
+      return title(EDITS[item.changes[0]?.kind.type] || 'edit', item.changes.map(c => c.path))
+    case 'webSearch':
+      if (item.action?.type === 'openPage' && item.action.url) return title('read', item.action.url)
+      return title('web', item.query)
     case 'mcpToolCall':
-      return item.server === 'lookma' ? null : `${item.server} · ${item.tool}` // say and the hands show themselves
+      return item.server === server ? null : title('tool', `${item.server} · ${item.tool}`)
   }
   return null
 }
