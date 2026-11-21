@@ -20,7 +20,8 @@
 // the one wake timer and pushes the view to the page; talk(event) does the same for the turn
 // source, whose quiet it computes from both: nobody speaking, nothing owed, no turn working and no
 // card waiting (background tasks do not count: they can run for an hour). The source's tones play
-// here: the open tone once the microphone is live, the close tone at once.
+// here: the open tone once the latest listen has the microphone live (a tap replaces its hold's
+// listen before the device opens), the close tone at once, and only after an open tone.
 
 import { createSession } from './voice/session.js'
 import { createTurns } from './voice/turns.js'
@@ -58,6 +59,7 @@ export function createVoice(o) {
   let busy = false, calmAt = 0 // the snapshot's work: running or waiting on a card; when it last stopped
   let quiet = null             // the quiet last given to the turn source
   let heard = Promise.resolve(true) // the last listen: true once sent (the microphone live), false if replaced or failed
+  let toned = false                 // the open tone played and the microphone has not closed since
 
   const turns = createTurns({ log: o.log })
   const idle = () => floor.isIdle(state, Date.now()) && !source.view(talking).open
@@ -120,13 +122,24 @@ export function createVoice(o) {
         return false
       })
     },
-    sound: e => heard.then(sent => sent && tone(e.which)),
+    sound: e => e.which === 'open' ? opened(heard) : toned && tone('close'),
+  }
+
+  /** The open tone, once the latest listen is sent with the microphone open; one that replaced p is waited for instead. */
+  function opened(p) {
+    p.then(sent => {
+      if (p !== heard) return opened(heard)
+      if (!sent || toned || source.how(talking) === 'off') return
+      toned = true
+      tone('open')
+    })
   }
 
   function talk(event) {
     const r = source.step(talking, { ...event, at: Date.now() })
     talking = r.state
     for (const e of r.effects) TALK[e.type](e)
+    if (source.how(talking) === 'off') toned = false // closed, with its tone or silently (a reconnect, a failure)
     clearTimeout(talkTimer)
     const t = source.wakeAt(talking)
     if (t != null) talkTimer = setTimeout(() => talk({ type: 'tick' }), Math.max(0, t - Date.now()))

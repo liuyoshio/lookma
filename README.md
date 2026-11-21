@@ -164,7 +164,7 @@ And one agent:
 | To | Do this |
 |---|---|
 | **Talk** | Hold <kbd>fn</kbd> while you talk, and let go: it answers. A soft tone says the microphone opened and closed. |
-| **Talk hands-free** | Tap <kbd>fn</kbd>, or **Start Conversation** in the menu bar. It listens until 20 s of quiet or another tap, and stays open while the work you asked for runs. It answers only what is meant for it, not people talking to each other, the TV or noise. |
+| **Talk hands-free** | Tap <kbd>fn</kbd>, or **Start Conversation** in the menu bar. It listens until 20 s of quiet or another tap, and stays open while the work you asked for runs. Any talk it hears restarts the 20 s, even talk it ignores. It answers only what is meant for it, not people talking to each other, the TV or noise. |
 | **Ask** | Say it: “Find three ramen places near the ferry and put them in a new note.” |
 | **Interrupt** | Hold or tap <kbd>fn</kbd>: the voice stops mid-sentence. |
 | **Approve** | Hold <kbd>fn</kbd> and say “yes, I approve”, or click **Approve**. |

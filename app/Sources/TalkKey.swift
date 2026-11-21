@@ -37,7 +37,8 @@ extension KeyEvent {
 }
 
 /// fn down alone is `.down`; its release is `.up`; any other key or modifier while it is down is
-/// `.cancel` (it was part of a shortcut), and nothing more until fn is up again.
+/// `.cancel` (it was part of a shortcut), and nothing more until fn is up again. A press always
+/// starts clean: a release lost to Secure Input leaves no phase behind.
 struct TalkKey {
     /// fn's key code (the Globe key on Apple keyboards). The fn flag alone is not fn: arrows and
     /// F-keys carry it too. The single place to change should a keyboard report the Globe key as 179.
@@ -51,6 +52,7 @@ struct TalkKey {
         if e.own { return nil }
         let fn = e.kind == .flagsChanged && e.keyCode == Self.fnKeyCode
         let fnDown = fn && e.flags.contains(.function)
+        if fnDown { phase = .idle } // fn can only go down from up: whatever came before, its release was lost
         switch phase {
         case .idle:
             guard fnDown else { return nil }
@@ -61,8 +63,7 @@ struct TalkKey {
             phase = .down
             return .down
         case .down:
-            if fnDown { return nil }
-            if fn {
+            if fn { // went up
                 phase = .idle
                 return .up
             }
@@ -71,7 +72,7 @@ struct TalkKey {
             phase = .spent
             return .cancel
         case .spent:
-            if fn && !fnDown { phase = .idle }
+            if fn { phase = .idle } // went up
             return nil
         }
     }

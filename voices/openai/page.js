@@ -41,7 +41,8 @@ export async function connect(grant, io) {
     drain: 0,            // the timer that sends its commit
     alias: new Map(),    // the server's item id -> the held turn's id, where they differ
     holds: 0,            // held turns so far, for their ids
-    responding: false,   // response.created to response.done
+    responding: null,    // the reply asked for: its create's event id, from response.create sent to response.done
+                         // (or that create's error), so a cut just after the create still cancels it
     audible: false,      // output_audio_buffer.started to stopped or cleared
   }
   io.signal.addEventListener('abort', () => {
@@ -75,10 +76,14 @@ export async function connect(grant, io) {
       case 'input_audio_buffer.speech_stopped':
         return call.turn?.manual ? null : { type: 'turn.stopped', id: e.item_id }
       case 'input_audio_buffer.committed': {
-        // The held turn's commit, else the turn the VAD began.
-        const t = call.committing ?? call.turn
-        if (call.committing) call.committing = null
+        // The held turn's commit once it is sent, else the VAD's: the turn it began, or a commit
+        // in flight as a hold switched it off. Should that one be the turn being drained, what the
+        // hold heard after it goes in under its own id, so no id is committed twice.
+        const ours = call.committing && !call.drain
+        const t = ours ? call.committing : call.turn
+        if (ours) call.committing = null
         else call.turn = null
+        if (call.drain && e.item_id === call.committing.id) call.committing.id = `hold_${++call.holds}`
         const id = t?.id ?? e.item_id
         if (id !== e.item_id) call.alias.set(e.item_id, id)
         return { type: 'turn.committed', id }
@@ -171,8 +176,9 @@ export async function connect(grant, io) {
   return {
     send(effect) {
       if (dc.readyState !== 'open') return // closing: its onclose is on the way
-      if (effect.type === 'listen') listen(effect)
-      else sendAll(toClient(effect, responses, call, itemOf))
+      if (effect.type === 'listen') return listen(effect)
+      if (effect.type === 'create') call.responding = effect.eventId // the channel is ordered: a cancel lands after it
+      sendAll(toClient(effect, responses, call, itemOf))
     },
   }
 }
@@ -180,8 +186,8 @@ export async function connect(grant, io) {
 /** Keeps `call` true to the server's replies and playback, for cut. */
 function follow(call, e) {
   switch (e.type) {
-    case 'response.created': call.responding = true; break
-    case 'response.done': call.responding = false; break
+    case 'response.done': call.responding = null; break
+    case 'error': if (e.error?.event_id === call.responding) call.responding = null; break
     case 'output_audio_buffer.started': call.audible = true; break
     case 'output_audio_buffer.stopped':
     case 'output_audio_buffer.cleared': call.audible = false; break

@@ -20,6 +20,9 @@
 //                          reconnect, a renewal, a pause) and a gesture that did nothing (the
 //                          microphone failed) make no sound
 //
+// A microphone that cannot open makes the source deaf: `how` is off whatever the mode, so every
+// view says the microphone is closed, until the next gesture, mode or connection tries again.
+//
 // step(state, event) never mutates its input. Events carry `at`; wakeAt(state) says when the
 // reducer next needs a tick. Key events are ignored while no session is live.
 
@@ -37,12 +40,13 @@ export function initial(mode) {
     downAt: 0,
     open: false,        // a hands-free conversation (key mode only)
     openedAt: 0,
+    deaf: false,        // the microphone could not open: closed until the next key press, toggle, mode or session
     quietSince: null,   // when everything last went quiet; null while anything is going on
   }
 }
 
 export function how(s) {
-  if (!s.live) return 'off'
+  if (!s.live || s.deaf) return 'off'
   if (s.key === 'held') return 'hold'
   return s.mode === 'always' || s.open ? 'auto' : 'off'
 }
@@ -79,17 +83,17 @@ function apply(s, ev, fx) {
   if (ev.type.startsWith('key.') && !s.live) return false
   switch (ev.type) {
     case 'session.up':
-      s.live = true
+      Object.assign(s, { live: true, deaf: false })
       return false
     case 'session.down':
       Object.assign(s, { live: false, key: 'up', open: false })
       return false
     case 'mode':
-      s.mode = ev.mode
+      Object.assign(s, { mode: ev.mode, deaf: false })
       if (s.mode === 'always') s.open = false
       return false
     case 'key.down':
-      if (s.key === 'up') Object.assign(s, { key: 'pressed', downAt: at })
+      if (s.key === 'up') Object.assign(s, { key: 'pressed', downAt: at, deaf: false })
       return false
     case 'key.up': {
       if (s.key === 'up') return false // a hold that already ended (MAX_HOLD_MS)
@@ -106,11 +110,12 @@ function apply(s, ev, fx) {
       return armed
     }
     case 'key.toggle': // the menu's Start/End Conversation
+      s.deaf = false
       fx.push({ type: 'cut' })
       toggle(s, at)
       return false
-    case 'mic.failed': // the gesture did nothing
-      Object.assign(s, { key: 'up', open: false })
+    case 'mic.failed': // the gesture did nothing, and always rests closed until something tries again
+      Object.assign(s, { key: 'up', open: false, deaf: true })
       return false
     case 'quiet':
       s.quietSince = ev.since

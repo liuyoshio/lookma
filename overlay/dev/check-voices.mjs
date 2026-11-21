@@ -601,8 +601,9 @@ async function scenario(name, fake) {
   await sleep(200)
   c0 = await lastConnection()
   const saidLine = await page.evaluate(`document.getElementById('cap').textContent`)
-  check(!c0.closed && c0.tracks.length === 0 && (await voice('gums')) === 1 && saidLine.includes('Lookma has no microphone access'),
-    `no microphone: the session stays up with no track, and the capsule says so ${JSON.stringify(c0)}`)
+  check(!c0.closed && c0.tracks.every(t => t === null) && (await voice('gums')) === 1 && saidLine.includes('Lookma has no microphone access')
+    && (await posted('mic')) === false,
+    `no microphone: the session stays up with no track, not shown as listening, and the capsule says so ${JSON.stringify(c0)}`)
 
   // 14. Voice off: no session and no microphone, and what is owed is settled as shown.
   await mock.restart({ from: 'idle', hold: true })
@@ -691,6 +692,18 @@ async function scenario(name, fake) {
   check((await stepNames(k)) === 'undetect,commit,detect' && same(await heardSince(k), [{ type: 'turn.stopped', id: 'item_b' }, { type: 'turn.committed', id: 'item_b' }]),
     'released to auto: the adopted turn committed under its id, then the detector back on')
 
+  await emit({ type: 'turn.started', id: 'item_c' })
+  k = await mark2()
+  await direct({ type: 'listen', how: 'hold' })
+  await direct({ type: 'listen', how: 'auto' })
+  await emit({ type: 'turn.committed', id: 'item_c' }) // the detector's own commit, landing while the release drains
+  await sleep(250)
+  await emit({ type: 'turn.committed', id: 'item_d' })
+  h = await heardSince(k)
+  check((await stepNames(k)) === 'undetect,commit,detect' && same(h.map(e => e.type), ['turn.stopped', 'turn.committed', 'turn.committed'])
+    && h[1].id === 'item_c' && h[2].id.startsWith('hold_'),
+    `the detector's late commit of an adopted turn: that turn is its, and the rest of the hold goes in under a new id ${JSON.stringify(h)}`)
+
   k = await mark2()
   await direct({ type: 'listen', how: 'hold' })
   await direct({ type: 'listen', how: 'auto' })
@@ -701,18 +714,17 @@ async function scenario(name, fake) {
   check(same(h.map(e => e.type), ['turn.started', 'turn.stopped', 'turn.dropped', 'error']) && h.slice(0, 3).every(e => e.id === h[0].id),
     `hold from auto with no turn open: a new turn; its commit refused, it is dropped ${JSON.stringify(h.map(e => e.type))}`)
 
-  k = await mark2()
-  await direct({ type: 'cut' })
-  const idle = await stepNames(k)
-  await emit({ type: 'response.started', response: 'rc1' })
-  k = await mark2()
-  await direct({ type: 'cut' })
-  const making = await stepNames(k)
-  await emit({ type: 'response.done', response: 'rc1', status: 'completed', items: [] }, { type: 'audio.started', response: 'rc1' })
-  k = await mark2()
-  await direct({ type: 'cut' })
-  check(idle === '' && making === 'cancel' && (await stepNames(k)) === 'silence',
-    `cut: nothing when nothing plays, cancel while a reply is made, silence while its audio plays (${JSON.stringify([idle, making, await stepNames(k)])})`)
+  const cutNow = async () => { const k = await mark2(); await direct({ type: 'cut' }); return stepNames(k) }
+  const idle = await cutNow()
+  await direct({ type: 'create', eventId: 'rc_refused', kind: 'turn' })
+  await emit({ type: 'error', eventId: 'rc_refused', message: 'refused' })
+  const unasked = await cutNow()
+  await direct({ type: 'create', eventId: 'rc_asked', kind: 'turn' })
+  const asked = await cutNow() // before response.created: the cancel lands after the create
+  await emit({ type: 'response.started', response: 'rc1' }, { type: 'response.done', response: 'rc1', status: 'completed', items: [] }, { type: 'audio.started', response: 'rc1' })
+  const playing = await cutNow()
+  check(same([idle, unasked, asked, playing], ['', '', 'cancel', 'silence']),
+    `cut: nothing when nothing plays or the create was refused, cancel once a reply is asked for, silence while its audio plays (${JSON.stringify([idle, unasked, asked, playing])})`)
 
   for (const { identifier } of scripts) await page.cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier })
 }

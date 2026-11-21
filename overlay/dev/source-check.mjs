@@ -132,6 +132,10 @@ function press(f, ms) {
   check(f('session.up') === '' && how(f.state()) === 'off', 'session.up in key mode: back to rest, off')
 
   const g = source('always')
+  check(g('mic.failed') === 'listen off' && how(g.state()) === 'off', 'mic.failed in always: closed, not shown as listening')
+  check(g('key.down') === 'listen auto, sound open', 'mic.failed in always: the next press tries again')
+  g('key.cancel')
+  g('mic.failed')
   g('session.down')
   check(g('session.up') === 'listen auto', 'session.up in always: the rest listen is emitted again, with no tone (a reconnect or a renewal is silent)')
 

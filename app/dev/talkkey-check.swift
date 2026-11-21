@@ -36,6 +36,8 @@ struct TalkKeyCheck {
         let ownKey = KeyEvent(kind: .keyDown, keyCode: 0, flags: [], own: true)
         check(run(&k, [fn(true), ownKey, fn(false)]) == "down - up", "the hands typing while fn is held do not cancel it")
         check(run(&k, [arrow, fn(false)]) == "- -" && k.phase == .idle, "keys and a stray fn release while idle do nothing")
+        check(run(&k, [fn(true), fn(true), fn(false)]) == "down down up", "a release lost (Secure Input): the next press starts clean")
+        check(run(&k, [fn(true), arrow, fn(true), fn(false)]) == "down cancel down up", "a release lost after a shortcut: the next press starts clean")
         print(failed > 0 ? "\n\(failed) FAILED" : "\nall talk key checks passed")
         exit(failed > 0 ? 1 : 0)
     }
