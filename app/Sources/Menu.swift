@@ -1,27 +1,46 @@
-// The user's controls outside the overlay: a menu bar item (Pause or Resume, Type a Request…,
-// Quit) and the global hotkey ⌃⌥P that toggles pause. They only ask: the core decides whether it is
-// paused, and the overlay page owns the voice session and says whether its voice is on. The icon
-// and the menu show what they last said. The icon is Hands the seal (brand/menubar*.png, copied to
-// app/Resources): a ball above it while listening (voice on, not paused), a ring when the voice is
-// off, a pause sign when paused, dimmed while the core is not connected. Template images, so macOS
-// tints them for light and dark menu bars.
+// The user's controls outside the overlay: a menu bar item and the global hotkey ⌃⌥P that toggles
+// pause. They only ask: the core decides whether it is paused and how the user talks (`talk`), and
+// the overlay page owns the voice session and says whether its voice is on, whether the
+// microphone is open and whether a hands-free conversation is. The icon and the menu show what
+// they last said.
+//
+//   Hold fn to Talk  ·  Tap to Stay Open      a hint, in key mode
+//   Start Conversation                        End Conversation while one is open; key mode only
+//   Listen: With the fn Key / Listen: Always  the talk mode, for this run (LOOKMA_TALK is the setting)
+//   Pause or Resume (⌃⌥P), Type a Request…, Quit
+//
+// The icon is Hands the seal (brand/menubar*.png, copied to app/Resources): a ball above it while
+// the microphone is open, the plain seal and its ring otherwise (the tooltip says whether the key
+// opens it or the voice is off), a pause sign when paused, dimmed while the core is not connected.
+// Template images, so macOS tints them for light and dark menu bars.
 import AppKit
 import Carbon.HIToolbox
 
+/// How the user talks, as the core says (`talk`): the microphone opens while fn is held, or always.
+enum TalkMode: String { case key, always }
+
 final class StatusMenu: NSObject {
     var onToggle: () -> Void = {}
+    var onTalk: (TalkMode) -> Void = { _ in }
+    var onConversation: () -> Void = {}
     var onType: () -> Void = {}
     var onQuit: () -> Void = {}
 
     /// What the core last said; nil while it is not connected.
     var paused: Bool? = nil { didSet { refresh() } }
-    /// Whether the page says its voice is on: a key, not turned off, not paused, the session not failing.
-    var voiceOn = false { didSet { refresh() } }
+    /// The talk mode the core last said; nil until it has.
+    var talk: TalkMode? = nil { didSet { refresh() } }
+    var voice = PageVoice() { didSet { refresh() } }
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let seal = template("menubar")
     private lazy var sealWithBall = holdingBall(seal)
     private let sealPaused = template("menubar-paused")
+    private let hint = NSMenuItem(title: "Hold fn to Talk  ·  Tap to Stay Open", action: nil, keyEquivalent: "")
+    private let conversation = NSMenuItem(title: "Start Conversation", action: #selector(conversationChosen), keyEquivalent: "")
+    private let keySeparator = NSMenuItem.separator()
+    private let listenKey = NSMenuItem(title: "Listen: With the fn Key", action: #selector(talkChosen), keyEquivalent: "")
+    private let listenAlways = NSMenuItem(title: "Listen: Always", action: #selector(talkChosen), keyEquivalent: "")
     private let toggle = NSMenuItem(title: "Pause", action: #selector(toggleChosen), keyEquivalent: "")
     private let typeItem = NSMenuItem(title: "Type a Request…", action: #selector(typeChosen), keyEquivalent: "")
 
@@ -30,7 +49,10 @@ final class StatusMenu: NSObject {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let quit = NSMenuItem(title: "Quit", action: #selector(quitChosen), keyEquivalent: "")
-        for i in [toggle, typeItem, .separator(), quit] {
+        listenKey.representedObject = TalkMode.key
+        listenAlways.representedObject = TalkMode.always
+        hint.isEnabled = false
+        for i in [hint, conversation, keySeparator, listenKey, listenAlways, toggle, typeItem, .separator(), quit] {
             i.target = self
             menu.addItem(i)
         }
@@ -39,21 +61,35 @@ final class StatusMenu: NSObject {
     }
 
     private func refresh() {
+        let connected = paused != nil
         let (image, state) =
-            paused == nil ? (seal, "not connected") :
+            !connected ? (seal, "not connected") :
             paused! ? (sealPaused, "paused") :
-            voiceOn ? (sealWithBall, "listening") : (seal, "voice off")
+            !voice.on ? (seal, "voice off") :
+            voice.mic ? (sealWithBall, "listening") :
+            talk == .key ? (seal, "ready, hold fn") : (seal, "connecting")
         item.button?.image = image
         item.button?.setAccessibilityLabel("Lookma, \(state)")
-        item.button?.appearsDisabled = paused == nil
+        item.button?.appearsDisabled = !connected
         item.button?.toolTip = "Lookma: \(state)"
+
+        // The key's lines only where a tap means something: in always, it only cuts the voice.
+        for i in [hint, conversation, keySeparator] { i.isHidden = talk != .key }
+        conversation.title = voice.conversation ? "End Conversation" : "Start Conversation"
+        conversation.isEnabled = paused == false && voice.on
+        for i in [listenKey, listenAlways] {
+            i.state = talk == (i.representedObject as? TalkMode) ? .on : .off
+            i.isEnabled = connected
+        }
         // ⌃⌥P is a global Carbon hot key, not a key equivalent, so it is drawn as part of the title.
         toggle.attributedTitle = shortcutTitle(paused == true ? "Resume" : "Pause", "⌃⌥P")
-        toggle.isEnabled = paused != nil
+        toggle.isEnabled = connected
         typeItem.isEnabled = paused == false
     }
 
     @objc private func toggleChosen() { onToggle() }
+    @objc private func talkChosen(_ sender: NSMenuItem) { onTalk(sender.representedObject as! TalkMode) }
+    @objc private func conversationChosen() { onConversation() }
     @objc private func typeChosen() { onType() }
     @objc private func quitChosen() { onQuit() }
 }

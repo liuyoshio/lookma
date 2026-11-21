@@ -1,6 +1,7 @@
 // The link to the core on /ws/app: hello on connect, attention every 0.5 s, replies to the
-// core's requests, and the user's pause, resume and quit from the menu bar. Requests go through
-// one FIFO, so ops never run concurrently. Reconnects with backoff, so the app survives a core restart.
+// core's requests, and the user's pause, resume, talk mode and quit from the menu bar; the core
+// says back whether it is paused and its talk mode. Requests go through one FIFO, so ops never
+// run concurrently. Reconnects with backoff, so the app survives a core restart.
 import AppKit
 
 final class Link: NSObject, URLSessionWebSocketDelegate {
@@ -12,6 +13,8 @@ final class Link: NSObject, URLSessionWebSocketDelegate {
     private let requests: AsyncStream<[String: Any]>.Continuation
     /// Whether the core is paused, as it says on connect and on every change; nil while not connected.
     var onPaused: (Bool?) -> Void = { _ in }
+    /// The talk mode, as the core says on connect and on every change.
+    var onTalk: (TalkMode) -> Void = { _ in }
     var connected: Bool { isOpen }
 
     init(url: URL) {
@@ -51,6 +54,12 @@ final class Link: NSObject, URLSessionWebSocketDelegate {
                     case "paused":
                         let paused = msg["paused"] as? Bool ?? false
                         DispatchQueue.main.async { self.onPaused(paused) }
+                    case "talk":
+                        guard let mode = TalkMode(rawValue: msg["mode"] as? String ?? "") else {
+                            log("ignored a talk mode the app does not know: \(msg["mode"] ?? "none")")
+                            break
+                        }
+                        DispatchQueue.main.async { self.onTalk(mode) }
                     default: break
                     }
                 }

@@ -1,10 +1,21 @@
 // The overlay: a transparent full-screen panel on the main display, above everything, on every
 // Space, hosting the overlay page. Click-through except while the pointer is inside one of the
 // rects the page posts (the card). Screen recordings show it (sharingType .readOnly); see() leaves
-// it out by capturing only the target app. The page owns the voice session (always listening while
-// its voice is on and Lookma is not paused) and posts back whether its voice is on.
+// it out by capturing only the target app. The page owns the voice session and the microphone: it
+// is told the talk key's edges (key()) and posts back whether its voice is on, whether the
+// microphone is open and whether a hands-free conversation is.
 import AppKit
 import WebKit
+
+/// What the overlay page last said about its voice.
+struct PageVoice: Equatable {
+    /// Voice works: on, not paused, the session not failing.
+    var on = false
+    /// The microphone is open for the user: fn held, a conversation open, or always listening.
+    var mic = false
+    /// A hands-free conversation is open.
+    var conversation = false
+}
 
 final class OverlayPanel: NSPanel {
     var allowsKey = false // only while the typed input is open
@@ -29,9 +40,8 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
     private var panel: OverlayPanel!
     private var web: OverlayWebView!
     private var typing = false
-    private var voiceOn = false
-    /// Whether the page's voice is on: a key, not turned off, not paused, the session not failing.
-    var onVoice: (Bool) -> Void = { _ in }
+    private var voice = PageVoice()
+    var onVoice: (PageVoice) -> Void = { _ in }
 
     init(url: URL) {
         self.url = url
@@ -85,10 +95,18 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
 
     func toggleTyping() { setTyping(!typing) }
 
-    private func setVoice(_ on: Bool) {
-        guard on != voiceOn else { return }
-        voiceOn = on
-        onVoice(on)
+    /// The talk key's edge, or the menu's Start/End Conversation (toggle). Always sent: the page
+    /// ignores it while no voice session is live.
+    func key(_ edge: TalkEdge) {
+        web.evaluateJavaScript("window.lookma?.key('\(edge.rawValue)')") { _, err in
+            if let err { log("key \(edge.rawValue) failed: \(err.localizedDescription)") }
+        }
+    }
+
+    private func setVoice(_ next: PageVoice) {
+        guard next != voice else { return }
+        voice = next
+        onVoice(next)
     }
 
     /// The panel takes the keyboard only while the typed input shows, then hands it back.
@@ -108,7 +126,7 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
         guard let body = message.body as? [String: Any] else { return }
         // The page also closes the input itself (Escape): then the keyboard goes back.
         if let t = body["typing"] as? Bool, t != typing { keyboard(t) }
-        setVoice(body["voice"] as? Bool == true)
+        setVoice(PageVoice(on: body["voice"] as? Bool == true, mic: body["mic"] as? Bool == true, conversation: body["conversation"] as? Bool == true))
         guard let rects = body["hitRects"] as? [[String: Any]] else { return }
         let next: [CGRect] = rects.compactMap { r in
             guard let x = r["x"] as? NSNumber, let y = r["y"] as? NSNumber, let w = r["w"] as? NSNumber, let h = r["h"] as? NSNumber else { return nil }
@@ -135,7 +153,7 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         log("overlay page crashed; reloading")
-        setVoice(false) // its voice session went with it
+        setVoice(PageVoice()) // its voice session went with it
         load()
     }
 }

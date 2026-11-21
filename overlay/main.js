@@ -25,9 +25,11 @@ const voiceOn = params.get('voice') !== '0'
 const ui = {
   state: { executor: { name: '', status: 'starting' }, turn: null, focus: null, attention: { busy: false, idle: 0 }, cards: [], tasks: [], outbox: [] },
   link: 'connecting',
-  voice: 'off',     // the glyph: off | listening | thinking | speaking
+  voice: 'off',     // the glyph: off | open | listening | thinking | speaking
   hearing: false,  // the user is talking now (the voice's VAD heard speech start)
   voiceAvailable: voiceOn,
+  mic: false,      // the microphone is open for the user: held, in a conversation, or always listening
+  conversation: false, // a hands-free conversation is open (a tap, or Start Conversation in the menu)
   user: null,      // { text, at, prev }   the user's last line (voice transcript or typed)
   said: null,      // { display, kind, at } the work's last line (the newest outbox entry that is not a card or report)
   notice: null,    // { display, at }       a request that did not go through, one the voice lost, or no microphone (shown like a said line)
@@ -63,8 +65,9 @@ function render() {
 }
 
 // The app makes the window clickable only inside these rects; everywhere else the
-// overlay is click-through. It gives the window the keyboard only while `typing`, and its menu
-// bar icon shows listening while `voice` (on, not paused: the microphone is open).
+// overlay is click-through. It gives the window the keyboard only while `typing`; its menu bar
+// icon shows `voice` (on, not paused, not failing) and `mic` (the microphone open), and its menu
+// offers End Conversation while `conversation`.
 let lastPost = ''
 function postToApp() {
   const edge = $('edge')
@@ -78,6 +81,8 @@ function postToApp() {
     hitRects,
     typing: !$('typed').hidden,
     voice: ui.voiceAvailable,
+    mic: ui.mic,
+    conversation: ui.conversation,
   }
   const key = JSON.stringify(msg)
   if (key === lastPost) return
@@ -142,8 +147,10 @@ const voice = createVoice({
   cardShownAt: id => ui.cardShown[id] ?? Infinity,
   answerCard,
   onVoice(s) {
-    if (s.glyph === ui.voice && s.hearing === ui.hearing && s.available === ui.voiceAvailable) return
-    Object.assign(ui, { voice: s.glyph, hearing: s.hearing, voiceAvailable: s.available })
+    // The floor's glyph; when it is still, solid bars while the microphone is open for the user.
+    const next = { voice: s.glyph === 'off' && s.how !== 'off' ? 'open' : s.glyph, hearing: s.hearing, voiceAvailable: s.available, mic: s.how !== 'off', conversation: s.open }
+    if (Object.keys(next).every(k => next[k] === ui[k])) return
+    Object.assign(ui, next)
     schedule()
   },
   onLine(line) {

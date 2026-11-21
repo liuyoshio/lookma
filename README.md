@@ -172,7 +172,7 @@ And one agent:
 
 **One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you. With a headset, talk over it to interrupt.
 
-**The menu bar seal** fills its ring while you talk, shows a pause sign while paused, and dims when the app has lost the core.
+**The menu bar seal** fills its ring while the microphone is open, shows a pause sign while paused, and dims when the app has lost the core. Its menu also switches how you talk for this run (**Listen: With the fn Key** or **Always**) and, with the key, starts or ends a hands-free conversation.
 
 **Watch the agent itself.** Both agents log their steps, cards and messages in the terminal that started Lookma.
 
@@ -276,6 +276,7 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 - **Voice approval understands English and Chinese**; in other languages, click.
 - **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
 - **One at a time:** one port, one agent session.
+- **The talk key needs an Apple keyboard.** On most other keyboards fn never reaches macOS: use **Start Conversation** in the menu bar, or `LOOKMA_TALK=always`. While a password field has focus (macOS Secure Input), no app sees fn.
 - **It hears the room.** It stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Pause when that matters.
 
 ## Swap the agent, swap the voice

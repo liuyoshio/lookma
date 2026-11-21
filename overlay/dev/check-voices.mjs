@@ -9,7 +9,7 @@
 //   - at startup one session is connected, hearing nothing until the turn source's listen puts
 //     the microphone on it; the page sends no service message but the reply effects (turn
 //     detection is the provider's); the talk and wake APIs are gone; the capsule stays hidden
-//     while idle
+//     while idle, its glyph solid, and the app is told the microphone is open
 //   - every committed turn gets a reply at once, with tools allowed, transcript or not; its
 //     caption shows when the reply's first item that is not a pass arrives. A pass, or a reply
 //     with nothing in it, drops the turn and the call: no caption, no further reply
@@ -42,8 +42,9 @@
 //     settled as shown; a ?voice=0 page: no session, no microphone and no receipts
 //   - always listening never switches the provider's detector off
 //   - key mode, with the key driven as the app drives it (window.lookma.key): at rest the
-//     microphone is closed and off the sender; a tap opens a hands-free conversation whose turns
-//     the detector finds, another tap closes it; a hold switches the detector off, discards what
+//     microphone is closed and off the sender, the glyph hollow; a tap opens a hands-free
+//     conversation whose turns the detector finds (the glyph solid, the app told), another tap
+//     closes it; a hold switches the detector off, discards what
 //     came before and begins the turn, and at release closes the microphone and commits it, which
 //     is replied to and captioned under the service's item id; a hold over an announcement
 //     cancels and silences it, which is settled as cut at once; back to always the microphone
@@ -240,8 +241,9 @@ async function scenario(name, fake) {
   check((await connections()).length === 1 && c0.tracks.length === 1 && (await voice('gums')) === 1 && m[0]?.id === c0.tracks[0] && m[0]?.state === 'live',
     `startup: one session, connected, the microphone then put on its sender ${JSON.stringify(c0)}`)
   check((await sent()).length === 0, 'startup: nothing sent (nothing owed, nothing to tell a first session)')
-  check((await glyph('vg off')) === 'vg off' && (await capHidden()), 'startup: the glyph still and the capsule hidden while idle')
-  check((await posted('voice')) === true && (await posted('listening')) === undefined, 'startup: the app is told voice is on (its menu bar icon)')
+  check((await glyph('vg open')) === 'vg open' && (await capHidden()), 'startup: the glyph still and solid (the microphone open) and the capsule hidden while idle')
+  check((await posted('voice')) === true && (await posted('mic')) === true && (await posted('conversation')) === false && (await posted('listening')) === undefined,
+    'startup: the app is told voice is on and the microphone open (its menu bar icon)')
   check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping,key', 'the app\'s page API is toggleTyping and key (the old talk and wake APIs are gone)')
 
   // 2. A turn: "Listening…" while the user talks; a reply asked for at once on commit; the
@@ -263,7 +265,7 @@ async function scenario(name, fake) {
   check(await until(async () => (await capUser()) === '“Abre Mapas”', 1000), 'a turn: the caption once the reply\'s first item arrives')
   check((await glyph('vg speaking')) === 'vg speaking', 'glyph: speaking while the butler talks')
   await emit(...said.done)
-  check((await glyph('vg off')) === 'vg off', 'glyph: still again once it is done')
+  check((await glyph('vg open')) === 'vg open', 'glyph: still again once it is done')
 
   // 3. The butler decides what was meant for it: a pass, or a reply with nothing in it, drops the
   // turn (and the pass call) from the conversation, with no caption and no further reply.
@@ -537,19 +539,21 @@ async function scenario(name, fake) {
   await sleep(800)
   from = (await sent()).length
   await mock.setTalk('key')
-  check((await until(async () => (await onSender()) === null && (await liveMics()).length === 0)) && (await stepsSince(from)) === '',
-    'key mode: at rest the microphone is closed and off the sender, with nothing sent')
+  check((await until(async () => (await onSender()) === null && (await liveMics()).length === 0)) && (await stepsSince(from)) === '' &&
+    (await glyph('vg off')) === 'vg off' && (await until(async () => (await posted('mic')) === false)),
+    'key mode: at rest the microphone is closed and off the sender, with nothing sent; the glyph hollow, the app told')
   let gums = await voice('gums')
   await pressKey('down')
   await pressKey('up')
-  check((await until(async () => (await liveMics()).length === 1)) && (await voice('gums')) === gums + 1 && (await onSender()) === (await liveMics())[0].id && (await stepsSince(from)) === '',
-    'key mode: a tap opens a hands-free conversation, a new microphone on the sender, the detector as it was')
+  check((await until(async () => (await liveMics()).length === 1)) && (await voice('gums')) === gums + 1 && (await onSender()) === (await liveMics())[0].id && (await stepsSince(from)) === '' &&
+    (await glyph('vg open')) === 'vg open' && (await until(async () => (await posted('mic')) === true && (await posted('conversation')) === true)),
+    'key mode: a tap opens a hands-free conversation, a new microphone on the sender, the detector as it was; the glyph solid, the app told')
   await vadTurn('Open Maps')
   check((await nextCreate())?.kind === 'turn', 'key mode: in the conversation the detector\'s turns are replied to')
   await reply([{ say: 'Opening Maps.' }])
   await pressKey('down')
   await pressKey('up')
-  check((await until(async () => (await onSender()) === null && (await liveMics()).length === 0)) && (await stepsSince(from)) === '',
+  check((await until(async () => (await onSender()) === null && (await liveMics()).length === 0 && (await posted('conversation')) === false)) && (await stepsSince(from)) === '',
     'key mode: another tap closes the conversation and the microphone')
 
   from = (await sent()).length

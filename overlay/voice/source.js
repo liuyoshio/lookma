@@ -15,6 +15,10 @@
 //   listen { how, drop? }  the microphone's level, emitted exactly when `how` changes and never
 //                          otherwise. drop: the turn the hold began is discarded, not committed
 //   cut                    the user stopped the butler by hand
+//   sound { which }        open or close: a soft tone when `how` leaves or returns to `off`
+//                          while a session stays live, so a connection coming or going (a
+//                          reconnect, a renewal, a pause) and a gesture that did nothing (the
+//                          microphone failed) make no sound
 //
 // step(state, event) never mutates its input. Events carry `at`; wakeAt(state) says when the
 // reducer next needs a tick. Key events are ignored while no session is live.
@@ -47,8 +51,12 @@ export function step(state, ev) {
   const s = { ...state }
   const fx = []
   const drop = apply(s, ev, fx)
-  const next = how(s)
-  if (next !== how(state)) fx.push({ type: 'listen', how: next, ...(drop && { drop: true }) })
+  const before = how(state), next = how(s)
+  if (next === before) return { state: s, effects: fx }
+  fx.push({ type: 'listen', how: next, ...(drop && { drop: true }) })
+  if (state.live && s.live && ev.type !== 'mic.failed' && (before === 'off' || next === 'off')) {
+    fx.push({ type: 'sound', which: next === 'off' ? 'close' : 'open' })
+  }
   return { state: s, effects: fx }
 }
 

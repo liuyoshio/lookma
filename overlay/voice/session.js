@@ -82,18 +82,21 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
   /**
    * The microphone's level (voice/contract.js, How). Latest wins: one that arrives while the
    * microphone is still opening replaces the one waiting, so a hold released before the
-   * microphone opened is never sent. Rejects, sending nothing, when the microphone cannot open
-   * (permission refused, no device); the next listen tries again.
+   * microphone opened is never sent. Resolves true once it was sent (for hold and auto: the
+   * microphone is live), false when a later one replaced it. Rejects, sending nothing, when the
+   * microphone cannot open (permission refused, no device); the next listen tries again.
    */
   async function listen({ how, drop }) {
     const me = ++listens
     if (how === 'off') {
       send({ type: 'listen', how, ...(drop && { drop }) })
       closeMic()
-      return
+      return true
     }
     const stream = await openMic().catch(err => { if (me === listens) throw err })
-    if (me === listens) send({ type: 'listen', how, mic: stream, ...(drop && { drop }) }) // a tap's hold, dropped on the way back to auto
+    if (me !== listens) return false
+    send({ type: 'listen', how, mic: stream, ...(drop && { drop }) }) // a tap's hold, dropped on the way back to auto
+    return true
   }
 
   async function connect(why = '') {

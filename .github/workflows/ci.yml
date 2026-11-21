@@ -40,6 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: swiftc --version
+      - name: The talk key's machine
+        run: npm run test:key
       - name: Build Lookma.app, signed ad hoc
         run: app/build.sh
         env:

@@ -107,13 +107,13 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .rows { min-width: 0 }
 .rows > div:empty { display: none }
 
-/* voice glyph: five bars; they move only while someone is talking */
+/* voice glyph: five bars; at rest hollow (the microphone closed) or solid (open); they move only while someone is talking */
 .vg { width: 1.62em; height: 1.62em; display: flex; align-items: center; justify-content: center; gap: .13em }
 .vg i { display: block; width: .17em; height: .2em; border-radius: .1em; background: #fff; opacity: .92; transition: height .3s var(--ease), opacity .3s, background-color .3s }
-.vg.idle i { opacity: .42 }
 .vg.thinking i { height: .34em; opacity: .7 }
 .vg.thinking i:nth-child(3) { height: .5em }
 .vg.off i { background: transparent; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .45) }
+.vg.open i { height: .46em }  /* solid still bars: the microphone is open, nobody is talking yet */
 .vg.listening i { animation: vgLis var(--d) ease-in-out infinite alternate }
 .vg.listening i:nth-child(1) { --d: .82s; --h: .5em }
 .vg.listening i:nth-child(2) { --d: .62s; --h: .95em; animation-delay: -.21s }

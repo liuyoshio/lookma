@@ -19,13 +19,15 @@
 // Here: dispatch(event) runs the floor's step, executes its effects through one table, keeps
 // the one wake timer and pushes the view to the page; talk(event) does the same for the turn
 // source, whose quiet it computes from both: nobody speaking, nothing owed, no turn working and no
-// card waiting (background tasks do not count: they can run for an hour).
+// card waiting (background tasks do not count: they can run for an hour). The source's tones play
+// here: the open tone once the microphone is live, the close tone at once.
 
 import { createSession } from './voice/session.js'
 import { createTurns } from './voice/turns.js'
 import { createButler, marked } from './voice/butler.js'
 import * as floor from './voice/floor.js'
 import * as source from './voice/source.js'
+import { tone } from './sound.js'
 
 /**
  * @param {object} o
@@ -36,9 +38,10 @@ import * as source from './voice/source.js'
  * @param {(msg: object) => boolean} o.send  a message to the core with no ack (link.send): receipts
  * @param {(id: string, allow: boolean, via: string) => Promise<object>} o.answerCard  resolves with the ack
  * @param {(id: string) => number} o.cardShownAt  when the overlay rendered the card (Infinity: not yet)
- * @param {(v: { glyph: string, hearing: boolean, available: boolean }) => void} o.onVoice
+ * @param {(v: { glyph: string, hearing: boolean, available: boolean, how: string, open: boolean }) => void} o.onVoice
  *        glyph: off | listening | thinking | speaking; hearing: the user is talking now;
- *        available: voice is on, not paused, and not failing
+ *        available: voice is on, not paused, and not failing; how: the microphone, off | hold | auto
+ *        (voice/source.js); open: a hands-free conversation is open
  * @param {(line: object) => void} o.onLine  a line for the capsule or a card:
  *        { kind: 'user', text }            a user turn the butler took, as heard
  *        { kind: 'unheard', text, cardId } an utterance that did not count as an answer
@@ -54,6 +57,7 @@ export function createVoice(o) {
   let talkTimer = 0
   let busy = false, calmAt = 0 // the snapshot's work: running or waiting on a card; when it last stopped
   let quiet = null             // the quiet last given to the turn source
+  let heard = Promise.resolve(true) // the last listen: true once sent (the microphone live), false if replaced or failed
 
   const turns = createTurns({ log: o.log })
   const idle = () => floor.isIdle(state, Date.now()) && !source.view(talking).open
@@ -92,8 +96,13 @@ export function createVoice(o) {
     clearTimeout(timer)
     const t = floor.wakeAt(state)
     if (t != null) timer = setTimeout(() => dispatch({ type: 'tick' }), Math.max(0, t - Date.now()))
-    o.onVoice({ ...floor.view(state), available: available() })
+    show()
     calm()
+  }
+
+  /** The view to the page: the floor's and the turn source's. */
+  function show() {
+    o.onVoice({ ...floor.view(state), available: available(), ...source.view(talking) })
   }
 
   // The turn source's effects. The floor hears of a cut and a hold before the provider acts.
@@ -104,12 +113,14 @@ export function createVoice(o) {
     },
     listen(e) {
       dispatch({ type: 'user.hold', on: e.how === 'hold' })
-      session.listen(e).catch(err => {
+      heard = session.listen(e).catch(err => {
         o.log(`voice: the microphone did not open (${err.message})`)
         o.onLine({ kind: 'nomic' })
         talk({ type: 'mic.failed' })
+        return false
       })
     },
+    sound: e => heard.then(sent => sent && tone(e.which)),
   }
 
   function talk(event) {
@@ -119,6 +130,7 @@ export function createVoice(o) {
     clearTimeout(talkTimer)
     const t = source.wakeAt(talking)
     if (t != null) talkTimer = setTimeout(() => talk({ type: 'tick' }), Math.max(0, t - Date.now()))
+    show()
   }
 
   /** The quiet a hands-free conversation closes on, given to the turn source when it changes. */

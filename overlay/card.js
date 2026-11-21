@@ -62,9 +62,12 @@ export function renderCard(ui, now, wake) {
   } else if (heard) {
     key = `h${heard.text}`
     html = `${MIC}<span>Not a clear yes: <span class="q"></span></span>`
-  } else if (ui.voiceAvailable) { // always listening: just say it
+  } else if (ui.voiceAvailable && ui.mic) { // listening now: just say it
     key = 'v'
     html = `${MIC}<span>Say “yes, I approve”</span>` // the buttons beside it say the rest
+  } else if (ui.voiceAvailable) { // the microphone is closed until the key is held
+    key = 'k'
+    html = `${MIC}<span>Hold fn and say “yes, I approve”</span>`
   } else {
     key = 'c'
     html = '<span>Click to answer</span>'

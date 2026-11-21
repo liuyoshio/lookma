@@ -1,6 +1,7 @@
-// Lookma app: the overlay window (its page owns the always-listening voice session), the hands and
-// attention, and the menu bar item with the ⌃⌥P pause hotkey, connected to the core over /ws/app.
-// It provides primitives and makes no decisions (docs/protocol.md).
+// Lookma app: the overlay window (its page owns the voice session), the hands and attention, the
+// talk key (fn, whose edges go to the page), and the menu bar item with the ⌃⌥P pause hotkey,
+// connected to the core over /ws/app. It provides primitives and makes no decisions
+// (docs/protocol.md).
 //   LOOKMA_PORT          the core's port (default 8790)
 //   LOOKMA_OVERLAY_URL   the page to load (default http://127.0.0.1:$LOOKMA_PORT/)
 //   LOOKMA_CHECK=<file>  check mode for `lookma doctor` (below)
@@ -35,16 +36,19 @@ if !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
 let overlay = Overlay(url: URL(string: env["LOOKMA_OVERLAY_URL"] ?? "http://127.0.0.1:\(port)/")!)
 let link = Link(url: URL(string: "ws://127.0.0.1:\(port)/ws/app")!)
 
-// The menu bar item and ⌃⌥P only ask the core; it says back whether it is paused. The page says
-// whether its voice is on.
+// The menu bar item and ⌃⌥P only ask the core; it says back whether it is paused and how the user
+// talks. The page says whether its voice is on, the microphone open and a conversation open.
 let menu = StatusMenu()
 link.onPaused = { menu.paused = $0 }
-overlay.onVoice = { menu.voiceOn = $0 }
+link.onTalk = { menu.talk = $0 }
+overlay.onVoice = { menu.voice = $0 }
 func togglePause() {
     guard let paused = menu.paused else { return }
     link.send(["type": paused ? "resume" : "pause"])
 }
 menu.onToggle = togglePause
+menu.onTalk = { link.send(["type": "talk", "mode": $0.rawValue]) }
+menu.onConversation = { overlay.key(.toggle) }
 menu.onType = { overlay.setTyping(true) }
 menu.onQuit = {
     // The core shuts down, Claude Code included, and tells the app to quit. Without a core, or
@@ -55,6 +59,7 @@ menu.onQuit = {
     DispatchQueue.main.asyncAfter(deadline: .now() + 5) { app.terminate(nil) }
 }
 registerPauseHotkey(togglePause)
+let talkKey = TalkKeyWatcher { overlay.key($0) }
 link.start()
 
 // Every exit path turns off the AX attributes we set on other apps.
