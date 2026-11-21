@@ -25,7 +25,7 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code run headless through the Claude Agent SDK, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
 | Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings, `mint.mjs` runs in the core and mints a short-lived grant for each session, and `page.js` runs in the overlay and connects to the service. The rest of the voice (`overlay/voice/`) is the same for every provider. |
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
-| Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies and permissions. |
+| Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies, permissions and what else the fn (🌐) key does. |
 
 ## Two plug-ins
 

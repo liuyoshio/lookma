@@ -1,8 +1,9 @@
 // lookma doctor [--fix]: checks what Lookma needs and prints a fix for each problem. It changes
-// nothing; --fix only opens the System Settings pane of the first missing permission. The same
-// checks are `lookma start`'s preflight, so a missing piece gets the same words from both. A
-// plug-in adds its own in its manifest.mjs, with the helpers exported here; the doctor also lists
-// the installed plug-ins with the settings in effect, and names any LOOKMA_* variable nobody reads.
+// nothing; --fix only opens the System Settings pane of the first fix made there: a missing
+// permission, or what the fn (🌐) key also does. The same checks are `lookma start`'s preflight,
+// so a missing piece gets the same words from both. A plug-in adds its own in its manifest.mjs,
+// with the helpers exported here; the doctor also lists the installed plug-ins with the settings
+// in effect, and names any LOOKMA_* variable nobody reads.
 // Permissions belong to the app, which is launched with `open` (macOS ties them to its signature),
 // so they are read from the app itself: from the running core, which holds the app's hello, or
 // else from a separate instance started with LOOKMA_CHECK=<file>, which writes them and exits.
@@ -25,8 +26,8 @@ const PERMISSIONS = [
   { key: 'microphone', name: 'Microphone', pane: 'Microphone', use: 'for voice; macOS asks the first time you talk', required: false },
 ]
 
-// A check returns a finding, or a list of them: { level, text, fix: [lines] }. A missing
-// permission also carries `settings`, the pane --fix opens.
+// A check returns a finding, or a list of them: { level, text, fix: [lines] }. One whose fix is
+// made in System Settings also carries `settings: { where, url }`, the pane --fix opens.
 const finding = level => (text, fix = []) => ({ level, text, fix: [fix].flat() })
 export const ok = finding('ok')
 export const warn = finding('warn')
@@ -86,10 +87,11 @@ const TO_BUILD = [checkSwiftc]
 
 // `lookma start` checks what it needs, building or not, and throws the first failure as the doctor
 // words it. Warnings do not stop it: it returns their texts, for the log. A setting nobody reads
-// is one of them, so a misspelt or renamed setting does not go unnoticed.
+// is one of them, so a misspelt or renamed setting does not go unnoticed, and so is a talk key
+// that does something else too.
 export function preflight(config, { build }) {
   const warnings = []
-  for (const check of [...toRun(config), ...(build ? TO_BUILD : []), () => checkUndeclared(config)]) {
+  for (const check of [...toRun(config), ...(build ? TO_BUILD : []), () => checkUndeclared(config), () => checkTalkKey(config)]) {
     for (const f of [check()].flat()) {
       if (f.level === 'fail') throw new Error([f.text, ...f.fix.map(l => `  ${l}`), 'Run lookma doctor for a full check.'].join('\n'))
       if (f.level === 'warn') warnings.push(f.fix.length ? `${f.text}. ${f.fix.join(' ')}` : f.text)
@@ -115,6 +117,35 @@ function checkVoice(config) {
   const [missing] = provider.missing
   if (!missing) return ok(`voice: ${provider.title}`)
   return warn(`${missing} is not set: voice is off, you can still type`, `Put ${missing}=… in ${path.join(ROOT, '.env')} (see .env.example).`)
+}
+
+// The talk key is fn, which macOS also calls the 🌐 key: System Settings → Keyboard → "Press 🌐
+// key to" gives it a job of its own, stored as AppleFnUsageType in com.apple.HIToolbox
+// (community-documented, not Apple's). Lookma never writes that setting, nor swallows the key: it
+// says what else fn does. In key mode, where fn is how you talk, that is a warning; in always mode
+// fn only gives you the floor, so it is a note.
+const GLOBE = { 1: 'changes the input source', 2: 'shows Emoji & Symbols', 3: 'starts Dictation when tapped twice' }
+const KEYBOARD = { where: 'Keyboard', url: 'x-apple.systempreferences:com.apple.Keyboard-Settings.extension' }
+
+function checkTalkKey(config) {
+  if (!config.voice.provider) return []
+  const key = config.voice.talk === 'key'
+  const read = sh('defaults', ['read', 'com.apple.HIToolbox', 'AppleFnUsageType'])
+  const findings = []
+  if (read.ok && read.out === '0') findings.push(ok('the fn (🌐) key does nothing else (Press 🌐 key to → Do Nothing)'))
+  else {
+    const also = !read.ok ? 'may also show Emoji & Symbols or change the input source: "Press 🌐 key to" was never set, so macOS picks'
+      : GLOBE[read.out] ? `also ${GLOBE[read.out]}` : `may also do something else (AppleFnUsageType is ${read.out})`
+    const found = (key ? warn : note)(`the fn (🌐) key ${also}`, [
+      'Set System Settings → Keyboard → Press 🌐 key to → Do Nothing.',
+      'If you switch input sources with 🌐, ⌃Space does the same.',
+    ])
+    findings.push(key ? { ...found, settings: KEYBOARD } : found)
+  }
+  // Where macOS keeps Dictation's own shortcut is not established, so it is named, not read. Once
+  // it is, this reads it and warns like the setting above.
+  if (key) findings.push(note('if Dictation\'s shortcut is Press 🌐 Twice, two quick taps of fn also start Dictation', 'Pick another in System Settings → Keyboard → Dictation → Shortcut.'))
+  return findings
 }
 
 // One warning for every LOOKMA_* variable that is set and that nothing reads: a typo, or a
@@ -197,7 +228,7 @@ function checkPermissions(perms, appName) {
       `open "${url}"`,
       ...(p.required ? ['If it already looks on, remove it with −, then start lookma: macOS adds it back and you turn it on.'] : []),
     ])
-    return { ...missing, settings: { name: p.name, url } }
+    return { ...missing, settings: { where: `Privacy & Security → ${p.name}`, url } }
   })
 }
 
@@ -224,6 +255,7 @@ export async function doctor(config, { fix = false } = {}) {
   report(listPlugins(config, 'voices', config.voice.provider))
   report(checkVoice(config))
   if (config.voice.provider) for (const check of pluginChecks(config.voice.provider)) report(check())
+  report(checkTalkKey(config))
   report(checkUndeclared(config))
   const state = await readCore(config.port)
   report(checkCore(state, config.port))
@@ -239,7 +271,7 @@ export async function doctor(config, { fix = false } = {}) {
   const first = panes.find(f => f.level === 'fail') || panes[0]
   if (first && fix) {
     sh('open', [first.settings.url])
-    console.log(`\nOpened System Settings → Privacy & Security → ${first.settings.name}.`)
+    console.log(`\nOpened System Settings → ${first.settings.where}.`)
   } else if (first) console.log('\nRun lookma doctor --fix to open the first of these in System Settings.')
   const failures = findings.filter(f => f.level === 'fail').length
   console.log(failures ? `\n${failures} problem${failures > 1 ? 's' : ''} to fix.` : '\nReady.')

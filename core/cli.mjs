@@ -28,7 +28,7 @@ Usage:
   lookma [options] [dir ...]         Start. The agent may work in each dir you pass.
   lookma start [options] [dir ...]   The same.
   lookma doctor [options] [--fix]    Check what Lookma needs, with a fix for each problem.
-                                     --fix opens System Settings at the first missing permission.
+                                     --fix opens System Settings where the first fix is made.
   lookma config [options]            Print the settings in effect, and where each came from.
   lookma --version                   Print the version.
   lookma --help                      Print this help.

@@ -174,6 +174,8 @@ And one agent:
 
 **The menu bar seal** fills its ring while the microphone is open, shows a pause sign while paused, and dims when the app has lost the core. Its menu also switches how you talk for this run (**Listen: With the fn Key** or **Always**) and, with the key, starts or ends a hands-free conversation.
 
+**The fn key is also 🌐.** With `LOOKMA_TALK=key`, set System Settings → Keyboard → **Press 🌐 key to** → **Do Nothing**, or a tap of fn also switches the input source, opens Emoji & Symbols or starts Dictation. If you switch input sources with 🌐, <kbd>⌃</kbd><kbd>Space</kbd> does the same. If Dictation's shortcut (Keyboard → Dictation) is **Press 🌐 Twice**, pick another, or two quick taps start Dictation. `lookma doctor` and `lookma start` warn about the first, and `lookma doctor --fix` opens the Keyboard pane. Lookma never changes either setting itself.
+
 **Watch the agent itself.** Both agents log their steps, cards and messages in the terminal that started Lookma.
 
 **From a script**, post your request to the core's `/api/tell` ([protocol](docs/protocol.md#overlay--core)).
