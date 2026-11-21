@@ -58,9 +58,10 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | `node overlay/dev/check-voices.mjs` | the voice client with each voice provider, against its fake service (`voices/<name>/dev/fake.mjs`) | Google Chrome in `/Applications` (runs headless) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:key` | the talk key's machine in `app/Sources/TalkKey.swift`: fn alone, fn in a shortcut, events the app posted itself | Xcode's command line tools (`swiftc`) |
+| `npm run test:gesture` | the hand gesture engine in `app/Sources/Gesture.swift`, fed synthetic hands: pinch, dropouts, scroll, switch, zoom, talk, stop | Xcode's command line tools (`swiftc`) |
 | `npm run test:e2e` | a real Claude Code session with the fake app: it gets ready, says hello, and leaves nothing running | A logged-in Claude Code; one short Sonnet turn on your Claude plan |
 
-Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, `test:key` when you touch `app/Sources/TalkKey.swift`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test`, `test:key` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice grant (an OpenAI key) on your OpenAI account; it never runs in CI.
+Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, `test:key` when you touch `app/Sources/TalkKey.swift`, `test:gesture` when you touch `app/Sources/Gesture.swift`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test`, `test:key`, `test:gesture` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice grant (an OpenAI key) on your OpenAI account; it never runs in CI.
 
 ## Code conventions
 
