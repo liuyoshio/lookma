@@ -1,7 +1,8 @@
 // lookma doctor [--fix]: checks what Lookma needs and prints a fix for each problem. It changes
 // nothing; --fix only opens the System Settings pane of the first missing permission. The same
-// checks are `lookma start`'s preflight, so a missing piece gets the same words from both. An
-// executor adds its own in core/executors/<name>/checks.mjs, with the helpers exported here.
+// checks are `lookma start`'s preflight, so a missing piece gets the same words from both. A
+// plug-in adds its own in its manifest.mjs, with the helpers exported here; the doctor also lists
+// the installed plug-ins with the settings in effect, and names any LOOKMA_* variable nobody reads.
 // Permissions belong to the app, which is launched with `open` (macOS ties them to its signature),
 // so they are read from the app itself: from the running core, which holds the app's hello, or
 // else from a separate instance started with LOOKMA_CHECK=<file>, which writes them and exits.
@@ -11,11 +12,11 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { ROOT } from './config.mjs'
 import { isStale } from './app-build.mjs'
+import { list, describe } from './plugins.mjs'
 
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 // Node's minimum is the one in package.json's engines.
 const NEEDS = { macos: '15', node: PKG.engines.node.replace(/^>=/, '') }
-const EXECUTORS = path.join(ROOT, 'core', 'executors')
 const BUILD_SH = path.join(ROOT, 'app', 'build.sh')
 const PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_'
 const PERMISSIONS = [
@@ -75,34 +76,53 @@ function checkSwiftc() {
   return fail('swiftc does not run', (swift.err || swift.out).split('\n')[0] || 'xcode-select --install')
 }
 
-// The executor's own checks, from its checks.mjs; an adapter may have none. An unknown
-// LOOKMA_EXECUTOR fails here, in words, before the core would import it.
-async function executorChecks(name) {
-  const names = fs.readdirSync(EXECUTORS).filter(d => fs.existsSync(path.join(EXECUTORS, d, 'index.mjs')))
-  if (!names.includes(name)) return [() => fail(`LOOKMA_EXECUTOR=${name}: no such executor`, `Use one of: ${names.join(', ')}`)]
-  return fs.existsSync(path.join(EXECUTORS, name, 'checks.mjs')) ? (await import(`./executors/${name}/checks.mjs`)).checks : []
-}
+// A plug-in's own checks, from its manifest, with its options.
+const pluginChecks = plugin => plugin.checks.map(check => () => check(plugin.options))
 
-// To run Lookma, and to build its app.
-const toRun = async config => [checkMacos, checkNode, checkPackages, ...(await executorChecks(config.executor))]
+// To run Lookma, and to build its app. A voice's checks are the doctor's only: without a voice
+// Lookma still runs.
+const toRun = config => [checkMacos, checkNode, checkPackages, ...pluginChecks(config.executor)]
 const TO_BUILD = [checkSwiftc]
 
 // `lookma start` checks what it needs, building or not, and throws the first failure as the doctor
 // words it. Warnings do not stop it.
-export async function preflight(config, { build }) {
-  for (const check of [...(await toRun(config)), ...(build ? TO_BUILD : [])]) {
+export function preflight(config, { build }) {
+  for (const check of [...toRun(config), ...(build ? TO_BUILD : [])]) {
     const f = check()
     if (f.level === 'fail') throw new Error([f.text, ...f.fix.map(l => `  ${l}`), 'Run lookma doctor for a full check.'].join('\n'))
   }
 }
 
-// ---------------------------------------------------------------- voice, the running core, the app
+// ---------------------------------------------------------------- plug-ins and settings
+
+// The installed plug-ins of a kind, the selected one marked, with its settings in effect.
+function listPlugins(config, kind, selected) {
+  const names = list(kind).map(name => (name === selected?.name ? `${name} (selected)` : name))
+  if (!selected) return note(`${kind}: ${names.join(', ')}; none selected`)
+  const rows = describe(selected).map(s => [s.name, s.value || '(empty)', config.sources[s.name] || 'default'])
+  const width = Math.max(...rows.map(r => r[0].length))
+  return note(`${kind}: ${names.join(', ')}`, rows.map(([name, value, from]) => `${name.padEnd(width)}  ${value}  (${from})`))
+}
 
 function checkVoice(config) {
-  if (!config.voice.enabled) return warn('voice is off (LOOKMA_NO_VOICE=1): you can still type')
-  if (config.voice.apiKey) return ok('OPENAI_API_KEY is set (voice)')
-  return warn('OPENAI_API_KEY is not set: voice is off, you can still type', `Put OPENAI_API_KEY=… in ${path.join(ROOT, '.env')} (see .env.example).`)
+  const { provider } = config.voice
+  if (!provider) return warn('voice is off (LOOKMA_VOICE=off): you can still type')
+  const [missing] = provider.missing
+  if (!missing) return ok(`voice: ${provider.title}`)
+  return warn(`${missing} is not set: voice is off, you can still type`, `Put ${missing}=… in ${path.join(ROOT, '.env')} (see .env.example).`)
 }
+
+// One warning for every LOOKMA_* variable that is set and that nothing reads: a typo, or a
+// setting that was renamed.
+function checkUndeclared(config) {
+  const unread = Object.keys(config.sources).filter(name => !config.declared.has(name)).sort()
+  if (!unread.length) return []
+  const one = unread.length === 1
+  const names = unread.map(name => `${name} (${config.sources[name]})`).join(', ')
+  return warn(`${names} ${one ? 'is' : 'are'} set, but Lookma does not read ${one ? 'it' : 'them'}`, 'Check the names in lookma --help, or remove them.')
+}
+
+// ---------------------------------------------------------------- the running core, the app
 
 // The running core's state, null when nothing listens, 'other' when something else answers.
 async function readCore(port) {
@@ -193,8 +213,13 @@ export async function doctor(config, { fix = false } = {}) {
     }
   }
 
-  for (const check of [...(await toRun(config)), ...TO_BUILD]) report(check())
+  for (const check of [checkMacos, checkNode, checkPackages, ...TO_BUILD]) report(check())
+  report(listPlugins(config, 'executors', config.executor))
+  for (const check of pluginChecks(config.executor)) report(check())
+  report(listPlugins(config, 'voices', config.voice.provider))
   report(checkVoice(config))
+  if (config.voice.provider) for (const check of pluginChecks(config.voice.provider)) report(check())
+  report(checkUndeclared(config))
   const state = await readCore(config.port)
   report(checkCore(state, config.port))
   const app = findApp(config)

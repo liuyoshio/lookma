@@ -1,6 +1,6 @@
 // Claude Code http hooks → contract events: turnStart, turnEnd, step and task.
 import path from 'node:path'
-import { clip } from '../../util.mjs'
+import { clip } from '../../core/util.mjs'
 
 const base = p => (p ? path.basename(String(p)) : '')
 const OURS = /^mcp__lookma__/ // say and the hands are visible already

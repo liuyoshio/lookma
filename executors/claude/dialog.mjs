@@ -16,7 +16,7 @@
 // A dialog's identity is its signature (question and options, whitespace folded). The keys sent to
 // a dialog are arrows and Enter (never digits: they are text in "Type something" rows and only
 // reach 1-9), and none is sent unless parse() shows the dialog the card was made for.
-import { sleep } from '../../util.mjs'
+import { sleep } from '../../core/util.mjs'
 
 const RULE = /^\s*[─━═▔]{8,}/ // solid rule; the dashed ╌ lines inside dialogs are not boundaries
 const DASHED = /^\s*[╌┄┈]{8,}\s*$/

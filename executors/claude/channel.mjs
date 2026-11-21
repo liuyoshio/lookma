@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// The MCP server Claude Code spawns, as a development channel: mcp-bridge.mjs (say and the hands)
-// plus what only Claude needs, prompts and permission requests through the channel:
+// The MCP server Claude Code spawns, as a development channel: core/executor/bridge.mjs (say and
+// the hands) plus what only Claude needs, prompts and permission requests through the channel:
 //   core  → channel: { type: 'prompt', text }, { type: 'permissionAnswer', request_id, behavior }
 //   channel → core:  { type: 'permission', request_id, tool_name, description, input_preview }
 // Started from the .mcp.json that session.mjs writes, which also sets LOOKMA_CORE_URL.
 import { z } from 'zod'
-import { serve } from '../mcp-bridge.mjs'
-import { SAY, HANDS } from '../../tools.mjs'
+import { serve } from '../../core/executor/bridge.mjs'
+import { SAY, HANDS } from '../../core/tools.mjs'
 
 // Claude Code sends this when a tool-approval dialog opens; the terminal dialog stays open too.
 const PermissionRequestSchema = z.object({

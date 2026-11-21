@@ -13,12 +13,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { ROOT } from '../config.mjs'
-import { create } from '../executors/codex/index.mjs'
-import { stepTitle } from '../executors/codex/events.mjs'
+import { load } from '../plugins.mjs'
+import { create } from '../../executors/codex/index.mjs'
+import { stepTitle } from '../../executors/codex/events.mjs'
 
 const PORT = 8793
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'lookma-check-codex-'))
 const config = { root: ROOT, dataDir: DATA, port: PORT }
+const { options } = await load('executors', 'codex', process.env)
 
 let failures = 0
 function check(name, ok, detail = '') {
@@ -85,7 +87,7 @@ function fakeSocket() {
 async function harness() {
   const server = fakeServer()
   const events = []
-  const ctx = { emit: e => events.push(e), hands: async tool => ({ text: `${tool} done` }), config, log: () => {} }
+  const ctx = { emit: e => events.push(e), hands: async tool => ({ text: `${tool} done` }), config, options, log: () => {} }
   const ex = create(ctx, { openServer: handlers => server.open(handlers) })
   await ex.start({ dirs: ['/Users/someone/Projects'] })
   await tick()
@@ -281,9 +283,8 @@ async function offline() {
 
 async function handshake() {
   const { WebSocketServer } = await import('ws')
-  const { openServer } = await import('../executors/codex/rpc.mjs')
-  const { loadConfig } = await import('../executors/codex/config.mjs')
-  const auth = path.join(loadConfig().codexHome, 'auth.json')
+  const { openServer } = await import('../../executors/codex/rpc.mjs')
+  const auth = path.join(options.home, 'auth.json')
   const authBefore = fs.statSync(auth).mtimeMs
   const dir = path.join(fs.realpathSync(DATA), 'Projects') // a folder the user passes; Codex reports it resolved
   fs.mkdirSync(dir)
@@ -303,7 +304,7 @@ async function handshake() {
   }
   const events = []
   const logs = []
-  const ex = create({ emit: e => events.push(e), hands: async () => ({ text: 'no hands in this check' }), config, log: (...a) => logs.push(a.join(' ')) }, { openServer: tapped })
+  const ex = create({ emit: e => events.push(e), hands: async () => ({ text: 'no hands in this check' }), config, options, log: (...a) => logs.push(a.join(' ')) }, { openServer: tapped })
   const wss = new WebSocketServer({ host: '127.0.0.1', port: PORT })
   wss.on('connection', ws => ex.connect(ws))
 

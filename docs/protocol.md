@@ -14,7 +14,7 @@ Three WebSockets meet at the core: the overlay page on `/ws/overlay`, the app on
 - **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/hook`, `/api/state`, `/api/tell` and `/api/voice-key`.
 - **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, and the menu bar item (pause, resume, type, quit), and makes no decisions.
 - **overlay** (`overlay/`) is a page loaded by the app's full-screen, click-through WKWebView. It renders core state and runs the realtime voice session. It also opens in a normal browser for development.
-- **executor adapter** (`core/executors/<name>/`) wraps one agent behind the contract below. v1 ships `claude` and `codex`.
+- **executor adapter** (`executors/<name>/`) wraps one agent behind the contract below. v1 ships `claude` and `codex`.
 
 Port: `LOOKMA_PORT`, default 8790. During development use another port (the dev scripts default to 8791), because your everyday Lookma may still hold 8790.
 
@@ -88,7 +88,7 @@ The answer to an overlay request (see Overlay → core) goes to the requesting s
 - **Turn records.** Each turn is recorded when its speech starts: its item id, `startedAt` (when the event arrived) and `overButler` (whether the voice's audio was playing then). Its transcript is matched by item id when it arrives.
 - **Health.** The session reconnects in the background when it closes or fails, with backoff. While idle (nothing heard, said or owed for 10 s), it is renewed before the Realtime session limit, with its key minted ahead.
 - **Context.** Every new session is first given the outbox entries that already have a receipt (the last 5 minutes, and the card on screen), as user items marked "from earlier" and with no `response.create`. So "yes, I approve" still answers a card announced on the old session, also after a page reload.
-- **Paused:** no session at all, and no microphone; what is owed stays in the outbox and is announced after resume. **Voice off** (`LOOKMA_NO_VOICE=1`, no OpenAI key): no session, captions only, and everything owed gets `shown`. A page opened with `?voice=0` is a spectator: no session, captions only, and no receipts, so it never settles what the app's voice still owes.
+- **Paused:** no session at all, and no microphone; what is owed stays in the outbox and is announced after resume. **Voice off** (`LOOKMA_VOICE=off`, no OpenAI key): no session, captions only, and everything owed gets `shown`. A page opened with `?voice=0` is a spectator: no session, captions only, and no receipts, so it never settles what the app's voice still owes.
 
 **Voice approval** (`overlay/consent.js`): a spoken answer (approve or decline) counts only when all of these hold:
 - it was spoken at least 1 s after the card rendered (the turn's `startedAt`);
@@ -120,7 +120,7 @@ Without an ack:
 
 Spoken "stop", "go ahead" and "pause" are the voice's: it calls its `control` tool. Every tool that reaches the core (`do` sends `tell`, `answer`, `control`) gets the ack as its output, verbatim, so the voice says what really happened. A typed line of just "stop", "go ahead" or "pause" is sent as that `control` request whatever the state (`commandFor` in `overlay/consent.js`); a failed typed request shows its error on screen.
 
-`POST /api/voice-key` → `{ value, model, expiresAt, responses: { turn: {}, speak: { tool_choice: 'none' } } }`. `value` is an ephemeral OpenAI Realtime key, with the session config (the voice's instructions from `prompts/butler.md`, its tools `do`, `status`, `answer`, `control` and `pass` from `prompts/butler-tools.json`, transcription (with `language` from `LOOKMA_VOICE_LANGUAGE` when set, and no prompt), server turn detection as above, `max_output_tokens` from `LOOKMA_VOICE_MAX_TOKENS` (default 200), and voice) baked in by the core. `responses` are the parameters of each kind of reply (`core/voice-key.mjs`); the page never builds one. The real key never leaves the core. A 503 means no voice, for good.
+`POST /api/voice-key` → `{ value, model, expiresAt, responses: { turn: {}, speak: { tool_choice: 'none' } } }`. `value` is an ephemeral OpenAI Realtime key, with the session config (the voice's instructions from `prompts/butler.md`, its tools `do`, `status`, `answer`, `control` and `pass` from `prompts/butler-tools.json`, transcription (with `language` from `LOOKMA_VOICE_LANGUAGE` when set, and no prompt), server turn detection as above, `max_output_tokens` from `LOOKMA_OPENAI_MAX_TOKENS` (default 200), and voice) baked in by the core. `responses` are the parameters of each kind of reply (`core/voice-key.mjs`); the page never builds one. The real key never leaves the core. A 503 means no voice, for good.
 
 **Overlay ↔ app (local, not the core).** The page posts `{ hitRects: [rect…], typing, voice, listening, speaking }` to `window.webkit.messageHandlers.lookma` whenever one of them changes:
 
@@ -208,8 +208,8 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
 ## Executor contract
 
 ```js
-// core/executors/<name>/index.mjs
-export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promise<result>, config, log }
+// executors/<name>/index.mjs
+export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promise<result>, config, options, log }
   → { start({ dirs }) → Promise<{ name }>,
       prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
       connect?(ws), hook?(body) }
@@ -217,7 +217,7 @@ export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promis
 
 - `prompt` gets `steer: true` when a turn is already running: the text is a correction to it.
 - `connect` gets each socket accepted on `/ws/executor`, and `hook` each body POSTed to `/hook`. An adapter that needs neither leaves them out; the core then closes `/ws/executor` sockets (code 4004).
-- `core/executors/<name>/checks.mjs` is optional. It exports `checks`, a list of functions that each return a finding, run by `lookma doctor` and before `lookma start`. It may import only Node's own modules and the helpers `ok`, `warn`, `fail`, `sh` and `atLeast` from `core/doctor.mjs`, so it works before `npm install`.
+- `executors/<name>/manifest.mjs` (a voice has one too, in `voices/<name>/`) exports `default { title, settings, checks? }`, read and validated only by `core/plugins.mjs`. A setting is `{ default, help, env?, secret?, required? }`: its type is the type of `default` (string, boolean written `1` or `0`, number), its name is `LOOKMA_<NAME>_<KEY>` unless `env` names a well-known variable (`OPENAI_API_KEY`), an empty value is unset, and `secret` is never printed. The adapter gets the checked values as `ctx.options`. `checks` is a list of functions `options => finding`, run by `lookma doctor` and before `lookma start`. A manifest may import only Node's own modules and the helpers `ok`, `warn`, `fail`, `sh` and `atLeast` from `core/doctor.mjs`, so it works before `npm install`.
 
 The adapter emits:
 
@@ -233,14 +233,14 @@ The adapter emits:
 
 GUI steps are not in the contract. They arrive as hands tool calls, which the adapter forwards to `ctx.hands`.
 
-**The tools bridge.** Both adapters give their agent `say` and the hands through `core/executors/mcp-bridge.mjs`, a stdio MCP server that the agent spawns with `LOOKMA_CORE_URL` set. It exposes the tools as `core/tools.mjs` defines them and connects to `/ws/executor`, the adapter's `connect`, where `core/executors/tool-link.mjs` serves them:
+**The tools bridge.** Both adapters give their agent `say` and the hands through `core/executor/bridge.mjs`, a stdio MCP server that the agent spawns with `LOOKMA_CORE_URL` set. It exposes the tools as `core/tools.mjs` defines them and connects to `/ws/executor`, the adapter's `connect`, where `core/executor/tool-link.mjs` serves them:
 
 - bridge → core: `{ type: 'say', speech, display, kind }` and `{ type: 'hands', id, tool, args }`;
 - core → bridge: `{ type: 'res', id, ok, result | error }`, the hands call's result (`{ text, image? }`) or its error.
 
 The bridge returns `see`'s screenshot as an MCP image, and an error as a tool error the agent reads.
 
-### Claude Code adapter (`core/executors/claude/`)
+### Claude Code adapter (`executors/claude/`)
 
 - **Run.** Interactive `claude` runs in a tmux session (`lookma`; `tmux attach -t lookma` to watch). Its working dir is a generated session dir holding `.mcp.json`, `settings.json` and the executor prompt (`executor.md`, copied from `prompts/executor.md`).
   - Flags: `--model`, `--permission-mode`, `--settings`, `--append-system-prompt-file`, `--dangerously-load-development-channels server:lookma`, then `LOOKMA_CLAUDE_FLAGS` (the user's folders are in the settings, see Folders below).
@@ -260,7 +260,7 @@ The bridge returns `see`'s screenshot as an MCP image, and an error as a tool er
   - **Keys:** arrows only, never digits. Enter is pressed only when a re-parse shows the cursor on the target and the same signature.
 - **Folders.** The user's folders go into the session's `permissions.additionalDirectories`, not `--add-dir`, so starting asks no per-folder trust question.
 
-### Codex adapter (`core/executors/codex/`)
+### Codex adapter (`executors/codex/`)
 
 - **Run.** `codex app-server` runs as a child process, speaking newline-delimited JSON-RPC on stdio (`rpc.mjs`), with `--strict-config`, the login kept in a file (`cli_auth_credentials_store="file"`), and the features `apps`, `plugins`, `computer_use`, `browser_use`, `multi_agent`, `memories` and `image_generation` turned off. Lookma's own OpenAI key is not passed on. It is checked against Codex 0.163.0; app-server is experimental.
 - **Isolation.** `CODEX_HOME` is `<data>/sessions/codex/home`, which holds only a link to the user's `auth.json`: the login is shared, while the user's own config, MCP servers and plugins stay out. The thread's working dir is the empty `<data>/sessions/codex/work`, so no `AGENTS.md` is read.

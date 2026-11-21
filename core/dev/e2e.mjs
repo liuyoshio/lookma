@@ -62,7 +62,7 @@ function run(name, args, env) {
   return { child, lines }
 }
 
-const core = run('core', ['core/cli.mjs', 'start'], { LOOKMA_PORT: String(PORT), LOOKMA_EXEC_SESSION: SESSION, LOOKMA_MODEL: 'sonnet', LOOKMA_DATA: DATA, LOOKMA_PERMISSION_MODE: 'default' })
+const core = run('core', ['core/cli.mjs', 'start'], { LOOKMA_PORT: String(PORT), LOOKMA_EXEC_SESSION: SESSION, LOOKMA_CLAUDE_MODEL: 'sonnet', LOOKMA_DATA: DATA, LOOKMA_CLAUDE_PERMISSION_MODE: 'default' })
 const app = run('fake-app', ['core/dev/fake-app.mjs', '--port', String(PORT), '--idle', '10'], {})
 
 async function cleanup() {

@@ -1,4 +1,10 @@
-// Small helpers for the core and its adapters: the log line, cancellable waiting, one-line text.
+// Small helpers for the core and its adapters: the log line, cancellable waiting, one-line text,
+// the error of a bad setting or option.
+
+// A mistake in the user's settings or command line: lookma prints it and exits with status 2.
+export function usage(message) {
+  return Object.assign(new Error(`${message} (see lookma --help)`), { exitCode: 2 })
+}
 
 // log(...args): one line on stdout, "HH:MM:SS.mmm prefix text"; non-strings are written as JSON.
 export function createLog(prefix = 'core') {

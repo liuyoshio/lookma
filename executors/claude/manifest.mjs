@@ -1,6 +1,7 @@
-// What the Claude Code adapter needs, for lookma doctor and the start's preflight: tmux, and Claude
-// Code logged in. Node built-ins and the doctor's helpers only, so it runs before npm install.
-import { ok, warn, fail, sh, atLeast } from '../../doctor.mjs'
+// What the Claude Code adapter needs (core/plugins.mjs reads this): its settings, and the checks
+// lookma doctor and the start's preflight run: tmux, and Claude Code logged in. Node built-ins and
+// the doctor's helpers only, so it runs before npm install.
+import { ok, warn, fail, sh, atLeast } from '../../core/doctor.mjs'
 
 const NEEDS = { claude: '2.1.312' }
 
@@ -24,4 +25,14 @@ function checkClaude() {
   return warn(`Claude Code ${version}; could not check the login`, 'Run claude once and log in if it asks.')
 }
 
-export const checks = [checkTmux, checkClaude]
+export default {
+  title: 'Claude Code',
+  settings: {
+    model: { default: 'sonnet', help: 'the Claude Code model (--model), e.g. opus' },
+    permissionMode: { default: 'auto', help: "Claude Code's permission mode; default gives more cards" },
+    flags: { default: '', help: 'extra flags for claude, separated by spaces' },
+    // Its old name, for as long as the adapter runs Claude Code in tmux.
+    session: { default: 'lookma', env: 'LOOKMA_EXEC_SESSION', help: 'the tmux session that runs Claude Code; watch it with tmux attach -t <name>' },
+  },
+  checks: [checkTmux, checkClaude],
+}

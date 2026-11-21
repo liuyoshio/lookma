@@ -1,6 +1,6 @@
 // Mints short-lived OpenAI Realtime keys for the overlay, with the butler session baked in (set
 // up for a room or a headset), and the parameters each kind of reply is asked for with. The real
-// key never leaves the core.
+// key never leaves the core. Its settings are those of voices/openai (manifest.mjs), the one voice.
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -40,12 +40,13 @@ export const RESPONSES = { turn: {}, speak: { tool_choice: 'none' } }
 
 /** The butler's Realtime session: always listening, and replying only when the overlay asks. */
 export function butlerSession(config) {
-  const { model, voice, transcribe, language, audio, maxTokens } = config.voice
+  const { language, audio } = config.voice
+  const { model, voice, transcribeModel, maxTokens } = config.voice.provider.options
   const setup = SETUPS[audio]
   const tools = readPrompt(config.root, 'butler-tools.json', true)
   if (!Array.isArray(tools)) throw fail(500, 'prompts/butler-tools.json must be a JSON array of tools')
   // No transcription prompt: it makes the transcriber drop the "?" the approval check relies on.
-  const transcription = { model: transcribe, ...(language && { language }) }
+  const transcription = { model: transcribeModel, ...(language && { language }) }
   return {
     type: 'realtime',
     model,
@@ -67,10 +68,9 @@ export function butlerSession(config) {
 
 // → { value, model, expiresAt, responses }, or throws an error with a status.
 export async function mintVoiceKey(config) {
-  const { enabled, apiKey, model } = config.voice
-  // Voice off: the overlay falls back to captions and typed input, and nothing reaches OpenAI.
-  if (!enabled) throw fail(503, 'voice is off (LOOKMA_NO_VOICE=1)')
-  if (!apiKey) throw fail(503, 'OPENAI_API_KEY is not set (see .env.example)')
+  // No voice: the overlay falls back to captions and typed input, and nothing reaches OpenAI.
+  if (config.voice.off) throw fail(503, config.voice.off)
+  const { apiKey, model } = config.voice.provider.options
   const session = butlerSession(config)
   const res = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
     method: 'POST',

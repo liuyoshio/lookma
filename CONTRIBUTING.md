@@ -21,14 +21,14 @@ A normal `lookma` may already be running on port 8790 with tmux session `lookma`
 ```sh
 # terminal 1: the core, without launching the app
 LOOKMA_PORT=8793 LOOKMA_EXEC_SESSION=lookma-dev LOOKMA_DATA=/tmp/lookma-dev \
-LOOKMA_NO_APP=1 LOOKMA_NO_VOICE=1 node core/cli.mjs start ~/Projects
+LOOKMA_NO_APP=1 LOOKMA_VOICE=off node core/cli.mjs start ~/Projects
 
 # terminal 2: the app, straight from your shell
 LOOKMA_PORT=8793 app/build/Lookma.app/Contents/MacOS/Lookma
 ```
 
 - **`LOOKMA_NO_APP=1`** keeps the core from launching the app with `open`. Run the binary yourself instead: it then uses your terminal's Accessibility, Screen Recording and Microphone grants, which survive rebuilds.
-- **`LOOKMA_NO_VOICE=1`** is text only: no voice session and no microphone, so nothing goes to OpenAI. With voice on, Lookma listens whenever it runs and is not paused; pause it with ⌃⌥P while you work on it. Type with **Type a Request…** in the menu bar, or post to the core:
+- **`LOOKMA_VOICE=off`** is text only: no voice session and no microphone, so nothing goes to OpenAI. With voice on, Lookma listens whenever it runs and is not paused; pause it with ⌃⌥P while you work on it. Type with **Type a Request…** in the menu bar, or post to the core:
   `curl -X POST -H 'Content-Type: application/json' -d '{"text":"open notes"}' http://127.0.0.1:8793/api/tell`
 - **Swift changed?** Run `app/build.sh` again. `LOOKMA_SIGN_IDENTITY=-` forces ad hoc signing.
 - **Watch Claude Code** with `tmux attach -t lookma-dev`.
@@ -50,12 +50,12 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | Command | Checks | Needs |
 |---|---|---|
 | `npm run check` | `node --check` on every script | Node |
-| `npm test` | the hands pipeline against a fake app and a stub executor, the Claude adapter on recorded terminal screens, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome. tmux is optional: one check is skipped without it |
+| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, the Claude adapter on recorded terminal screens, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome. tmux is optional: one check is skipped without it |
 | `node overlay/dev/voice-check.mjs` | the voice client, against a fake Realtime session | Google Chrome in `/Applications` (runs headless) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:e2e` | a real Claude Code session with the fake app | tmux and a logged-in Claude Code; uses your Claude plan |
 
-Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, and the e2e when you touch `core/executors/claude/`. CI runs `check`, `test` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice key on your OpenAI account; it never runs in CI.
+Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice key on your OpenAI account; it never runs in CI.
 
 ## Code conventions
 
@@ -77,11 +77,11 @@ Match the code around you. In short:
 
 ## Add an executor adapter
 
-1. Create `core/executors/<name>/index.mjs` exporting `create(ctx)`, where `ctx` is `{ emit, hands, config, log }`.
-2. Return `{ start({ dirs }), prompt(text, { steer }), cancel(), answer(cardId, allow), stop() }`. `start` resolves to `{ name }`; `steer` is true when a turn is already running. Add `connect(ws)` if your agent connects back on `/ws/executor`, and `hook(body)` if it POSTs to `/hook`. Read your own settings in a `config.mjs` next to it, as `core/executors/claude/config.mjs` does.
+1. Create `executors/<name>/manifest.mjs`: a title, your settings and your checks, as `executors/codex/manifest.mjs` has them. A setting's name is derived (`LOOKMA_<NAME>_<KEY>`), and `lookma --help` and `lookma doctor` list it; the loader, `core/plugins.mjs`, validates the manifest and the values.
+2. Create `executors/<name>/index.mjs` exporting `create(ctx)`, where `ctx` is `{ emit, hands, config, options, log }` and `options` are your settings, typed and checked. Return `{ start({ dirs }), prompt(text, { steer }), cancel(), answer(cardId, allow), stop() }`. `start` resolves to `{ name }`; `steer` is true when a turn is already running. Add `connect(ws)` if your agent connects back on `/ws/executor`, and `hook(body)` if it POSTs to `/hook`.
 3. Emit the contract's events: `status`, `turnStart` / `turnEnd`, `step`, `say`, `task`, and one `approval` per question for the user, with `approvalGone` once it is answered elsewhere or closed.
 4. Give the agent `say` and the six hands tools (`see`, `click`, `type`, `key`, `scroll`, `open`), as `core/tools.mjs` defines them, and forward each hands call to `ctx.hands(tool, args)`. Never touch the screen any other way: the pipeline is what makes every step visible and granted.
-5. Run it with `LOOKMA_EXECUTOR=<name>`.
+5. Run it with `LOOKMA_EXECUTOR=<name>` or `--agent <name>`.
 
 The stub executor at the top of `core/dev/check-pipeline.mjs` is the smallest working adapter. Test your adapter's pure parts against recorded fixtures, as `core/dev/check-claude.mjs` does, and give it a section in docs/protocol.md like the Claude Code one.
 
@@ -89,7 +89,7 @@ The stub executor at the top of `core/dev/check-pipeline.mjs` is the smallest wo
 
 - **One change per pull request.** Say what it does and why, and link the issue.
 - **Commit subjects** are short and imperative ("Parse the trust dialog of 2.1.329"). Use the body for the why when it is not obvious.
-- **Keep the docs true.** A new variable goes into the README's Configuration table, and into `lookma --help` (`core/cli.mjs`) if a new user needs it; a protocol change into docs/protocol.md.
+- **Keep the docs true.** A new variable goes into the README's Configuration table; a core one also into `lookma --help` (`core/cli.mjs`) if a new user needs it, while a plug-in's comes from its manifest; a protocol change into docs/protocol.md.
 - **Overlay changes** come with a screenshot from `overlay/dev/shots/`.
 - **Never commit** `.env`, `app/build/` or `overlay/dev/shots/` (they are in `.gitignore`).
 

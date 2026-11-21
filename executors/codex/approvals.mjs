@@ -6,7 +6,7 @@
 //   anything else                    → a JSON-RPC error
 // A card closes when Codex resolves its request (serverRequest/resolved), when its turn ends, or
 // when Codex exits.
-import { clip } from '../../util.mjs'
+import { clip } from '../../core/util.mjs'
 import { unwrap } from './events.mjs'
 
 const NOT_SUPPORTED = { code: -32601, message: 'Not supported by Lookma.' }

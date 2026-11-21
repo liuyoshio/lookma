@@ -48,7 +48,8 @@ import { ROOT } from '../../core/config.mjs'
 
 // 0. The session the core mints (no OpenAI call: only the config it would send).
 {
-  const voice = { model: 'gpt-realtime', voice: 'marin', transcribe: 'gpt-4o-transcribe', language: '', audio: 'room', maxTokens: 200 }
+  const options = { model: 'gpt-realtime', voice: 'marin', transcribeModel: 'gpt-4o-transcribe', maxTokens: 200 }
+  const voice = { language: '', audio: 'room', provider: { options } }
   const s = butlerSession({ root: ROOT, voice })
   const td = s.audio.input.turn_detection
   check(td?.type === 'semantic_vad' && td.eagerness === 'medium' && td.create_response === false && td.interrupt_response === false && s.audio.input.noise_reduction?.type === 'far_field',
@@ -58,7 +59,7 @@ import { ROOT } from '../../core/config.mjs'
   const headset = butlerSession({ root: ROOT, voice: { ...voice, audio: 'headset' } }).audio.input
   check(headset.turn_detection.interrupt_response === true && headset.noise_reduction.type === 'near_field' && headset.turn_detection.eagerness === 'medium',
     `session, headset: barge-in, near_field ${JSON.stringify(headset)}`)
-  const zh = butlerSession({ root: ROOT, voice: { ...voice, language: 'zh', maxTokens: 150 } })
+  const zh = butlerSession({ root: ROOT, voice: { ...voice, language: 'zh', provider: { options: { ...options, maxTokens: 150 } } } })
   check(JSON.stringify(zh.audio.input.transcription) === '{"model":"gpt-4o-transcribe","language":"zh"}' && zh.max_output_tokens === 150,
     `session: LOOKMA_VOICE_LANGUAGE=zh goes to the transcription, max tokens configurable ${JSON.stringify(zh.audio.input.transcription)}`)
   const control = s.tools.find(t => t.name === 'control')
@@ -86,7 +87,7 @@ await page.beforeLoad(`
     const u = String(url)
     if (u.endsWith('/api/voice-key')) {
       window.__dc.keys++
-      const body = keyOff ? { error: 'voice is off (LOOKMA_NO_VOICE=1)' } : { value: 'fake', model: 'fake-realtime', expiresAt: Math.floor(Date.now() / 1000) + 600, responses: ${JSON.stringify(RESPONSES)} }
+      const body = keyOff ? { error: 'voice is off (LOOKMA_VOICE=off)' } : { value: 'fake', model: 'fake-realtime', expiresAt: Math.floor(Date.now() / 1000) + 600, responses: ${JSON.stringify(RESPONSES)} }
       return Promise.resolve(new Response(JSON.stringify(body), { status: keyOff ? 503 : 200, headers: { 'Content-Type': 'application/json' } }))
     }
     if (u.startsWith('https://api.openai.com/')) return Promise.resolve(new Response('v=0', { status: 201 }))

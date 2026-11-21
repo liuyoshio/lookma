@@ -1,23 +1,26 @@
 // Configuration. Every setting is one name (LOOKMA_EXECUTOR, LOOKMA_AUDIO, ...) with three sources,
-// first wins: a command-line flag, the environment, .env at the repo root; then the default. All
-// three end up in process.env, so an adapter's config.mjs sees them too. The only module of the
-// core that reads the environment.
+// first wins: a command-line flag, the environment, .env at the repo root; then the default. The
+// core's own settings are read here. A plug-in (an executor in executors/, a voice in voices/)
+// declares its own in its manifest.mjs, and core/plugins.mjs reads them from the environment this
+// module has filled. The only module of the core that reads the environment.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { usage } from './util.mjs'
+import { list, load, manifests } from './plugins.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const usage = message => Object.assign(new Error(`${message} (see lookma --help)`), { exitCode: 2 })
+// The core's own settings. A plug-in declares its own in its manifest; lookma doctor warns about
+// any other LOOKMA_* that is set. LOOKMA_SIGN_IDENTITY is app/build.sh's, LOOKMA_LIVE_TESTS the
+// dev checks'.
+const CORE = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_VOICE_LANGUAGE', 'LOOKMA_PORT', 'LOOKMA_DATA', 'LOOKMA_NO_APP', 'LOOKMA_SIGN_IDENTITY', 'LOOKMA_LIVE_TESTS']
 
 // The named flags, each a shorthand for one setting. --set NAME=value sets any other.
 const FLAGS = {
   '--agent': name => ({ LOOKMA_EXECUTOR: name }),
-  '--voice': name => {
-    if (!['openai', 'off'].includes(name)) throw usage(`--voice ${name}: use openai or off`)
-    return { LOOKMA_NO_VOICE: name === 'off' ? '1' : '0' }
-  },
+  '--voice': name => ({ LOOKMA_VOICE: name }),
   '--audio': setup => ({ LOOKMA_AUDIO: setup }),
   '--set': pair => {
     const m = pair.match(/^([A-Z][A-Z0-9_]*)=(.*)$/)
@@ -58,16 +61,35 @@ function loadEnvFile(file, set) {
   }
 }
 
-const ours = name => name.startsWith('LOOKMA_') || name === 'OPENAI_API_KEY'
+// Every setting name anyone reads -> { owner, secret }: the core's and each plug-in's. Two owners
+// of one name would read each other's value, so that is an error.
+async function declared() {
+  const names = new Map(CORE.map(name => [name, { owner: 'core', secret: false }]))
+  for (const plugin of await manifests()) {
+    for (const s of plugin.settings) {
+      const owner = `${plugin.kind}/${plugin.name}`
+      if (names.has(s.name)) throw new Error(`${s.name} is declared by both ${names.get(s.name).owner} and ${owner}`)
+      names.set(s.name, { owner, secret: !!s.secret })
+    }
+  }
+  return names
+}
 
-function oneOf(name, values) {
+// An empty value counts as unset, as for every setting.
+function oneOf(name, values, fallback = values[0]) {
   const v = process.env[name]
-  if (v === undefined || values.includes(v)) return v ?? values[0]
+  if (!v) return fallback
+  if (values.includes(v)) return v
   throw usage(`${name}=${v}: use ${values.join(' or ')}`)
 }
 
-/** settings: from parseArgs. The result's `sources` says, per setting that is set, where it came from. */
-export function loadConfig(settings = {}) {
+/**
+ * settings: from parseArgs. The result's `sources` says, per setting that is set, where it came
+ * from; `declared` maps every setting name anyone reads to { owner, secret }.
+ */
+export async function loadConfig(settings = {}) {
+  const names = await declared()
+  const ours = name => name.startsWith('LOOKMA_') || names.has(name)
   const sources = {}
   for (const name of Object.keys(process.env)) if (ours(name)) sources[name] = 'environment'
   for (const [name, value] of Object.entries(settings)) {
@@ -77,8 +99,14 @@ export function loadConfig(settings = {}) {
   loadEnvFile(path.join(ROOT, '.env'), name => ours(name) && (sources[name] = '.env'))
   const env = process.env
   const dataDir = env.LOOKMA_DATA || path.join(os.homedir(), '.lookma')
+  // The defaults are the one place the core names a plug-in.
+  const executor = await load('executors', oneOf('LOOKMA_EXECUTOR', list('executors'), 'claude'), env)
+  if (executor.missing.length) throw usage(`${executor.missing[0]} is not set (${executor.title} needs it)`)
+  const voice = oneOf('LOOKMA_VOICE', [...list('voices'), 'off'], 'openai')
+  const provider = voice === 'off' ? null : await load('voices', voice, env)
   return {
     sources,
+    declared: names,
     root: ROOT,
     app: path.join(ROOT, 'app', 'build', 'Lookma.app'), // built by app/build.sh
     // LOOKMA_NO_APP=1: start without the app, e.g. to run it from a shell (its permissions are then
@@ -87,16 +115,13 @@ export function loadConfig(settings = {}) {
     port: Number(env.LOOKMA_PORT || 8790),
     dataDir,
     appsFile: path.join(dataDir, 'apps.json'),
-    executor: env.LOOKMA_EXECUTOR || 'claude', // core/executors/<name>
+    executor, // executors/<name>, loaded (core/plugins.mjs)
     voice: {
-      enabled: env.LOOKMA_NO_VOICE !== '1', // LOOKMA_NO_VOICE=1: text only, no OpenAI calls (self-tests)
-      apiKey: env.OPENAI_API_KEY || '',
-      model: env.LOOKMA_REALTIME_MODEL || 'gpt-realtime-2.1',
-      voice: env.LOOKMA_VOICE || 'marin',
-      transcribe: env.LOOKMA_TRANSCRIBE_MODEL || 'gpt-4o-transcribe',
+      provider, // voices/<name>, loaded; null with LOOKMA_VOICE=off (text only, nothing goes to a voice service)
+      // Why there is no voice, or null. The overlay then shows captions and takes typed requests.
+      off: !provider ? 'voice is off (LOOKMA_VOICE=off)' : provider.missing.length ? `${provider.missing[0]} is not set (see .env.example)` : null,
       language: env.LOOKMA_VOICE_LANGUAGE || '', // ISO 639-1, e.g. zh; unset, the transcriber detects it
       audio: oneOf('LOOKMA_AUDIO', ['room', 'headset']), // the setup in core/voice-key.mjs
-      maxTokens: Number(env.LOOKMA_VOICE_MAX_TOKENS) || 200, // the longest a spoken reply can be
     },
   }
 }

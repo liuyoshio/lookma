@@ -3,6 +3,8 @@
 // go ahead, pause) with one ack each, takes its receipts for the outbox, and the app's pause,
 // resume and quit; talks to one executor through its adapter. Transport is server.mjs's: it hands
 // each socket to an entry point.
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createLog, logUnknown, cancelled } from './util.mjs'
 import { createStore } from './state.mjs'
 import { createAppLink } from './app-link.mjs'
@@ -150,8 +152,8 @@ export async function createCore(config, { log = createLog(), createExecutor, on
 
   // ---------------------------------------------------------------- executor
   //
-  // The contract (docs/protocol.md): core/executors/<name>/index.mjs exports
-  //   create({ emit, hands(tool, args), config, log })
+  // The contract (docs/protocol.md): executors/<name>/index.mjs exports
+  //   create({ emit, hands(tool, args), config, options, log }), options being its own settings
   //     → { start({ dirs }) → Promise<{ name }>, prompt(text, { steer }), cancel(), answer(id, allow),
   //         stop(), connect?(ws), hook?(body) }
   // connect gets the sockets on /ws/executor, hook the bodies POSTed to /hook; an adapter that
@@ -198,9 +200,10 @@ export async function createCore(config, { log = createLog(), createExecutor, on
     }
   }
 
-  const factory = createExecutor || (await import(`./executors/${config.executor}/index.mjs`)).create
-  const executor = factory({ emit: onExecutorEvent, hands: hands.run, config, log: createLog(config.executor) })
-  store.update(s => (s.executor = { name: config.executor, status: 'starting', detail: '' }))
+  const { name, dir, options } = config.executor
+  const factory = createExecutor || (await import(pathToFileURL(path.join(dir, 'index.mjs')).href)).create
+  const executor = factory({ emit: onExecutorEvent, hands: hands.run, config, options, log: createLog(name) })
+  store.update(s => (s.executor = { name, status: 'starting', detail: '' }))
 
   // ---------------------------------------------------------------- routing
 

@@ -202,11 +202,11 @@ More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals a
 
 - **Local.** The core listens on 127.0.0.1 only and refuses connections from web pages. No accounts, no telemetry, no servers of ours.
 - **The microphone is on while Lookma runs and is not paused**, and macOS shows its microphone indicator. Its audio streams to OpenAI the whole time, so it hears the room: pause (⌃⌥P or the menu bar) when you want privacy. Paused, the voice session is closed and nothing is sent.
-- **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_NO_VOICE=1`, nothing goes to OpenAI and the microphone stays off.
+- **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_VOICE=off`, nothing goes to OpenAI and the microphone stays off.
 - **Claude Code uses your Claude plan, Codex your ChatGPT plan**, as usual. The agent's model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
 - **Nothing else leaves your Mac.** Local state is in `~/.lookma/`.
 
-**Safety.** It drives your real computer with your permissions. You allow each app once, and the agent's permission prompts come to you as cards. The agent is told to ask before anything irreversible or outward-facing (sending, posting, paying, deleting) that goes beyond what you said, but that is an instruction to the model, not an enforced gate. Text on screen can mislead the model, so watch it on anything that matters. Codex's commands run in its sandbox: they may write only in the folders you passed, with no network, and anything more asks you with a card. For more cards with Claude Code, set `LOOKMA_PERMISSION_MODE=default`.
+**Safety.** It drives your real computer with your permissions. You allow each app once, and the agent's permission prompts come to you as cards. The agent is told to ask before anything irreversible or outward-facing (sending, posting, paying, deleting) that goes beyond what you said, but that is an instruction to the model, not an enforced gate. Text on screen can mislead the model, so watch it on anything that matters. Codex's commands run in its sandbox: they may write only in the folders you passed, with no network, and anything more asks you with a card. For more cards with Claude Code, set `LOOKMA_CLAUDE_PERMISSION_MODE=default`.
 
 ## Configuration
 
@@ -214,38 +214,55 @@ Set these in `.env` at the repo root, in your shell, or on the command line. A f
 
 ```sh
 lookma --agent codex --audio headset ~/Projects
-lookma --voice off --set LOOKMA_CODEX_FAST=1 ~/Projects
+lookma --voice off --set LOOKMA_CLAUDE_MODEL=opus ~/Projects
 lookma config --agent codex      # print the settings in effect, and where each came from
 ```
 
 | Flag | Setting | Values |
 |---|---|---|
 | `--agent` | `LOOKMA_EXECUTOR` | `claude` (default) or `codex` |
-| `--voice` | `LOOKMA_NO_VOICE` | `openai` (default) or `off` |
+| `--voice` | `LOOKMA_VOICE` | `openai` (default) or `off` |
 | `--audio` | `LOOKMA_AUDIO` | `room` (default) or `headset` |
 
+The agent and the voice are plug-ins (folders in `executors/` and `voices/`), and each declares its own settings, named `LOOKMA_<PLUGIN>_<SETTING>`. `lookma --help` lists those of the agent and voice you selected, and `lookma doctor` shows the ones in effect and warns about any `LOOKMA_*` variable that Lookma does not read, such as a misspelled one.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `OPENAI_API_KEY` | | Turns on voice. |
-| `LOOKMA_NO_VOICE` | | `1`: text only. Nothing is sent to OpenAI. |
 | `LOOKMA_EXECUTOR` | `claude` | The agent: `claude` (Claude Code) or `codex` (Codex CLI). |
-| `LOOKMA_MODEL` | `sonnet` | Claude Code only: the model (`--model`), e.g. `opus`. |
-| `LOOKMA_PERMISSION_MODE` | `auto` | Claude Code only: the permission mode; `default` gives more cards. |
-| `LOOKMA_CLAUDE_FLAGS` | | Claude Code only: extra flags for `claude`, separated by spaces. |
-| `LOOKMA_CODEX_MODEL` | Codex's default | Codex only: the model. |
-| `LOOKMA_CODEX_FAST` | | Codex only. `1`: the Fast speed tier, quicker and uses more of your ChatGPT plan. |
-| `LOOKMA_REALTIME_MODEL` | `gpt-realtime-2.1` | The voice model. |
-| `LOOKMA_VOICE` | `marin` | The voice. |
-| `LOOKMA_TRANSCRIBE_MODEL` | `gpt-4o-transcribe` | Writes down what you say, for captions and the approval check. |
+| `LOOKMA_VOICE` | `openai` | The voice: `openai` (OpenAI Realtime) or `off`, text only: nothing is sent to OpenAI. |
 | `LOOKMA_VOICE_LANGUAGE` | detected | The language you speak, as an ISO code (`en`, `zh`, `ja`), for a better transcript. |
 | `LOOKMA_AUDIO` | `room` | How you hear the voice: `room` (speakers) or `headset`. With a headset, talking over the voice cuts it off; in a room it finishes its sentence. Sets the microphone's noise reduction to match. |
-| `LOOKMA_VOICE_MAX_TOKENS` | `200` | The longest a spoken reply can be, in tokens. |
 | `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
 | `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |
-| `LOOKMA_EXEC_SESSION` | `lookma` | Claude Code only: the tmux session that runs it. |
 | `LOOKMA_SIGN_IDENTITY` | your first signing identity, else ad hoc | Code signing for the app build; `-` forces ad hoc. Environment only. |
 | `LOOKMA_NO_APP` | | `1`: do not launch the app (for development). |
+
+**Claude Code** (`LOOKMA_EXECUTOR=claude`)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LOOKMA_CLAUDE_MODEL` | `sonnet` | The model (`--model`), e.g. `opus`. |
+| `LOOKMA_CLAUDE_PERMISSION_MODE` | `auto` | The permission mode; `default` gives more cards. |
+| `LOOKMA_CLAUDE_FLAGS` | | Extra flags for `claude`, separated by spaces. |
+| `LOOKMA_EXEC_SESSION` | `lookma` | The tmux session that runs it. |
+
+**Codex** (`LOOKMA_EXECUTOR=codex`)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LOOKMA_CODEX_MODEL` | Codex's default | The model. |
+| `LOOKMA_CODEX_FAST` | `0` | `1`: the Fast speed tier, quicker and uses more of your ChatGPT plan. |
+| `CODEX_HOME` | `~/.codex` | Your Codex folder, whose login (`auth.json`) Lookma shares. |
+
+**OpenAI Realtime** (`LOOKMA_VOICE=openai`)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `OPENAI_API_KEY` | | Turns on voice. Without it you type instead. |
+| `LOOKMA_OPENAI_MODEL` | `gpt-realtime-2.1` | The voice model. |
+| `LOOKMA_OPENAI_VOICE` | `marin` | The voice it speaks with. |
+| `LOOKMA_OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-transcribe` | Writes down what you say, for captions and the approval check. |
+| `LOOKMA_OPENAI_MAX_TOKENS` | `200` | The longest a spoken reply can be, in tokens. |
 
 Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }`), read on every step. How the voice and the agent behave is plain text in `prompts/butler.md` (read for every new voice session) and `prompts/executor.md` (read on the next start).
 
@@ -262,10 +279,10 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 
 ## Swapping the executor
 
-The agent is anything behind a small adapter in `core/executors/<name>/index.mjs`:
+The agent is anything behind a small adapter in `executors/<name>/`: a `manifest.mjs` that declares its settings and checks, and an `index.mjs`:
 
 ```js
-export function create(ctx)  // ctx: { emit(event), hands(tool, args), config, log }
+export function create(ctx)  // ctx: { emit(event), hands(tool, args), config, options, log }
   → { start({ dirs }), prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
       connect?(ws), hook?(body) }
 ```

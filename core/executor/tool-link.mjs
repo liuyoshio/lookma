@@ -1,4 +1,4 @@
-// The adapter's side of mcp-bridge.mjs, on its /ws/executor socket: a `say` becomes a say event,
+// The adapter's side of bridge.mjs, on its /ws/executor socket: a `say` becomes a say event,
 // and a hands call runs through ctx.hands, its result or error going back as `res`.
 // Returns false for any other message, which is the adapter's own.
 export function serveTools(ctx, ws, msg) {

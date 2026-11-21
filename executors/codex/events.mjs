@@ -1,7 +1,7 @@
 // Codex thread items → the step line the capsule shows: one readable line per item that does
 // something, null for the rest (reasoning, messages, plans). Pure.
 import path from 'node:path'
-import { clip } from '../../util.mjs'
+import { clip } from '../../core/util.mjs'
 
 // Codex runs each command through the login shell: "/bin/zsh -lc 'ls -la'" reads as "ls -la".
 export function unwrap(command) {

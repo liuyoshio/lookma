@@ -4,7 +4,7 @@
 // Notifications go to onNotification, stderr lines to the log, and the exit to onExit.
 import { spawn } from 'node:child_process'
 import readline from 'node:readline'
-import { clip } from '../../util.mjs'
+import { clip } from '../../core/util.mjs'
 
 export function openServer({ command, args, env, log, onNotification, onRequest, onExit }) {
   const child = spawn(command, args, { env, stdio: ['pipe', 'pipe', 'pipe'] })

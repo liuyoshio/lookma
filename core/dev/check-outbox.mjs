@@ -73,7 +73,7 @@ function stubExecutor(ctx) {
 }
 
 const logs = []
-const core = await createCore(loadConfig(), { log: (...a) => logs.push(a.join(' ')), createExecutor: stubExecutor })
+const core = await createCore(await loadConfig(), { log: (...a) => logs.push(a.join(' ')), createExecutor: stubExecutor })
 await core.startExecutor([])
 
 // A fake overlay socket: requests are handled at once, so each ack is there when send returns.

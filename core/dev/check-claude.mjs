@@ -9,10 +9,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { ROOT } from '../config.mjs'
-import { parse, signature, asksPermission, choose, escape } from '../executors/claude/dialog.mjs'
-import { createApprovals, allowOption, denyOption } from '../executors/claude/approvals.mjs'
-import { createTmux } from '../executors/claude/tmux.mjs'
-import { createHookHandler, splitReport } from '../executors/claude/hooks.mjs'
+import { parse, signature, asksPermission, choose, escape } from '../../executors/claude/dialog.mjs'
+import { createApprovals, allowOption, denyOption } from '../../executors/claude/approvals.mjs'
+import { createTmux } from '../../executors/claude/tmux.mjs'
+import { createHookHandler, splitReport } from '../../executors/claude/hooks.mjs'
 
 let failures = 0
 function check(name, ok, detail = '') {

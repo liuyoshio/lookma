@@ -5,9 +5,8 @@
 //   item/started → step     server requests → cards (approvals.mjs)     turn/completed → turnEnd
 import fs from 'node:fs'
 import path from 'node:path'
-import { clip, logUnknown } from '../../util.mjs'
-import { serveTools } from '../tool-link.mjs'
-import { loadConfig } from './config.mjs'
+import { clip, logUnknown } from '../../core/util.mjs'
+import { serveTools } from '../../core/executor/tool-link.mjs'
 import { openServer as spawnServer } from './rpc.mjs'
 import { writeSession, appServer, initializeParams, threadParams } from './session.mjs'
 import { stepTitle } from './events.mjs'
@@ -18,8 +17,7 @@ const INTERRUPT_WAIT_MS = 5000
 
 // openServer: rpc.mjs's, or a stand-in for core/dev/check-codex.mjs.
 export function create(ctx, { openServer = spawnServer } = {}) {
-  const { emit, config, log } = ctx
-  const opts = loadConfig()
+  const { emit, config, options: opts, log } = ctx
   const unknown = logUnknown(log, 'tools bridge')
   const queue = [] // prompts told before the thread and the tools were ready
   const dropped = new Set() // turns the core already ended with a cancel: their end is not reported
@@ -153,7 +151,7 @@ export function create(ctx, { openServer = spawnServer } = {}) {
 
   return {
     // Resolves once app-server is spawned; ready is reported when the thread and the tools are.
-    // `lookma start` has checked the codex binary and the login already (checks.mjs).
+    // `lookma start` has checked the codex binary and the login already (manifest.mjs).
     async start({ dirs }) {
       const session = writeSession(config, opts)
       const instructions = fs.readFileSync(path.join(config.root, 'prompts', 'executor.md'), 'utf8')

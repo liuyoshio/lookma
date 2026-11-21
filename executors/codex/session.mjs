@@ -8,7 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const { version } = JSON.parse(fs.readFileSync(path.join(HERE, '..', '..', '..', 'package.json'), 'utf8'))
+const { version } = JSON.parse(fs.readFileSync(path.join(HERE, '..', '..', 'package.json'), 'utf8'))
 
 // Codex features Lookma turns off: ChatGPT connectors and plugins, Codex's own screen and browser
 // control (the hands are Lookma's), subagents (no background tasks yet), memories across runs and
@@ -40,7 +40,7 @@ export function writeSession(config, opts) {
   fs.mkdirSync(work, { recursive: true })
   const link = path.join(home, 'auth.json')
   fs.rmSync(link, { force: true })
-  fs.symlinkSync(path.join(opts.codexHome, 'auth.json'), link)
+  fs.symlinkSync(path.join(opts.home, 'auth.json'), link)
   return { dir, home, work }
 }
 
@@ -68,7 +68,7 @@ export function initializeParams() {
 export function threadParams({ config, opts, dirs, work, instructions }) {
   return {
     cwd: work,
-    model: opts.model,
+    model: opts.model || null, // null: Codex's default model
     serviceTier: opts.fast ? 'priority' : null, // 'priority' is the tier Codex calls Fast
     approvalPolicy: 'on-request', // a step that needs more than the sandbox asks first, as a card
     sandbox: 'workspace-write',

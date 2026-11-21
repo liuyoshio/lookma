@@ -55,7 +55,7 @@ function stubExecutor(ctx) {
   }
 }
 
-const config = loadConfig()
+const config = await loadConfig()
 const quiet = () => {}
 const logs = [] // the core's log lines
 const log = (...args) => logs.push(args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
@@ -417,11 +417,10 @@ let app2
   check('pause and resume with no turn working: nothing is cancelled or told', calls.length === before, calls.slice(before).map(c => c.name).join(','))
 }
 
-// Voice key: without voice or a key, a clear error with its HTTP status and no network call.
+// Voice key: without a voice, a clear error with its HTTP status and no network call.
 {
-  const off = await settle(mintVoiceKey({ ...config, voice: { ...config.voice, enabled: false } }))
-  const noKey = await settle(mintVoiceKey({ ...config, voice: { ...config.voice, enabled: true, apiKey: '' } }))
-  check('voice key: voice off or no key is a 503 with a reason', off.e?.status === 503 && /voice is off/.test(off.e.message) && noKey.e?.status === 503 && /OPENAI_API_KEY/.test(noKey.e.message))
+  const off = await settle(mintVoiceKey({ ...config, voice: { ...config.voice, off: 'voice is off (LOOKMA_VOICE=off)' } }))
+  check('voice key: no voice is a 503 with the reason', off.e?.status === 503 && off.e.message === 'voice is off (LOOKMA_VOICE=off)', off.e?.message)
 }
 
 // Minting one calls the user's OpenAI account, so only with LOOKMA_LIVE_TESTS=1. Never printed.

@@ -34,7 +34,7 @@ const STABLE_MS = 60000        // a session that lasted this long resets the bac
 export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
   let s = null           // the session: { pc, dc, audio, ready, openedAt, timer, responses }
   let mic = null         // the microphone (a promise of its stream), open while wanted
-  let off = !enabled     // for good: ?voice=0, or the core has no voice (LOOKMA_NO_VOICE, no key)
+  let off = !enabled     // for good: ?voice=0, or the core has no voice (LOOKMA_VOICE=off, no key)
   let wanted = false     // until the core's first snapshot says otherwise
   let failing = false    // the last connect failed; another is coming
   let fails = 0, retryTimer = 0
@@ -206,7 +206,7 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
   async function mintKey() {
     const res = await fetch('/api/voice-key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
     const key = await res.json().catch(() => ({}))
-    // 503: this core has no voice (LOOKMA_NO_VOICE=1, or no OpenAI key). Asking again will not help.
+    // 503: this core has no voice (LOOKMA_VOICE=off, or no OpenAI key). Asking again will not help.
     if (res.status === 503) throw Object.assign(new Error(key.error || 'the core has no voice'), { voiceOff: true })
     if (!res.ok || !key.value || !key.responses) throw new Error(key.error || `voice key: HTTP ${res.status}`)
     return key

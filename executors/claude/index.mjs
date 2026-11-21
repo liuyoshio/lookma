@@ -4,9 +4,8 @@
 //   answer → relay or terminal keys (approvals.mjs)
 import fs from 'node:fs'
 import path from 'node:path'
-import { logUnknown } from '../../util.mjs'
-import { serveTools } from '../tool-link.mjs'
-import { loadConfig } from './config.mjs'
+import { logUnknown } from '../../core/util.mjs'
+import { serveTools } from '../../core/executor/tool-link.mjs'
 import { createTmux } from './tmux.mjs'
 import { parse, choose, escape } from './dialog.mjs'
 import { createApprovals } from './approvals.mjs'
@@ -24,8 +23,7 @@ function findClaude(searchPath) {
 }
 
 export function create(ctx) {
-  const { emit, config, log } = ctx
-  const opts = loadConfig()
+  const { emit, config, options: opts, log } = ctx
   const tmux = createTmux(opts.session)
   const queue = [] // prompts told before the channel connected
   const unknown = logUnknown(log, 'channel')
@@ -88,16 +86,17 @@ export function create(ctx) {
     async start({ dirs = [] }) {
       const dir = writeSession(config, opts.session, dirs)
       await tmux.kill() // our own session left over from an earlier run
+      const PATH = process.env.PATH // where claude is found; Claude Code runs with the same PATH
       const argv = [
-        findClaude(opts.path),
+        findClaude(PATH),
         '--model', opts.model,
         '--permission-mode', opts.permissionMode,
         '--settings', path.join(dir, 'settings.json'),
         '--append-system-prompt-file', path.join(dir, 'executor.md'),
         '--dangerously-load-development-channels', 'server:lookma',
-        ...opts.flags,
+        ...opts.flags.split(/\s+/).filter(Boolean),
       ]
-      await tmux.start({ cwd: dir, argv, env: { PATH: opts.path } })
+      await tmux.start({ cwd: dir, argv, env: { PATH } })
       log(`Claude Code is starting in tmux session ${opts.session} (watch: tmux attach -t ${opts.session})`)
       setStatus('starting', 'waiting for Claude Code')
       polling = true

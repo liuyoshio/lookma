@@ -22,7 +22,8 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and mints voice keys. |
 | App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
 | Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
-| Executor adapter | `core/executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code running interactively in tmux, or `codex`, Codex CLI through its app-server. |
+| Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code running interactively in tmux, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
+| Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings; the session itself still lives in `core/voice-key.mjs` and `overlay/voice/`. |
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
 | Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies and permissions. |
 
@@ -99,7 +100,7 @@ The rest of this section is about Claude Code. Codex asks through its app-server
 
 While Lookma runs, voice is on and it is not paused, it listens. You just talk, from the desk or from across the room. With a headset you can talk over the voice to interrupt it. macOS shows its microphone indicator the whole time. Pause from the menu bar, with ⌃⌥P or by saying “pause”, and the microphone is off until you resume.
 
-**One warm session.** The overlay (`overlay/voice.js`) keeps one OpenAI Realtime session connected over WebRTC, with the microphone attached. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_NO_VOICE=1` or no OpenAI key) there is no session and no microphone.
+**One warm session.** The overlay (`overlay/voice.js`) keeps one OpenAI Realtime session connected over WebRTC, with the microphone attached. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_VOICE=off` or no OpenAI key) there is no session and no microphone.
 
 **Turns.** The server finds them: semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the server creates no reply on its own.
 
@@ -114,7 +115,7 @@ While Lookma runs, voice is on and it is not paused, it listens. You just talk, 
 
 The decision is one small pure function, with its own tests. Speech that gets through but is not meant for Lookma, such as people talking to each other or a TV, is the voice's call: its instructions (`prompts/butler.md`) tell it to stay silent.
 
-**A terse butler.** The voice answers in one short sentence, in your language and in the first person. It never restates what you asked, adds no filler or acknowledgements, and calls its tools silently, since the screen already shows the work. A reply is capped at `LOOKMA_VOICE_MAX_TOKENS` (about 200).
+**A terse butler.** The voice answers in one short sentence, in your language and in the first person. It never restates what you asked, adds no filler or acknowledgements, and calls its tools silently, since the screen already shows the work. A reply is capped at `LOOKMA_OPENAI_MAX_TOKENS` (about 200).
 
 **Language.** Set `LOOKMA_VOICE_LANGUAGE` (an ISO code such as `en` or `zh`) and the transcriber is told the language you speak. There is no transcription prompt: it makes the transcriber drop question marks, and the approval check relies on them.
 
@@ -151,10 +152,10 @@ Long work with nothing to show on screen goes to Claude Code's background subage
 
 ## The executor contract
 
-The core talks to the agent only through an adapter in `core/executors/<name>/index.mjs`:
+The core talks to the agent only through an adapter in `executors/<name>/index.mjs`:
 
 ```js
-export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promise<result>, config, log }
+export function create(ctx)  // ctx: { emit(event), hands(tool, args) → Promise<result>, config, options, log }
   → { start({ dirs }) → Promise<{ name }>,
       prompt(text, { steer }), cancel(), answer(cardId, allow), stop(),
       connect?(ws), hook?(body) }
@@ -190,7 +191,7 @@ How the Codex adapter fills it in:
 
 Besides its own shell, file edits and web search, Codex gets only Lookma's tools: its own home keeps your Codex MCP servers, plugins and settings out, and Lookma turns off its connectors, plugins, computer and browser use, subagents, memories and image generation. Its commands run in the workspace-write sandbox, which may write only in the folders you pass to `lookma` (plus its `work/` folder and tmp), with no network; anything beyond that is a card.
 
-**Adding an executor.** Write `core/executors/<name>/index.mjs`. Give your agent `say` and the hands tools: if it takes MCP servers, have it spawn a script that calls `serve()` from `core/executors/mcp-bridge.mjs` (as `codex/mcp.mjs` does). That server connects to `/ws/executor`; in your `connect`, hand its messages to `serveTools` from `core/executors/tool-link.mjs`, which forwards each call to `ctx.hands`. Put what your agent needs into `checks.mjs` next to it, so `lookma doctor` and the start check it. Then start with `LOOKMA_EXECUTOR=<name>`.
+**Adding an executor.** Write `executors/<name>/manifest.mjs` with its title, settings and checks: the settings reach your adapter as `ctx.options`, named `LOOKMA_<NAME>_<KEY>`, and `lookma doctor` and the start run the checks. Then write `executors/<name>/index.mjs`. Give your agent `say` and the hands tools: if it takes MCP servers, have it spawn a script that calls `serve()` from `core/executor/bridge.mjs` (as `codex/mcp.mjs` does). That server connects to `/ws/executor`; in your `connect`, hand its messages to `serveTools` from `core/executor/tool-link.mjs`, which forwards each call to `ctx.hands`. Then start with `LOOKMA_EXECUTOR=<name>`.
 
 ## Local only
 
