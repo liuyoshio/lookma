@@ -17,8 +17,8 @@
   <div id="ripple"></div>
   <svg id="ghost" viewBox="0 0 20 28" aria-hidden="true"><path d="M2 2v20.5l5.1-5 3.3 7.6 3.3-1.4-3.2-7.5h7z"/></svg>
 
-  <!-- your hand, with Hand Gestures on -->
-  <div id="hand"></div>
+  <!-- the hand gestures' camera (hand/camera.js): never shown, but in the DOM so its frames are delivered -->
+  <video id="camera" muted autoplay playsinline></video>
 
   <!-- the user is busy: the agent works in the background, or waits for the front -->
   <div id="edge" class="glass">

@@ -3,10 +3,15 @@
 // rects the page posts (the card). Screen recordings show it (sharingType .readOnly); see() leaves
 // it out by capturing only the target app. The page owns the voice session and the microphone: it
 // is told the talk key's edges (key()) and posts back whether its voice is on, whether the
-// microphone is open and whether a hands-free conversation is. With hand gestures on it also draws
-// the user's hand as a dot (hand()), and a palm pushed at the camera stops through it (stop()).
+// microphone is open and whether a hands-free conversation is. With hand gestures on, the page also
+// runs the camera and MediaPipe's hand tracker: HandCamera turns it on and off (camera()), and the
+// page sends each frame's hand on its own handler, `hand`, which goes to HandCamera unread. WebKit
+// gets the camera only while HandCamera allows it (cameraAllowed); the microphone, always.
 import AppKit
 import WebKit
+
+/// What the overlay page's camera is doing (hand/camera.js).
+enum PageCamera: String { case off, on, failed }
 
 /// What the overlay page last said about its voice.
 struct PageVoice: Equatable {
@@ -42,7 +47,18 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
     private var web: OverlayWebView!
     private var typing = false
     private var voice = PageVoice()
+    private var pageCamera = PageCamera.off
     var onVoice: (PageVoice) -> Void = { _ in }
+    /// WebKit grants the page the camera only while this is true (HandCamera: wanted and authorized).
+    var cameraAllowed = false
+    /// The raw body of each `hand` message, for HandCamera to check.
+    var onHand: (Any) -> Void = { _ in }
+    /// What the page's camera is doing, when it changes.
+    var onPageCamera: (PageCamera) -> Void = { _ in }
+    /// The page is going away (a navigation started, or its web content process died): its camera and frames with it.
+    var onPageGone: () -> Void = {}
+    /// A page finished loading.
+    var onPageReady: () -> Void = {}
 
     init(url: URL) {
         self.url = url
@@ -60,6 +76,7 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
 
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "lookma")
+        config.userContentController.add(self, name: "hand")
         config.mediaTypesRequiringUserActionForPlayback = []
         web = OverlayWebView(frame: NSRect(origin: .zero, size: frame.size), configuration: config)
         web.setValue(false, forKey: "drawsBackground")
@@ -104,21 +121,14 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
         }
     }
 
-    /// A palm pushed at the camera: the page cuts the voice and asks the core to stop the work.
-    func stop() {
-        web.evaluateJavaScript("window.lookma?.stop()") { _, err in
-            if let err { log("stop failed: \(err.localizedDescription)") }
+    /// The page's camera on or off (HandCamera). Off also ends WebKit's capture outright, so the
+    /// camera and macOS's green light go off even if the page is stuck. A page still loading gets
+    /// nothing; HandCamera says it again once the page is ready.
+    func camera(_ on: Bool) {
+        web.evaluateJavaScript("window.lookma?.camera(\(on))") { _, err in
+            if let err { log("camera \(on) failed: \(err.localizedDescription)") }
         }
-    }
-
-    /// Your hand's dot, as fractions of the overlay from its top left, lit while pinched; nil hides
-    /// it. Every camera frame while a hand is in view (GestureOutput).
-    func hand(_ dot: (x: Double, y: Double, pinched: Bool)?) {
-        let size = panel.frame.size
-        let arg = dot.map { "{x:\(Int(($0.x * size.width).rounded())),y:\(Int(($0.y * size.height).rounded())),pinched:\($0.pinched)}" } ?? "null"
-        web.evaluateJavaScript("window.lookma?.hand(\(arg))") { _, err in
-            if let err { log("hand failed: \(err.localizedDescription)") }
-        }
+        if !on { web.setCameraCaptureState(.none) }
     }
 
     private func setVoice(_ next: PageVoice) {
@@ -141,7 +151,12 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
     // MARK: - page
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "hand" { return onHand(message.body) }
         guard let body = message.body as? [String: Any] else { return }
+        if let c = (body["camera"] as? String).flatMap(PageCamera.init), c != pageCamera {
+            pageCamera = c
+            onPageCamera(c)
+        }
         // The page also closes the input itself (Escape): then the keyboard goes back.
         if let t = body["typing"] as? Bool, t != typing { keyboard(t) }
         setVoice(PageVoice(on: body["voice"] as? Bool == true, mic: body["mic"] as? Bool == true, conversation: body["conversation"] as? Bool == true))
@@ -154,14 +169,22 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
         trackPointer()
     }
 
-    // The page's microphone (the realtime voice). macOS still asks the user once, for the app.
+    // The page's microphone (the realtime voice), always; its camera (hand gestures) only while
+    // HandCamera allows it. macOS still asks the user once for each, for the app.
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
                  type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        decisionHandler(.grant)
+        switch type {
+        case .microphone: decisionHandler(.grant)
+        case .camera, .cameraAndMicrophone: decisionHandler(cameraAllowed ? .grant : .deny)
+        @unknown default: decisionHandler(.deny)
+        }
     }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { pageGone() }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         log("overlay page loaded: \(webView.url?.absoluteString ?? "")")
+        onPageReady()
     }
 
     // The core may not be up yet, or may restart: keep trying.
@@ -172,6 +195,12 @@ final class Overlay: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessa
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         log("overlay page crashed; reloading")
         setVoice(PageVoice()) // its voice session went with it
+        pageGone()
         load()
+    }
+
+    private func pageGone() {
+        pageCamera = .off
+        onPageGone()
     }
 }

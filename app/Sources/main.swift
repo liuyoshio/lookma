@@ -1,7 +1,8 @@
-// Lookma app: the overlay window (its page owns the voice session), the hands and attention, the
-// talk key (fn, whose edges go to the page), hand gestures (the camera), and the menu bar item
-// with the ⌃⌥P pause hotkey, connected to the core over /ws/app. It provides primitives and makes
-// no decisions (docs/protocol.md).
+// Lookma app: the overlay window (its page owns the voice session and runs the hand gestures'
+// camera), the hands and attention, the talk key (fn, whose edges go to the page), hand gestures
+// (the page's hand, through the engine, as the mouse), and the menu bar item with the ⌃⌥P pause
+// hotkey, connected to the core over /ws/app. It provides primitives and makes no decisions
+// (docs/protocol.md).
 //   LOOKMA_PORT          the core's port (default 8790)
 //   LOOKMA_OVERLAY_URL   the page to load (default http://127.0.0.1:$LOOKMA_PORT/)
 //   LOOKMA_CHECK=<file>  check mode for `lookma doctor` (below)
@@ -41,20 +42,16 @@ let link = Link(url: URL(string: "ws://127.0.0.1:\(port)/ws/app")!)
 let menu = StatusMenu()
 
 // Hand gestures: the camera runs while the core says they are on and not paused (and connected).
-// Its frames go through the engine to the output on the camera's capture queue, the only place
-// that touches either. When the camera stops, the engine's closing events (a held Command let go,
-// a raised palm's talk key up) go out the same way.
+// Each frame's hand goes through the engine, on main, to the output, which makes the real mouse
+// match what the engine says. When frames stop, for any reason, the engine starts afresh and the
+// output lets the button go.
 var gestureEngine = GestureEngine()
-let gestureOutput = GestureOutput(overlay: overlay)
-let handCamera = HandCamera()
-handCamera.onFrame = { frame, aspect in
-    let out = gestureEngine.feed(frame)
-    gestureOutput.handle(out.events)
-    gestureOutput.dot(out.dot, aspect: aspect)
-}
+let gestureOutput = GestureOutput()
+let handCamera = HandCamera(overlay: overlay)
+handCamera.onFrame = { gestureOutput.apply(gestureEngine.feed($0)) }
 handCamera.onStop = {
-    gestureOutput.handle(gestureEngine.reset())
-    gestureOutput.hide()
+    gestureEngine = GestureEngine()
+    gestureOutput.release()
 }
 handCamera.onState = { menu.camera = $0 }
 handCamera.onAccess = { link.send(hello()) }
@@ -91,7 +88,7 @@ registerPauseHotkey(togglePause)
 let talkKey = TalkKeyWatcher { overlay.key($0) }
 link.start()
 
-// Every exit path stops the camera (so a gesture's held Command is let go) and turns off the AX
+// Every exit path stops the camera (so a held mouse button is let go) and turns off the AX
 // attributes we set on other apps.
 func cleanUp() {
     handCamera.stop()

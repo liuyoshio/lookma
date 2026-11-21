@@ -114,12 +114,20 @@ async function printConfig(args) {
   for (const [name, value, from] of rows) console.log(`${name.padEnd(width)}  ${value}  (${from})`)
 }
 
-// `open` makes macOS attribute the permissions to the app, not to this terminal.
+// `open` makes macOS attribute the permissions to the app, not to this terminal. It also cuts the
+// app off from this terminal, so the app writes its log to app.log in the data folder and a tail
+// copies each line here: the two logs read as one, and the file keeps the app's side of this run.
 function launchApp(config) {
   log('launching', path.basename(config.app))
+  const appLog = path.join(config.dataDir, 'app.log')
+  fs.mkdirSync(config.dataDir, { recursive: true })
+  fs.writeFileSync(appLog, '')
+  const tail = spawn('tail', ['-f', appLog], { stdio: ['ignore', 'inherit', 'inherit'] })
+  process.on('exit', () => tail.kill())
   const env = [`LOOKMA_PORT=${config.port}`]
   if (!config.voice.provider) env.push(`LOOKMA_OVERLAY_URL=http://127.0.0.1:${config.port}/?voice=0`)
-  spawn('open', [...env.flatMap(e => ['--env', e]), '-a', config.app], { stdio: 'ignore', detached: true }).unref()
+  const args = [...env.flatMap(e => ['--env', e]), '--stdout', appLog, '--stderr', appLog, '-a', config.app]
+  spawn('open', args, { stdio: 'ignore', detached: true }).unref()
 }
 
 async function start(args) {

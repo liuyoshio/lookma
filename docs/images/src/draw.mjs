@@ -655,52 +655,56 @@ function talking(c) {
 // ------------------------------------------------------------------ 8. hand gestures
 
 function gestures(c) {
-  // The pipeline: four boxes, then the two places an event lands.
+  // The pipeline: two stages in the overlay page, two in the app, then the real mouse. Only the
+  // hand's points cross from the page to the app.
   const stages = [
-    ['Camera', ['the one you prefer', 'in macOS, 30 fps']],
-    ['Vision', ['21 joints per hand,', 'on this Mac']],
-    ['Gesture engine', ['pinch or palm,', 'one state machine']],
-    ['Gesture output', ['one table from', 'event to action']],
+    ['Camera', ['in the overlay', 'page, 30 fps']],
+    ['MediaPipe', ['hand landmarker,', 'on this Mac']],
+    ['Gesture engine', ['open, pinch or', 'fist, per frame']],
+    ['Pointer loop', ['120 Hz, eased;', 'a still hand rests']],
+    ['Your Mac', ['the real mouse:', 'point, click, scroll']],
   ]
-  const Y = 92, W = 150, G = 34, H = 112
+  const Y = 112, W = 156, H = 104, gap = i => (i === 1 ? 102 : 26)
+  const xs = stages.reduce((a, _, i) => [...a, i ? a[i - 1] + W + gap(i - 1) : 20], [])
   const pipe = stages.map(([title, lines], i) => {
-    const x = 20 + i * (W + G)
-    const hot = i === 2
-    return box(c, x, Y, W, H, { shadow: true, stroke: hot ? c.coral : c.line, sw: hot ? 2 : 1.2 }) +
-      text(x + 16, Y + 34, title, { size: 16, weight: 700, fill: c.ink }) +
-      lines.map((l, j) => text(x + 16, Y + 64 + j * 20, l, { size: 13, fill: c.ink2 })).join('') +
-      (i < stages.length - 1 ? arrow(c, x + W + 2, Y + H / 2, x + W + G - 2.5, Y + H / 2) : '')
+    const x = xs[i], hot = i === 2, last = i === stages.length - 1
+    return box(c, x, Y, W, H, { shadow: !last, fill: last ? c.sunk : c.surface, stroke: hot ? c.coral : c.line, sw: hot ? 2 : 1.2 }) +
+      text(x + 16, Y + 32, title, { size: 16, weight: 700, fill: c.ink }) +
+      lines.map((l, j) => text(x + 16, Y + 60 + j * 20, l, { size: 13, fill: c.ink2 })).join('') +
+      (last ? '' : arrow(c, x + W + 2, Y + H / 2, x + W + gap(i) - 2.5, Y + H / 2))
   }).join('')
-  const ox = 20 + 3 * (W + G) + W, ex = ox + 46, ew = 980 - ex
-  const end = (y, title, s) => box(c, ex, y, ew, 52, { fill: c.sunk }) +
-    text(ex + 14, y + 22, title, { size: 14, weight: 700, fill: c.ink }) +
-    text(ex + 14, y + 41, s, { size: 12.5, fill: c.ink2 })
-  const ends = end(Y, 'Your Mac', 'scroll, ⌘Tab, ⌘= and ⌘−') + end(Y + 60, 'The overlay', 'the talk key, stop, the dot') +
-    curve(c, `M${ox + 2} ${Y + H / 2}C${ox + 24} ${Y + H / 2} ${ex - 24} ${Y + 26} ${ex - 3} ${Y + 26}`) +
-    curve(c, `M${ox + 2} ${Y + H / 2}C${ox + 24} ${Y + H / 2} ${ex - 24} ${Y + 86} ${ex - 3} ${Y + 86}`)
+  const mid = xs[1] + W + gap(1) / 2
+  const crossing = text(mid, Y + H / 2 - 12, '21 points', { size: 12.5, weight: 700, anchor: 'middle', fill: c.coralText }) +
+    text(mid, Y + H / 2 + 24, 'a frame', { size: 12.5, anchor: 'middle', fill: c.muted })
+  const groups = caps(c, xs[0], Y - 12, 'In the overlay page') + caps(c, xs[2], Y - 12, 'In the app')
 
-  // Glyphs: a pinch is the overlay's dot, lit; a palm is a plain silhouette.
+  // Glyphs: an open hand, a fist, and a pinch as a lit point where thumb and finger meet.
   const lit = (x, y) => circle(x, y, 11, { fill: '#FF805C', fillOpacity: .5, filter: 'url(#glow)' }) +
     circle(x, y, 7.5, { fill: '#FF805C', stroke: '#fff', strokeWidth: 1.5 })
-  const palm = (x, y, s, o = {}) => `<g transform="translate(${x} ${y}) scale(${s})" fill="${c.ink2}"${o.opacity ? ` opacity="${o.opacity}"` : ''}>` +
+  const palm = (x, y, s) => `<g transform="translate(${x} ${y}) scale(${s})" fill="${c.ink2}">` +
     rect(-13, -4, 26, 26, { rx: 9 }) +
     rect(-13, -24, 6, 24, { rx: 3 }) + rect(-6.5, -28, 6, 28, { rx: 3 }) +
     rect(0, -25, 6, 25, { rx: 3 }) + rect(6.8, -19, 5.6, 20, { rx: 2.8 }) +
     rect(-19, 0, 6.5, 18, { rx: 3.25, transform: 'rotate(-32 -13 16)' }) + '</g>'
-  const apps = (x, y) => [0, 1, 2].map(i => rect(x + i * 30, y, 24, 24, { rx: 6, fill: i === 1 ? c.wash : c.surface, stroke: i === 1 ? c.coral : c.line, strokeWidth: i === 1 ? 2 : 1 })).join('')
+  const fist = (x, y, s) => `<g transform="translate(${x} ${y}) scale(${s})" fill="${c.ink2}">` +
+    rect(-14, -8, 28, 28, { rx: 9 }) +
+    [-14, -7, 0, 7].map(fx => rect(fx, -15, 6.6, 12, { rx: 3.3 })).join('') +
+    rect(-17, 2, 22, 7, { rx: 3.5, fill: c.muted }) + '</g>'
+  const pointer = (x, y, s = 1) => `<g transform="translate(${x} ${y}) scale(${s})">` +
+    pathEl('M0 0v20.5l5.1-5 3.3 7.6 3.3-1.4-3.2-7.5h7z', { fill: c.surface, stroke: c.ink, strokeWidth: 1.5, strokeLinejoin: 'round' }) + '</g>'
+  // The ring finger's base, which the pointer follows.
+  const anchor = (x, y) => circle(x, y, 4.5, { fill: 'none', stroke: c.coral, strokeWidth: 2.2 })
 
-  const cw = 182, cg = (960 - 5 * cw) / 4, CY = 260, GY = CY + 12, GH = 96
+  const cw = 225, cg = (960 - 4 * cw) / 3, CY = 268, GY = CY + 12, GH = 96
   const cards = [
-    ['Scroll', ['Pinch, then move up', 'or down. The window', 'under the pointer', 'follows your hand.'], (x, y) =>
+    ['Point', ['Open your hand: the pointer', 'follows the base of your', 'ring finger. A still hand', 'is a still pointer.'], (x, y) =>
+      palm(x - 30, y + 6, 1.15) + anchor(x - 26, y + 3) + arrow(c, x - 6, y - 4, x + 22, y - 18, { color: c.ink2 }) + pointer(x + 28, y - 30)],
+    ['Click and drag', ['Pinch thumb and index to', 'press, part them to let go.', 'Pinch twice to double-click;', 'move while pinched to drag.'], (x, y) =>
+      lit(x - 34, y + 6) + arrow(c, x - 18, y + 6, x + 22, y + 6, { color: c.ink2 }) + pointer(x + 26, y - 6)],
+    ['Scroll', ['Pinch thumb and middle,', 'then move up or down. The', 'window under the pointer', 'follows; a flick coasts.'], (x, y) =>
       lit(x, y) + arrow(c, x, y - 16, x, y - 38, { color: c.ink2 }) + arrow(c, x, y + 16, x, y + 38, { color: c.ink2 })],
-    ['Switch apps', ['Pinch and flick right', 'for the next app, left', 'for the last. Slide to', 'step; open to pick.'], (x, y) =>
-      lit(x - 48, y + 22) + arrow(c, x - 32, y + 22, x + 2, y + 22, { color: c.ink2 }) + apps(x - 4, y - 32)],
-    ['Zoom', ['Pinch with both hands,', 'then spread them to', 'zoom in or close them', 'to zoom out.'], (x, y) =>
-      lit(x - 22, y) + lit(x + 22, y) + arrow(c, x - 36, y, x - 64, y, { color: c.ink2 }) + arrow(c, x + 36, y, x + 64, y, { color: c.ink2 })],
-    ['Talk', ['Raise an open palm and', 'hold it still: the talk', 'key is down. Lower it', 'to let go.'], (x, y) =>
-      palm(x - 12, y + 8, 1.15) + MIC(x + 22, y - 18, 26, c.coral)],
-    ['Stop', ['Push the open palm', 'toward the camera: the', 'work stops, and the', 'voice with it.'], (x, y) =>
-      palm(x - 38, y + 10, .8, { opacity: .35 }) + arrow(c, x - 18, y + 4, x + 2, y + 4, { color: c.ink2 }) + palm(x + 36, y + 6, 1.3)],
+    ['Park', ['Make a fist or drop your', 'hand. The pointer stays', 'where it is, and a held', 'button lets go.'], (x, y) =>
+      fist(x - 22, y + 4, 1.25) + pointer(x + 22, y - 14)],
   ].map(([title, lines, glyph], i) => {
     const x = 20 + i * (cw + cg)
     return box(c, x, CY, cw, 238, { shadow: true }) +
@@ -711,15 +715,15 @@ function gestures(c) {
   }).join('')
 
   const body = [
-    text(32, 44, 'Hand gestures', { size: 19, weight: 700, fill: c.ink }),
-    text(32, 68, 'Off unless you turn them on. Frames are read on this Mac and dropped: no image, hand or gesture is stored or sent.', { size: 13.5, fill: c.ink2 }),
-    pipe, ends,
-    caps(c, 20, 246, 'A pinch holds the Mac, an open palm talks to Lookma'),
+    text(32, 44, 'Hand gestures: your hand is the mouse', { size: 19, weight: 700, fill: c.ink }),
+    text(32, 68, 'Off unless you turn them on. Frames stay in the page on this Mac; only the hand\'s points go on. Nothing is stored or sent.', { size: 13.5, fill: c.ink2 }),
+    groups, pipe, crossing,
+    caps(c, 20, 254, 'An open hand is on the mouse, a fist lifts it off'),
     cards,
-    text(32, 532, [['Any other hand does nothing', { fontWeight: 700, fill: c.ink }], [': a pinch counts only when you make it in view, and a hand far from the camera is ignored.', { fill: c.ink2 }]], { size: 13.5 }),
+    text(32, 540, [['Nothing by accident', { fontWeight: 700, fill: c.ink }], [': a hand never opened flat in view moves nothing, and a pinch carried in presses nothing.', { fill: c.ink2 }]], { size: 13.5 }),
   ].join('\n')
-  return svg(c, 1000, 558, 'Hand gestures',
-    'The camera macOS prefers sends 30 frames a second to Apple\'s Vision on this Mac, which finds 21 joints per hand. One gesture engine turns them into events, and the gesture output turns each event into input on your Mac (scroll, Command-Tab, Command-equals and Command-minus) or into the overlay\'s talk key, stop and hand dot. Five gestures: pinch and move up or down to scroll the window under the pointer; pinch and flick sideways to switch apps, sliding to step and opening the hand to pick; pinch with both hands and spread or close them to zoom; raise an open palm and hold it still to hold the talk key; push the open palm toward the camera to stop the work and the voice. Any other hand does nothing: a pinch counts only when made in view, and a hand far from the camera is ignored.',
+  return svg(c, 1000, 566, 'Hand gestures',
+    'The camera runs in the overlay page, where MediaPipe\'s hand landmarker finds 21 points of your hand in each frame, on this Mac. Only those points go to the app: its gesture engine decides what the mouse should do, and a 120 Hz pointer loop moves the real mouse there, eased, and still while the hand is still. Four states: point with an open hand, and the pointer follows the base of your ring finger; pinch thumb and index to press the button, for a click, a double-click or a drag; pinch thumb and middle and move up or down to scroll the window under the pointer, where a flick coasts; make a fist or drop your hand to park, and the pointer stays and a held button lets go. A hand never opened flat in view moves nothing, and a pinch carried into view presses nothing.',
     body)
 }
 

@@ -1,7 +1,7 @@
-// Shared plumbing for the headless overlay checks (shoot.mjs, check-voices.mjs): the
-// mock core as a child process, and headless Chrome driven over CDP with its own
-// profile in overlay/dev/.chrome/<cdp port>, so checks can run side by side. Headless only;
-// no window ever opens.
+// Shared plumbing for the headless overlay checks (shoot.mjs, check-voices.mjs, check-hands.mjs):
+// the mock core as a child process, and headless Chrome driven over CDP with its own profile in
+// overlay/dev/.chrome/<cdp port>, so checks can run side by side. Headless only; no window ever
+// opens.
 
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -68,13 +68,14 @@ export function startMock({ port, args = [] }) {
 }
 
 /** Headless Chrome at 1440 x 900, with console errors, warnings and exceptions collected into
- *  `problems`, and every console line in `logs`. */
-export async function startChrome({ port }) {
+ *  `problems`, and every console line in `logs`. `args`: more Chrome switches. `cdp` takes a
+ *  sessionId for a target attached with flatten (a worker), and `on` hears every CDP event. */
+export async function startChrome({ port, args = [] }) {
   const proc = spawn(CHROME, [
     // --mute-audio: tests must never chime through the speakers.
     '--headless=new', '--mute-audio', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(DEV, '.chrome', String(port))}`,
     '--window-size=1440,900', '--hide-scrollbars', '--autoplay-policy=no-user-gesture-required',
-    '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank',
+    '--no-first-run', '--no-default-browser-check', '--disable-extensions', ...args, 'about:blank',
   ], { stdio: 'ignore' })
   children.push(proc)
 
@@ -90,8 +91,10 @@ export async function startChrome({ port }) {
   let seq = 0
   const calls = new Map()
   const logs = []
+  const listeners = []
   ws.on('message', data => {
     const m = JSON.parse(data)
+    for (const f of listeners) f(m)
     if (m.id) { const c = calls.get(m.id); calls.delete(m.id); m.error ? c.reject(new Error(m.error.message)) : c.resolve(m.result); return }
     if (m.method === 'Runtime.exceptionThrown') problems.push(`exception: ${m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text}`)
     if (m.method === 'Runtime.consoleAPICalled') logs.push(m.params.args.map(a => a.value ?? a.description).join(' '))
@@ -100,10 +103,10 @@ export async function startChrome({ port }) {
     }
     if (m.method === 'Log.entryAdded' && ['error', 'warning'].includes(m.params.entry.level)) problems.push(`log ${m.params.entry.level}: ${m.params.entry.text} ${m.params.entry.url || ''}`)
   })
-  const cdp = (method, params = {}) => new Promise((resolve, reject) => {
+  const cdp = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
     const id = ++seq
     calls.set(id, { resolve, reject })
-    ws.send(JSON.stringify({ id, method, params }))
+    ws.send(JSON.stringify({ id, method, params, sessionId }))
   })
   await cdp('Page.enable')
   await cdp('Runtime.enable')
@@ -112,6 +115,7 @@ export async function startChrome({ port }) {
 
   const c = {
     cdp,
+    on: f => listeners.push(f),
     logs,
     async evaluate(expr) {
       const r = await cdp('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })

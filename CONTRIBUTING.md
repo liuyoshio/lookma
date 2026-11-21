@@ -33,8 +33,9 @@ LOOKMA_PORT=8793 app/build/Lookma.app/Contents/MacOS/Lookma
 - **Every running Lookma hears fn.** A dev app with voice on and your everyday Lookma both open their microphone on the same press, so give the dev copy `LOOKMA_VOICE=off`, or pause one of them.
 - **The talk key without a voice bill.** With voice off the turn source never goes live, so fn does nothing there. `node overlay/dev/check-voices.mjs` drives the key (`window.lookma.key`) against each provider's fake service instead, and `npm run test:key` checks how the app reads fn.
 - **Swift changed?** Run `app/build.sh` again. `LOOKMA_SIGN_IDENTITY=-` forces ad hoc signing.
-- **Watch the agent** in the core's log: its steps, cards and messages, and for Claude Code the login it uses. A core started from inside another agent's session can inherit that session's API settings; if the login is not yours, start it with a plain environment (`env -i HOME="$HOME" USER="$USER" PATH="$PATH" ...`; Claude Code needs `USER` to find its login in the keychain).
+- **Watch the agent** in the core's log: its steps, cards and messages, and for Claude Code the login it uses. The app's own lines (`app ...`, such as the hand mouse going live or parking) join it, and the latest run's stay in `~/.lookma/app.log`. A core started from inside another agent's session can inherit that session's API settings; if the login is not yours, start it with a plain environment (`env -i HOME="$HOME" USER="$USER" PATH="$PATH" ...`; Claude Code needs `USER` to find its login in the keychain).
 - **The overlay is a plain page.** Open `http://127.0.0.1:8793/` in a browser to see it against your core, or run `node overlay/dev/mock-core.mjs` and open `http://127.0.0.1:8797/?backdrop=1` to replay a scripted scenario on a fake desktop, no core needed.
+- **See what the hand tracker sees.** Start the app with `LOOKMA_OVERLAY_URL=http://127.0.0.1:8793/?hands=1` and turn on Hand Gestures: the page draws your hand's landmarks where the engine maps them, the 70% box and the tracker's milliseconds per frame (`overlay/hand/view.js`).
 - **No real screen:** `npm run fake-app -- --port 8793` stands in for the app.
 
 Every variable is in the README's [Configuration](README.md#configuration) table. Ports the dev tools use:
@@ -48,27 +49,29 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | 8794 | `core/dev/check-executors.mjs`, part of `npm test` |
 | 8795, 8796 | `overlay/dev/check-voices.mjs` (mock core, Chrome DevTools) |
 | 8797, 8798 | `overlay/dev/mock-core.mjs` and `shoot.mjs` (mock core, Chrome DevTools) |
+| 8799, 8800 | `overlay/dev/check-hands.mjs` (mock core, Chrome DevTools) |
 
 ## Test
 
 | Command | Checks | Needs |
 |---|---|---|
 | `npm run check` | `node --check` on every script | Node |
-| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, voice consent on recorded runs, the floor that decides who speaks, when the microphone is open | No network, no models, no Chrome |
+| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, voice consent on recorded runs, the floor that decides who speaks, when the microphone is open, the hand camera's lifecycle and the tracker's pinned assets (`overlay/dev/hand-check.mjs`) | No network, no models, no Chrome |
 | `node overlay/dev/check-voices.mjs` | the voice client with each voice provider, against its fake service (`voices/<name>/dev/fake.mjs`) | Google Chrome in `/Applications` (runs headless) |
+| `node overlay/dev/check-hands.mjs` | the hand gestures' page side for real: the camera, the worker and MediaPipe's tracker loading only from the local server, frames to the app, the camera off | Google Chrome in `/Applications` (runs headless, with its fake camera) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:key` | the talk key's machine in `app/Sources/TalkKey.swift`: fn alone, fn in a shortcut, events the app posted itself | Xcode's command line tools (`swiftc`) |
-| `npm run test:gesture` | the hand gesture engine in `app/Sources/Gesture.swift`, fed synthetic hands: pinch, dropouts, scroll, switch, zoom, talk, stop | Xcode's command line tools (`swiftc`) |
+| `npm run test:gesture` | the hand mouse's engine in `app/Sources/Gesture.swift`, fed synthetic hands: the open-hand gate, mapping, the button, scroll and its coast, dropouts, and the pointer's easing and giving way | Xcode's command line tools (`swiftc`) |
 | `npm run test:e2e` | a real Claude Code session with the fake app: it gets ready, says hello, and leaves nothing running | A logged-in Claude Code; one short Sonnet turn on your Claude plan |
 
-Run `npm run check && npm test` before every pull request, the two Chrome checks when you touch `overlay/`, `test:key` when you touch `app/Sources/TalkKey.swift`, `test:gesture` when you touch `app/Sources/Gesture.swift`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test`, `test:key`, `test:gesture` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice grant (an OpenAI key) on your OpenAI account; it never runs in CI.
+Run `npm run check && npm test` before every pull request, the three Chrome checks (`npm run test:overlay`) when you touch `overlay/`, `test:key` when you touch `app/Sources/TalkKey.swift`, `test:gesture` when you touch `app/Sources/Gesture.swift`, and the e2e when you touch `executors/claude/`. CI runs `check`, `test`, `test:key`, `test:gesture` and the app build on macOS. `LOOKMA_LIVE_TESTS=1 npm test` also mints a voice grant (an OpenAI key) on your OpenAI account; it never runs in CI.
 
 ## Code conventions
 
 Match the code around you. In short:
 
 - **ESM, no build step.** The core is `.mjs` on Node built-ins (`node:` imports). The overlay is plain `.js` modules the browser loads as they are. No TypeScript, no bundler.
-- **Few dependencies.** Four at runtime (`@modelcontextprotocol/sdk`, `ws`, `zod`, and `@anthropic-ai/claude-agent-sdk`, which only the Claude adapter imports: it is the documented way to interrupt a headless Claude Code. Its bundled `claude` binaries are optional packages, which the repo's `.npmrc` leaves out: Lookma runs the user's own), none for development. A new one needs a reason in the PR.
+- **Few dependencies.** Five at runtime (`@modelcontextprotocol/sdk`, `ws`, `zod`; `@anthropic-ai/claude-agent-sdk`, which only the Claude adapter imports: it is the documented way to interrupt a headless Claude Code. Its bundled `claude` binaries are optional packages, which the repo's `.npmrc` leaves out: Lookma runs the user's own; and `@mediapipe/tasks-vision`, the hand tracker, which the core only serves and the overlay page loads only with hand gestures on. It is pinned to exactly 0.10.35 for privacy: its 1.x line sends usage metrics to Google, and `overlay/dev/hand-check.mjs` fails on an upgrade), none for development. A new one needs a reason in the PR.
 - **Small modules, one job each**, each opening with a comment that says what it is and how it fits.
 - **Comments explain why**, not what the next line does.
 - **No dead code:** no commented-out blocks, unused exports, or options for cases that do not exist yet.

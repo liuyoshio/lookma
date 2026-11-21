@@ -1,100 +1,118 @@
-// app/Sources/Gesture.swift's engine on its own: synthetic hands in, gesture events out. The
-// hands are generated here from a hand point, a palm scale and a pose, at 30 frames a second;
-// a dropout is a frame with no hand, as Vision reports one. No camera and no recordings.
+// app/Sources/Gesture.swift on its own: synthetic hands in, mouse states out, and the output
+// loop's pointer (its easing, and giving way to anyone else who moves the pointer) against a
+// simulated real one. The hands are MediaPipe's 21 points, generated here from the ring finger's
+// base, a palm length and a pose, at 30 frames a second; a dropout is a frame with no hand, as the
+// page reports one. No camera, no recordings and no input posted.
 //
 //   npm run test:gesture
 import CoreGraphics
 import Foundation
 
-enum Pose { case open, pinch(Double), fist, loose, edgeOn, folded(Int) }
-
-/// A hand whose hand point (the index and middle knuckles' midpoint) is (x, y) and whose palm
-/// scale is s, upright, in the given pose.
-func hand(_ x: Double, _ y: Double, _ pose: Pose, s: Double = 0.12) -> Hand {
-    // Knuckle spacing: index to little is s; edge-on squeezes the knuckles together.
-    var edgeOn = false
-    if case .edgeOn = pose { edgeOn = true }
-    let d = s / 3 * (edgeOn ? 0.3 : 1)
-    let mcps = [-0.5, 0.5, 1.5, 2.5].map { CGPoint(x: x + $0 * d, y: y) }
-    func finger(_ m: CGPoint, _ kind: String) -> Finger {
-        let o: [(Double, Double)] = switch kind {
-        case "extended": [(0, -0.4), (0, -0.65), (0, -0.85)]  // straightness 1
-        case "loose": [(0, -0.35), (0.15, -0.45), (0.25, -0.35)] // 0.64
-        default: [(0, -0.3), (0, -0.1), (0, -0.05)]             // folded, 0.09
-        }
-        let p = o.map { CGPoint(x: m.x + $0.0 * s, y: m.y + $0.1 * s) }
-        return Finger(mcp: m, pip: p[0], dip: p[1], tip: p[2])
-    }
-    let kinds: [String]
-    switch pose {
-    case .open, .edgeOn: kinds = ["extended", "extended", "extended", "extended"]
-    case .pinch, .loose: kinds = ["loose", "loose", "loose", "loose"]
-    case .fist: kinds = ["folded", "folded", "folded", "folded"]
-    case .folded(let k): kinds = (0..<4).map { $0 < 4 - k ? "extended" : "folded" } // little first
-    }
-    let fingers = zip(mcps, kinds).map { finger($0, $1) }
-    let indexTip = fingers[0].tip
-    let thumb: CGPoint
-    switch pose {
-    case .pinch(let g): thumb = CGPoint(x: indexTip.x - g * s, y: indexTip.y)
-    case .fist: thumb = CGPoint(x: indexTip.x + 0.1 * s, y: indexTip.y)
-    case .edgeOn: thumb = CGPoint(x: indexTip.x, y: indexTip.y + 0.4 * s) // in front of the index
-    case .open, .loose, .folded: thumb = CGPoint(x: mcps[0].x - 0.6 * s, y: y - 0.2 * s)
-    }
-    return Hand(wrist: CGPoint(x: mcps[1].x, y: y + 1.1 * s), thumbTip: thumb, fingers: fingers)
+enum Shape {
+    case open, relaxed, fist
+    case index(Double)  // thumb on the index tip at this gap, in palm lengths; the others extended
+    case middle(Double) // the same on the middle finger
+    /// Index and middle both curled toward the thumb, which sits at `share` of the way from the
+    /// index tip to the middle tip: both gaps closed, the nearer one tighter.
+    case both(share: Double)
 }
 
-/// An engine fed at 30 fps, recording what it emits.
+/// A hand in the mirrored frame, upright, whose ring finger base is at (fx, fy) as fractions of the
+/// frame, with a palm `palm` frame heights long, in a frame of the given aspect.
+func hand(_ fx: Double, _ fy: Double, _ pose: Shape, palm p: Double = 0.13, aspect: Double = 16.0 / 9) -> Hand {
+    let ax = fx * aspect, ay = fy
+    let d = 0.25 * p // knuckle spacing
+    // Joint offsets from the base, in palm lengths: straightness 1, 0.76 (relaxed) and 0.09.
+    let extended = [(0.0, -0.45), (0.0, -0.72), (0.0, -0.92)]
+    let relaxed = [(0.0, -0.4), (-0.15, -0.55), (-0.3, -0.5)] // curled toward the thumb
+    let folded = [(0.0, -0.3), (0.0, -0.1), (0.0, -0.05)]
+    let shapes: [[(Double, Double)]] // index, middle, ring, little
+    switch pose {
+    case .open, .index, .middle: shapes = [extended, extended, extended, extended]
+    case .relaxed: shapes = [relaxed, relaxed, relaxed, relaxed]
+    case .fist: shapes = [folded, folded, folded, folded]
+    case .both: shapes = [relaxed, relaxed, extended, extended]
+    }
+    var shaped = shapes
+    if case .index = pose { shaped[0] = relaxed }
+    if case .middle = pose { shaped[1] = relaxed }
+    let bases = [-2.0, -1.0, 0.0, 1.0].map { CGPoint(x: ax + $0 * d, y: ay) }
+    let fingers = zip(bases, shaped).map { base, shape in [base] + shape.map { CGPoint(x: base.x + $0.0 * p, y: base.y + $0.1 * p) } }
+    let wrist = CGPoint(x: bases[1].x, y: ay + p) // a palm of exactly p
+    let thumbTip: CGPoint
+    switch pose {
+    case .open, .relaxed: thumbTip = CGPoint(x: bases[0].x - 0.6 * p, y: ay - 0.1 * p)
+    case .fist: thumbTip = CGPoint(x: bases[0].x + 0.05 * p, y: ay - 0.05 * p) // across the folded index
+    case .index(let g): thumbTip = CGPoint(x: fingers[0][3].x, y: fingers[0][3].y + g * p)
+    case .middle(let g): thumbTip = CGPoint(x: fingers[1][3].x, y: fingers[1][3].y + g * p)
+    case .both(let s):
+        let i = fingers[0][3], m = fingers[1][3]
+        thumbTip = CGPoint(x: i.x + s * (m.x - i.x), y: i.y + 0.05 * p)
+    }
+    let thumb = (1...3).map { k in
+        CGPoint(x: wrist.x + (thumbTip.x - wrist.x) * Double(k) / 4, y: wrist.y + (thumbTip.y - wrist.y) * Double(k) / 4)
+    }
+    return Hand(points: [wrist] + thumb + [thumbTip] + fingers.flatMap { $0 })
+}
+
+/// An engine fed at 30 fps, recording every state it returns.
 struct Rig {
     var engine = GestureEngine()
     var t = 0.0
-    var events: [(t: Double, e: GestureEvent)] = []
-    var dot: HandDot? = nil
+    var aspect = 16.0 / 9
+    var states: [MouseState] = []
+    var last: MouseState { states.last! }
 
-    mutating func frame(_ hands: [Hand]) {
-        let out = engine.feed(HandFrame(t: t, hands: hands))
-        events += out.events.map { (t, $0) }
-        dot = out.dot
+    mutating func frame(_ h: Hand?) {
+        states.append(engine.feed(HandFrame(t: t, aspect: aspect, hand: h)))
         t += 1.0 / 30
     }
-    /// n frames, each made from its index.
-    mutating func frames(_ n: Int, _ make: (Int) -> [Hand]) { for i in 0..<n { frame(make(i)) } }
-    /// n frames of the same hands.
-    mutating func hold(_ n: Int, _ hands: [Hand]) { frames(n) { _ in hands } }
-    /// n frames with no hand.
-    mutating func gap(_ n: Int) { hold(n, []) }
-    /// One hand moving in a straight line over n frames (excluding the start, including the end).
-    mutating func move(_ from: (Double, Double), _ to: (Double, Double), _ n: Int, _ pose: Pose, s: Double = 0.12) {
-        frames(n) { i in
-            let f = Double(i + 1) / Double(n)
-            return [hand(from.0 + (to.0 - from.0) * f, from.1 + (to.1 - from.1) * f, pose, s: s)]
+    /// n frames of the same hand, or of no hand.
+    mutating func hold(_ n: Int, _ h: Hand?) { for _ in 0..<n { frame(h) } }
+    /// The ring finger's base moving in a straight line over n frames (excluding the start).
+    mutating func move(_ from: (Double, Double), _ to: (Double, Double), _ n: Int, _ pose: Shape) {
+        for i in 1...n {
+            let f = Double(i) / Double(n)
+            frame(hand(from.0 + (to.0 - from.0) * f, from.1 + (to.1 - from.1) * f, pose, aspect: aspect))
         }
     }
-    /// Opens the hand in view, then pinches: the engine arms.
-    mutating func pinchAt(_ x: Double, _ y: Double) {
-        hold(3, [hand(x, y, .loose)])
-        hold(3, [hand(x, y, .pinch(0.1))])
-    }
+    /// An open hand held long enough to go live.
+    mutating func open(_ x: Double = 0.5, _ y: Double = 0.5) { hold(3, hand(x, y, .open, aspect: aspect)) }
 
-    /// Everything emitted since `mark`, scrolls left out, as short names.
-    func names(since mark: Int = 0) -> String {
-        events[mark...].compactMap { e -> String? in
-            switch e.e {
-            case .scroll: return nil
-            case .switchBegin: return "begin"
-            case .switchStep(let n): return "step\(n > 0 ? "+" : "")\(n)"
-            case .switchEnd: return "end"
-            case .zoom(let n): return "zoom\(n > 0 ? "+" : "")\(n)"
-            case .talk(let edge): return edge.rawValue
-            case .stop: return "stop"
+    func since(_ mark: Int) -> ArraySlice<MouseState> { states[mark...] }
+    func scrolled(since mark: Int) -> Double { since(mark).reduce(0) { $0 + $1.scroll } }
+}
+
+/// HandPointer at 120 Hz on a 2560 x 1440 display (dead zone 8.8 points) against a simulated real
+/// pointer, which shows each posted move `lag` ticks after the tick that posted it.
+struct Desk {
+    static let diagonal = hypot(2560.0, 1440.0)
+    var p = HandPointer()
+    var real: CGPoint
+    var lag = 0
+    var posted: [(tick: Int, at: CGPoint)] = []
+    var n = 0
+    var moves: [CGPoint] = []
+
+    init(real: CGPoint) { self.real = real }
+    mutating func aim(_ x: Double, _ y: Double) { p.aim(CGPoint(x: x, y: y), diagonal: Desk.diagonal) }
+    mutating func run(_ ticks: Int) {
+        for _ in 0..<ticks {
+            while let first = posted.first, first.tick + lag < n {
+                real = first.at
+                posted.removeFirst()
             }
-        }.joined(separator: " ")
+            if let next = p.step(real: real, dt: 1.0 / 120, diagonal: Desk.diagonal) {
+                posted.append((n, next))
+                moves.append(next)
+            }
+            n += 1
+        }
     }
-    func scrolled(since mark: Int = 0) -> Double {
-        events[mark...].reduce(0) { if case .scroll(let dy) = $1.e { return $0 + dy } else { return $0 } }
-    }
-    func scrolls(since mark: Int = 0) -> Int {
-        events[mark...].filter { if case .scroll = $0.e { return true } else { return false } }.count
+    /// Someone else (a trackpad, the agent's click) puts the pointer at (x, y).
+    mutating func elsewhere(_ x: Double, _ y: Double) {
+        real = CGPoint(x: x, y: y)
+        posted = []
     }
 }
 
@@ -107,299 +125,313 @@ struct GestureCheck {
         if !ok { failed += 1 }
     }
 
+    static func near(_ a: CGPoint?, _ x: Double, _ y: Double) -> Bool {
+        guard let a else { return false }
+        return abs(a.x - x) < 1e-9 && abs(a.y - y) < 1e-9
+    }
+
     static func main() {
-        pinch()
-        dropout()
+        gate()
+        mapping()
+        button()
         scroll()
-        switching()
-        zoom()
-        identity()
-        talk()
-        stop()
+        inertia()
+        easing()
+        pointer()
         print(failed > 0 ? "\n\(failed) FAILED" : "\nall gesture checks passed")
         exit(failed > 0 ? 1 : 0)
     }
 
-    static func pinch() {
+    static func gate() {
         var r = Rig()
-        r.pinchAt(0.5, 0.5)
-        r.frames(20) { i in [hand(0.5, 0.5, .pinch(i % 2 == 0 ? 0.22 : 0.30))] }
-        check(r.dot?.pinched == true, "pinch: a gap wobbling between close and release stays pinched")
-        r.hold(3, [hand(0.5, 0.5, .loose)])
-        check(r.dot?.pinched == false && r.engine.phase == .idle, "pinch: opening releases it")
-        r.frames(20) { i in [hand(0.5, 0.5, .pinch(i % 2 == 0 ? 0.22 : 0.30))] }
-        check(r.dot?.pinched == false, "pinch: the same wobble from open does not pinch")
+        r.open()
+        check(r.states[0] == .parked && r.states[1] == .parked && r.last.at != nil,
+              "gate: an open hand goes live on its third frame, not before")
 
         r = Rig()
-        r.hold(3, [hand(0.5, 0.5, .loose)])
-        r.hold(1, [hand(0.5, 0.5, .pinch(0.1))])
-        r.hold(3, [hand(0.5, 0.5, .loose)])
-        check(r.dot?.pinched == false && r.engine.phase == .idle, "pinch: a one-frame dip does not pinch")
+        r.hold(30, hand(0.5, 0.5, .relaxed))
+        check(r.since(0).allSatisfy { $0 == .parked }, "gate: a relaxed hand never goes live")
+        r.hold(30, hand(0.5, 0.5, .fist))
+        check(r.since(0).allSatisfy { $0 == .parked }, "gate: nor does a fist")
 
         r = Rig()
-        r.hold(3, [hand(0.5, 0.5, .loose)])
-        r.hold(10, [hand(0.5, 0.5, .fist)])
-        check(r.dot?.pinched == false && r.engine.phase == .idle, "pinch: a fist is not a pinch")
+        r.hold(2, hand(0.5, 0.5, .open))
+        r.frame(nil)
+        r.hold(2, hand(0.5, 0.5, .open))
+        check(r.last == .parked, "gate: the open frames must be consecutive")
 
         r = Rig()
-        r.hold(10, [hand(0.5, 0.5, .pinch(0.1))])
-        r.move((0.5, 0.5), (0.5, 0.7), 20, .pinch(0.1))
-        check(r.dot?.pinched == false && r.events.isEmpty, "pinch: a hand that enters pinched does nothing")
-        r.hold(3, [hand(0.5, 0.7, .loose)])
-        r.hold(3, [hand(0.5, 0.7, .pinch(0.1))])
-        check(r.dot?.pinched == true, "pinch: ...until it has opened once in view")
+        r.open()
+        r.hold(20, hand(0.5, 0.5, .relaxed))
+        check(r.last.at != nil, "gate: a live hand that relaxes stays live")
+        r.frame(hand(0.5, 0.5, .fist))
+        check(r.last.at != nil, "gate: one fist frame does not park")
+        r.frame(hand(0.5, 0.5, .fist))
+        check(r.last == .parked, "gate: the second fist frame parks")
+        r.hold(2, hand(0.5, 0.5, .open))
+        check(r.last == .parked, "gate: after a park the hand must open flat for three frames again")
+        r.frame(hand(0.5, 0.5, .open))
+        check(r.last.at != nil, "gate: ...and then it is live")
 
         r = Rig()
-        r.hold(3, [hand(0.5, 0.5, .loose, s: 0.04)])
-        r.hold(3, [hand(0.5, 0.5, .pinch(0.1), s: 0.04)])
-        r.move((0.5, 0.5), (0.5, 0.8), 20, .pinch(0.1), s: 0.04)
-        check(r.dot == nil && r.events.isEmpty, "pinch: a hand below the near-field gate is ignored")
+        r.open()
+        r.frame(nil)
+        check(r.last.at == r.states[2].at, "gate: one missing frame holds the pointer")
+        r.frame(nil)
+        check(r.last == .parked, "gate: two missing frames park")
+
+        r = Rig()
+        r.hold(10, hand(0.5, 0.5, .open, palm: 0.05))
+        check(r.since(0).allSatisfy { $0 == .parked }, "gate: a palm under minPalm is no hand (someone behind you)")
+        r = Rig()
+        r.open()
+        r.hold(2, hand(0.5, 0.5, .open, palm: 0.05))
+        check(r.last == .parked, "gate: a live hand that shrinks under minPalm parks like a lost one")
     }
 
-    static func dropout() {
+    static func mapping() {
         var r = Rig()
-        r.pinchAt(0.5, 0.3)
-        r.move((0.5, 0.3), (0.5, 0.4), 10, .pinch(0.1))
-        r.gap(5)
-        let mark = r.events.count
-        r.move((0.5, 0.43), (0.5, 0.5), 10, .pinch(0.1))
-        check(r.scrolls(since: mark) > 0, "dropout: 5 missing frames inside a scroll keep it")
-        r.gap(10)
-        let after = r.events.count
-        r.move((0.5, 0.5), (0.5, 0.7), 20, .pinch(0.1))
-        check(r.scrolls(since: after) == 0 && r.dot?.pinched == false, "dropout: 10 missing frames end it")
+        r.open(0.15, 0.15)
+        check(near(r.last.at, 0, 0), "mapping: the frame's 0.15 corner is the display's top left")
+        r.frame(hand(0.85, 0.85, .open))
+        check(near(r.last.at, 1, 1), "mapping: its 0.85 corner is the bottom right")
+        r.frame(hand(0.5, 0.5, .open))
+        check(near(r.last.at, 0.5, 0.5), "mapping: the centre is the centre")
+        r.frame(hand(0.32, 0.5, .open))
+        check(near(r.last.at, (0.32 - 0.15) / 0.7, 0.5), "mapping: linear in between")
+        r.frame(hand(0.05, 0.97, .open))
+        check(near(r.last.at, 0, 1), "mapping: beyond the box it clamps to the edge")
+        r.frame(hand(0.3, 0.5, .open))
+        let left = r.last.at!.x
+        r.frame(hand(0.7, 0.5, .open))
+        check(left < r.last.at!.x, "mapping: the hand to the user's right is the pointer to the right (the page mirrors)")
+
+        var square = Rig()
+        square.aspect = 4.0 / 3
+        square.open(0.32, 0.6)
+        var wide = Rig()
+        wide.open(0.32, 0.6)
+        check(near(square.last.at, wide.last.at!.x, wide.last.at!.y), "mapping: the same place in a 4:3 frame maps the same")
+    }
+
+    static func button() {
+        var r = Rig()
+        r.open()
+        r.frame(hand(0.5, 0.5, .index(0.35)))
+        check(!r.last.button, "button: a gap of 0.35 palms does not close")
+        r.frame(hand(0.5, 0.5, .index(0.33)))
+        check(r.last.button, "button: a gap of 0.33 palms presses at once")
+        r.frame(hand(0.5, 0.5, .index(0.44)))
+        check(r.last.button, "button: it holds up to 0.45")
+        r.frame(hand(0.5, 0.5, .index(0.46)))
+        check(!r.last.button && r.last.at != nil, "button: above 0.45 it lets go, and the hand stays live")
+
+        r = Rig()
+        r.open()
+        let mark = r.states.count
+        r.frame(hand(0.5, 0.5, .index(0.1)))
+        let pressedAt = r.last.at
+        r.frame(hand(0.5, 0.5, .open))
+        check(r.since(mark).map(\.button) == [true, false] && r.last.at == pressedAt,
+              "button: a quick pinch is one press and release where the pointer is (a click)")
+
+        r = Rig()
+        r.open(0.4, 0.4)
+        r.frame(hand(0.4, 0.4, .index(0.1)))
+        let dragMark = r.states.count
+        r.move((0.4, 0.4), (0.6, 0.5), 10, .index(0.1))
+        let drag = r.since(dragMark)
+        check(drag.allSatisfy(\.button) && near(r.last.at, (0.6 - 0.15) / 0.7, (0.5 - 0.15) / 0.7),
+              "button: a pinched hand that moves holds the button while the pointer follows (a drag)")
+        r.frame(nil)
+        check(r.last.button, "button: one missing frame keeps the drag")
+        r.frame(nil)
+        check(r.last == .parked, "button: losing the hand lets go, with no click of its own")
+
+        r = Rig()
+        r.open()
+        r.frame(hand(0.5, 0.5, .index(0.1)))
+        r.frame(hand(0.5, 0.5, .fist))
+        r.frame(hand(0.5, 0.5, .fist))
+        check(r.last == .parked, "button: a fist while pressed parks and lets go")
+
+        r = Rig()
+        r.open()
+        let fistMark = r.states.count
+        r.hold(5, hand(0.5, 0.5, .fist))
+        check(r.since(fistMark).allSatisfy { !$0.button }, "button: making a fist (thumb over the index) never presses")
+
+        r = Rig()
+        r.hold(10, hand(0.5, 0.5, .index(0.1)))
+        check(r.last.at != nil && r.since(0).allSatisfy { !$0.button },
+              "button: a hand that arrives pinched points but presses nothing")
+        r.frame(hand(0.5, 0.5, .open))
+        r.frame(hand(0.5, 0.5, .index(0.1)))
+        check(r.last.button, "button: ...until it has opened in view")
+
+        r = Rig()
+        r.open()
+        r.hold(2, nil)
+        r.hold(5, hand(0.5, 0.5, .index(0.1)))
+        check(r.last.at != nil && !r.last.button, "button: after a park the pinch must be made in view again")
     }
 
     static func scroll() {
         var r = Rig()
-        r.pinchAt(0.5, 0.5)
-        r.move((0.5, 0.5), (0.5, 0.7), 40, .pinch(0.1))
-        r.hold(30, [hand(0.5, 0.7, .pinch(0.1))])
-        let sum = r.scrolled()
-        check(sum > 0.165 && sum < 0.18 && r.names().isEmpty, "scroll: dy sums to the travel after the deadzone (\(String(format: "%.4f", sum)))")
-        var mark = r.events.count
-        r.move((0.5, 0.7), (0.7, 0.7), 20, .pinch(0.1))
-        check(abs(r.scrolled(since: mark)) < 1e-4, "scroll: the axis is locked, sideways wobble scrolls nothing")
-        r.hold(15, [hand(0.7, 0.7, .pinch(0.1))])
-        mark = r.events.count
-        r.hold(3, [hand(0.7, 0.7, .loose)])
-        check(abs(r.scrolled(since: mark)) < 1e-4 && r.names(since: mark).isEmpty && r.engine.phase == .idle,
-              "scroll: opening the pinch at a still hand ends it without a jerk or an event")
+        r.open()
+        r.frame(hand(0.5, 0.5, .middle(0.1)))
+        let frozen = r.last.at
+        let mark = r.states.count
+        r.move((0.5, 0.5), (0.5, 0.57), 7, .middle(0.1))
+        check(abs(r.scrolled(since: mark) - 0.1) < 1e-9, "scroll: 0.07 frames of travel down is 0.1 display heights, content down")
+        check(r.since(mark - 1).allSatisfy { $0.at == frozen && !$0.button }, "scroll: the pointer stays where the pinch closed, and nothing clicks")
+        let side = r.states.count
+        r.move((0.5, 0.57), (0.7, 0.57), 10, .middle(0.1))
+        check(r.scrolled(since: side) == 0 && r.last.at == frozen, "scroll: sideways travel scrolls nothing and moves nothing")
+        let up = r.states.count
+        r.move((0.7, 0.57), (0.7, 0.5), 7, .middle(0.1))
+        check(abs(r.scrolled(since: up) + 0.1) < 1e-9, "scroll: up is negative")
+        r.frame(nil)
+        let back = r.states.count
+        r.frame(hand(0.7, 0.53, .middle(0.1)))
+        check(r.states[back - 1].scroll == 0 && abs(r.scrolled(since: back) - 0.03 / 0.7) < 1e-9,
+              "scroll: a missing frame holds it, and the travel across it is not lost")
+
         r = Rig()
-        r.pinchAt(0.5, 0.5)
-        r.move((0.5, 0.5), (0.5, 0.3), 30, .pinch(0.1))
-        check(r.scrolled() < -0.15, "scroll: up is negative")
+        r.open()
+        r.frame(hand(0.5, 0.5, .both(share: 0.3)))
+        check(r.last.button, "scroll: with both gaps closed the tighter one wins (index: the button)")
+        r = Rig()
+        r.open()
+        r.frame(hand(0.5, 0.5, .both(share: 0.7)))
+        check(!r.last.button && r.last.at != nil, "scroll: ...(middle: the scroll)")
+        r.move((0.5, 0.5), (0.5, 0.6), 5, .both(share: 0.7))
+        check(r.last.scroll > 0 && !r.last.button, "scroll: ...and it scrolls")
+
+        r = Rig()
+        r.open()
+        r.frame(hand(0.5, 0.5, .index(0.1)))
+        let held = r.states.count
+        r.move((0.5, 0.5), (0.5, 0.6), 5, .both(share: 0.7))
+        check(r.since(held).allSatisfy { $0.button && $0.scroll == 0 }, "scroll: cannot start while the button is held")
+        r = Rig()
+        r.open()
+        r.frame(hand(0.5, 0.5, .middle(0.1)))
+        let scrolling = r.states.count
+        r.hold(5, hand(0.5, 0.5, .both(share: 0.3)))
+        check(r.since(scrolling).allSatisfy { !$0.button }, "scroll: the button cannot press while scrolling")
     }
 
-    static func switching() {
+    static func inertia() {
+        // 0.01 frame heights a frame is 0.43 display heights a second: a flick.
         var r = Rig()
-        r.pinchAt(0.5, 0.5)
-        r.move((0.5, 0.5), (0.8, 0.5), 60, .pinch(0.1))
-        check(r.events.isEmpty, "switch: a slow sideways drag does nothing")
-        r.hold(3, [hand(0.8, 0.5, .pinch(0.1))])
-        r.move((0.8, 0.5), (0.68, 0.5), 4, .pinch(0.1))
-        check(r.names() == "begin step-1", "switch: ...and a fling can start where it stopped")
-
-        func fling(_ dir: Double = 1) -> Rig {
-            var r = Rig()
-            r.pinchAt(0.5, 0.5)
-            r.move((0.5, 0.5), (0.5 + 0.12 * dir, 0.5), 4, .pinch(0.1))
-            r.hold(5, [hand(0.5 + 0.12 * dir, 0.5, .pinch(0.1))])
-            return r
-        }
-        r = fling()
-        check(r.names() == "begin step+1", "switch: a fling right opens the switcher on the next app")
-        r.hold(3, [hand(0.62, 0.5, .loose)])
-        check(r.names() == "begin step+1 end" && r.engine.phase == .idle, "switch: opening the pinch commits")
-        r = fling(-1)
-        check(r.names() == "begin step-1", "switch: a fling left steps back")
+        r.open()
+        r.frame(hand(0.5, 0.4, .middle(0.1)))
+        r.move((0.5, 0.4), (0.5, 0.5), 10, .middle(0.1))
+        r.frame(hand(0.5, 0.5, .open))
+        let mark = r.states.count
+        r.hold(30, hand(0.5, 0.5, .open))
+        let coast = r.since(mark).map(\.scroll)
+        let moving = coast.prefix { $0 > 0 }
+        check(moving.count >= 5 && zip(moving, moving.dropFirst()).allSatisfy { $0 > $1 },
+              "inertia: a flick coasts on in the following frames, slowing (\(moving.count) frames)")
+        check(moving.count < 30 && coast.dropFirst(moving.count).allSatisfy { $0 == 0 }, "inertia: ...and ends")
+        let total = moving.reduce(0, +)
+        check(total > 0.05 && total < 0.12, "inertia: gently (\(String(format: "%.3f", total)) display heights)")
 
         r = Rig()
-        r.pinchAt(0.5, 0.5)
-        r.frames(6) { i in [1, 2, 3].contains(i) ? [] : [hand(0.5 + 0.03 * Double(i + 1), 0.5, .pinch(0.1))] }
-        check(r.names() == "begin step+1", "switch: a fling with 3 missing frames in the middle still switches")
-
-        r = fling()
-        r.move((0.62, 0.5), (0.82, 0.5), 30, .pinch(0.1))
-        r.hold(10, [hand(0.82, 0.5, .pinch(0.1))])
-        check(r.names() == "begin step+1 step+1 step+1", "switch: further travel adds a step per detent")
-        r.move((0.82, 0.5), (0.64, 0.5), 30, .pinch(0.1))
-        r.hold(10, [hand(0.64, 0.5, .pinch(0.1))])
-        check(r.names() == "begin step+1 step+1 step+1 step-1", "switch: travelling back steps back")
+        r.open()
+        r.frame(hand(0.5, 0.4, .middle(0.1)))
+        r.move((0.5, 0.4), (0.5, 0.41), 10, .middle(0.1))
+        let slow = r.states.count
+        r.hold(10, hand(0.5, 0.41, .open))
+        check(r.scrolled(since: slow) == 0, "inertia: a slow, careful scroll stops dead")
 
         r = Rig()
-        r.pinchAt(0.3, 0.5)
-        r.frames(17) { i in (8..<14).contains(i) ? [] : [hand(0.34 + 0.04 * Double(i), 0.5, .pinch(0.1))] }
-        check(r.names() == "begin step+1", "switch: a fast slide across a dropout keeps the same hand, and is one step")
+        r.open()
+        r.frame(hand(0.5, 0.4, .middle(0.1)))
+        r.move((0.5, 0.4), (0.5, 0.5), 10, .middle(0.1))
+        r.hold(2, hand(0.5, 0.5, .open))
+        let pinch = r.states.count
+        r.frame(hand(0.5, 0.5, .index(0.1)))
+        r.hold(10, hand(0.5, 0.5, .open))
+        check(r.states[pinch - 1].scroll > 0 && r.scrolled(since: pinch) == 0, "inertia: a new pinch stops the coast")
 
         r = Rig()
-        r.pinchAt(0.5, 0.5)
-        r.move((0.5, 0.5), (0.75, 0.5), 8, .pinch(0.1))
-        r.hold(10, [hand(0.75, 0.5, .pinch(0.1))])
-        check(r.names() == "begin step+1", "switch: a flick that carries on past a detent is one step")
-
-        r = Rig()
-        r.move((0.2, 0.5), (0.3, 0.5), 6, .loose)
-        r.move((0.3, 0.5), (0.6, 0.5), 18, .pinch(0.1))
-        check(r.names().isEmpty, "switch: a pinch closed on a hand already moving sideways does nothing")
-
-        r = fling()
-        r.gap(12)
-        r.hold(5, [hand(0.62, 0.5, .loose)])
-        check(r.names() == "begin step+1 end", "switch: a lost hand ends it once")
-        r = fling()
-        let closing = r.engine.reset()
-        r.hold(5, [hand(0.62, 0.5, .loose)])
-        check(closing == [.switchEnd] && r.names() == "begin step+1", "switch: reset() ends it once")
+        r.open()
+        r.frame(hand(0.5, 0.4, .middle(0.1)))
+        r.move((0.5, 0.4), (0.5, 0.5), 10, .middle(0.1))
+        r.frame(hand(0.5, 0.5, .open))
+        r.hold(2, nil)
+        let parked = r.states.count
+        r.hold(10, hand(0.5, 0.5, .open))
+        check(r.last.at != nil && r.scrolled(since: parked - 1) == 0, "inertia: a park stops the coast")
     }
 
-    static func zoom() {
-        func two(_ span: Double, _ pa: Pose, _ pb: Pose, y: Double = 0.5) -> [Hand] {
-            [hand(0.7 - span / 2, y, pa), hand(0.7 + span / 2, y, pb)]
+    static func easing() {
+        let diagonal = hypot(2560.0, 1440.0) // dead zone 8.8 points
+        let tick = 1.0 / 120
+        check(abs(easeShare(tick) - 1.0 / 12) < 1e-12, "easing: one tick covers 1/12 of the way")
+        check(easeCursor(from: .zero, to: CGPoint(x: 6, y: 6), dt: tick, diagonal: diagonal) == nil,
+              "easing: a target inside the dead zone leaves the pointer still")
+        let one = easeCursor(from: .zero, to: CGPoint(x: 600, y: -300), dt: tick, diagonal: diagonal)!
+        let half = easeCursor(from: .zero, to: CGPoint(x: 600, y: -300), dt: tick / 2, diagonal: diagonal)!
+        let two = easeCursor(from: half, to: CGPoint(x: 600, y: -300), dt: tick / 2, diagonal: diagonal)!
+        check(abs(one.x - 50) < 1e-9 && abs(one.y + 25) < 1e-9 && abs(two.x - one.x) < 1e-9 && abs(two.y - one.y) < 1e-9,
+              "easing: two ticks of 1/240 s land where one of 1/120 s does")
+        var p = CGPoint.zero
+        var ticks = 0
+        let target = CGPoint(x: 1800, y: 900)
+        while let next = easeCursor(from: p, to: target, dt: tick, diagonal: diagonal) {
+            p = next
+            ticks += 1
         }
-        func armed() -> Rig {
-            var r = Rig()
-            r.hold(3, two(0.3, .loose, .loose))
-            r.hold(3, two(0.3, .pinch(0.1), .loose))
-            r.hold(3, two(0.3, .pinch(0.1), .pinch(0.1)))
-            return r
-        }
-        var r = armed()
-        r.frames(30) { i in two(0.3 + 0.15 * Double(i + 1) / 30, .pinch(0.1), .pinch(0.1)) }
-        r.hold(10, two(0.45, .pinch(0.1), .pinch(0.1)))
-        check(r.names() == "zoom+1 zoom+1", "zoom: spreading to 1.5x zooms in twice")
-
-        r = armed()
-        r.frames(15) { i in two(0.3 * exp(0.22 * Double(i + 1) / 15), .pinch(0.1), .pinch(0.1)) }
-        r.frames(30) { i in two(0.3 * exp(0.22 + (i % 2 == 0 ? 0.1 : -0.1)), .pinch(0.1), .pinch(0.1)) }
-        check(r.names() == "zoom+1", "zoom: jitter after a step does not flap")
-
-        r = armed()
-        r.frames(9) { i in two(0.3 + 0.6 * Double(i + 1) / 9, .pinch(0.1), .pinch(0.1)) }
-        r.hold(30, two(0.9, .pinch(0.1), .pinch(0.1)))
-        let times = r.events.map(\.t)
-        check(zip(times, times.dropFirst()).allSatisfy { $1 - $0 >= 0.2 - 1e-9 } && times.count >= 2,
-              "zoom: a fast spread is held to one step per 0.2 s (\(times.count) steps)")
-
-        r = armed()
-        r.hold(3, two(0.3, .pinch(0.1), .loose))
-        let mark = r.events.count
-        r.frames(20) { i in [hand(0.55, 0.5 + 0.01 * Double(i + 1), .pinch(0.1)), hand(0.85, 0.5, .loose)] }
-        check(r.events.count == mark && r.engine.phase == .spent, "zoom: after one hand lets go, the other does not scroll")
-        r.hold(3, [hand(0.55, 0.7, .loose), hand(0.85, 0.5, .loose)])
-        check(r.engine.phase == .idle, "zoom: ...until it has opened")
-
-        r = Rig()
-        r.hold(3, two(0.3, .loose, .loose))
-        r.hold(3, two(0.3, .pinch(0.1), .loose))
-        r.frames(10) { i in [hand(0.55, 0.5 + 0.01 * Double(i + 1), .pinch(0.1)), hand(0.85, 0.5, .loose)] }
-        r.hold(3, [hand(0.55, 0.6, .pinch(0.1)), hand(0.85, 0.5, .pinch(0.1))])
-        r.frames(20) { i in [hand(0.55, 0.6, .pinch(0.1)), hand(0.85 + 0.01 * Double(i + 1), 0.5, .pinch(0.1))] }
-        check(r.names().isEmpty, "zoom: a second pinch during a scroll does not zoom")
-        r.hold(3, [hand(0.55, 0.6, .loose), hand(1.05, 0.5, .pinch(0.1))])
-        let after = r.events.count
-        r.frames(20) { i in [hand(0.55, 0.6, .loose), hand(1.05, 0.5 + 0.01 * Double(i + 1), .pinch(0.1))] }
-        check(r.events.count == after && r.engine.phase == .spent, "zoom: ...and starts nothing when the scroll ends")
+        check(hypot(target.x - p.x, target.y - p.y) < 0.003 * diagonal && ticks < 120,
+              "easing: it converges and then stays still (\(ticks) ticks, \(String(format: "%.2f", Double(ticks) / 120)) s)")
     }
 
-    static func identity() {
-        func run(swap: Bool) -> [GestureEvent] {
-            var r = Rig()
-            r.frames(40) { i in
-                let pose: Pose = i < 3 ? .loose : .pinch(0.1)
-                let y = i < 10 ? 0.4 : 0.4 + 0.008 * Double(i - 9)
-                let hands = [hand(0.4, y, pose), hand(0.8, 0.5, .loose)]
-                return swap && i % 2 == 1 ? hands.reversed() : hands
-            }
-            return r.events.map(\.e)
-        }
-        let plain = run(swap: false), swapped = run(swap: true)
-        check(!plain.isEmpty && plain == swapped, "identity: the two hands swapping order changes nothing")
-    }
+    static func pointer() {
+        var d = Desk(real: CGPoint(x: 100, y: 100))
+        d.aim(1000, 600)
+        d.run(240)
+        check(!d.moves.isEmpty && d.p.target != nil && hypot(d.real.x - 1000, d.real.y - 600) < 9,
+              "pointer: it eases to the hand, and its own moves are not someone else's")
+        var late = Desk(real: CGPoint(x: 100, y: 100))
+        late.lag = 1
+        late.aim(1000, 600)
+        late.run(240)
+        check(late.p.target != nil && hypot(late.real.x - 1000, late.real.y - 600) < 9,
+              "pointer: ...even when the real pointer catches up a tick late")
 
-    static func talk() {
-        var r = Rig()
-        r.hold(9, [hand(0.5, 0.3, .open)])
-        check(r.events.isEmpty, "talk: 0.3 s of a raised palm does nothing")
-        r.hold(9, [hand(0.5, 0.3, .open)])
-        check(r.names() == "down", "talk: 0.5 s still presses the key")
-        r.hold(15, [hand(0.5, 0.3, .folded(1))])
-        r.hold(15, [hand(0.5, 0.3, .folded(2))])
-        check(r.names() == "down", "talk: one or two fingers relaxing keep it down")
-        r.hold(2, [hand(0.5, 0.3, .folded(3))])
-        check(r.names() == "down up", "talk: three folded let it go")
+        d.elsewhere(300, 300)
+        d.moves = []
+        d.aim(1004, 603) // the still hand's jitter, inside the dead zone
+        d.run(120)
+        check(d.moves.isEmpty && d.real == CGPoint(x: 300, y: 300),
+              "pointer: moved by someone else while the hand is still, it stays where they put it")
+        d.aim(1020, 600)
+        d.run(1)
+        let k = easeShare(1.0 / 120)
+        check(d.moves.count == 1 && abs(d.moves[0].x - (300 + k * 720)) < 1e-9 && abs(d.moves[0].y - (300 + k * 300)) < 1e-9,
+              "pointer: the hand takes it back once it moves past the dead zone, from where the pointer is")
 
-        r = Rig()
-        r.hold(20, [hand(0.5, 0.3, .open)])
-        r.move((0.5, 0.3), (0.5, 0.55), 8, .open)
-        check(r.names() == "down", "talk: lowering a little keeps it down")
-        r.move((0.5, 0.55), (0.5, 0.75), 8, .open)
-        check(r.names() == "down up", "talk: lowering past the line lets it go")
+        d.run(240)
+        d.elsewhere(300, 300)
+        d.run(2)
+        let gaveWay = d.p.target == nil
+        d.p.aim(nil, diagonal: Desk.diagonal)
+        d.aim(1020, 600)
+        check(gaveWay && d.p.target != nil, "pointer: a park ends the giving way, so the hand that comes back has the pointer")
 
-        r = Rig()
-        r.hold(20, [hand(0.5, 0.3, .open)])
-        r.gap(10)
-        check(r.names() == "down up", "talk: a hand leaving the frame lets it go")
-
-        r = Rig()
-        r.hold(10, [hand(0.5, 0.3, .open)])
-        r.gap(10)
-        check(r.events.isEmpty, "talk: a palm still for 0.3 s, then gone, does nothing")
-
-        r = Rig()
-        r.hold(3, [hand(0.4, 0.5, .loose), hand(0.8, 0.3, .open)])
-        r.hold(3, [hand(0.4, 0.5, .pinch(0.1)), hand(0.8, 0.3, .open)])
-        r.frames(30) { i in [hand(0.4, 0.5 + 0.2 * Double(i + 1) / 30, .pinch(0.1)), hand(0.8, 0.3, .open)] }
-        r.frames(12) { i in [hand(0.4, 0.7, i < 10 ? .pinch(0.1) : .loose), hand(0.8, 0.3, .open)] }
-        check(r.scrolls() > 0 && r.names().isEmpty, "talk: a raised palm beside a scrolling hand does nothing")
-        let mark = r.events.count
-        r.hold(9, [hand(0.4, 0.7, .loose), hand(0.8, 0.3, .open)])
-        check(r.names(since: mark).isEmpty, "talk: a palm held during a pinch session waits its own dwell after it")
-
-        r = Rig()
-        r.move((0.5, 0.95), (0.5, 0.05), 27, .open)
-        r.gap(10)
-        check(r.events.isEmpty, "talk: a palm passing through the upper half does nothing")
-    }
-
-    static func stop() {
-        func push(_ r: inout Rig, at y: Double, from s: Double = 0.12) {
-            r.frames(6) { i in [hand(0.5, y, .open, s: s * (1 + 0.4 * Double(i + 1) / 6))] }
-        }
-        var r = Rig()
-        r.hold(4, [hand(0.5, 0.4, .open)])
-        push(&r, at: 0.4)
-        r.hold(30, [hand(0.5, 0.4, .open, s: 0.168)])
-        check(r.names() == "stop", "stop: a push stops once, and the palm does not then talk")
-        r.hold(3, [hand(0.5, 0.4, .fist)])
-        r.hold(20, [hand(0.5, 0.4, .open)])
-        check(r.names() == "stop down", "stop: ...until it has closed")
-
-        r = Rig()
-        r.hold(20, [hand(0.5, 0.4, .open)])
-        push(&r, at: 0.4)
-        check(r.names() == "down cancel stop", "stop: a push while talking cancels, then stops")
-
-        r = Rig()
-        r.hold(4, [hand(0.5, 0.7, .open)])
-        r.hold(1, [hand(0.5, 0.7, .open, s: 0.17)])
-        r.hold(4, [hand(0.5, 0.7, .open)])
-        r.hold(1, [hand(0.5, 0.7, .open, s: 0.09)])
-        r.hold(4, [hand(0.5, 0.7, .open)])
-        check(r.events.isEmpty, "stop: one frame's glitch in the palm's size, up or down, does not stop")
-
-        r = Rig()
-        r.move((0.5, 0.95), (0.5, 0.35), 9, .open)
-        r.hold(8, [hand(0.5, 0.35, .open)])
-        check(r.events.isEmpty, "stop: a raise does not stop")
-
-        r = Rig()
-        r.frames(45) { i in [hand(0.5, 0.7, .open, s: 0.12 * (1 + 0.4 * Double(i + 1) / 45))] }
-        check(r.events.isEmpty, "stop: a slow approach does not stop")
-
-        r = Rig()
-        r.frames(8) { i in [hand(0.5, 0.7, .edgeOn, s: 0.07 + 0.05 * Double(i + 1) / 8)] }
-        r.hold(10, [hand(0.5, 0.7, .open)])
-        check(r.events.isEmpty, "stop: a hand turning from edge-on to face the camera does not stop")
+        var stopped = Desk(real: CGPoint(x: 100, y: 100))
+        stopped.aim(1000, 600)
+        stopped.run(240)
+        stopped.p.stop()
+        stopped.elsewhere(300, 300)
+        stopped.moves = []
+        stopped.aim(1000, 600)
+        stopped.run(1)
+        check(stopped.moves.count == 1 && abs(stopped.moves[0].x - (300 + k * 700)) < 1e-9 && stopped.p.target != nil,
+              "pointer: after the loop stops, it starts from where the pointer is without giving way")
     }
 }

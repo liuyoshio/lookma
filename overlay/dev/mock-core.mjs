@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Development harness for the overlay. Serves overlay/ (and each voice provider's page.js) and
-// plays the core's side of /ws/overlay (docs/protocol.md) from the script in scenario.mjs,
-// against the fake desktop in desk.js (open the page with ?backdrop=1 to see it). It has no
-// voice: POST /api/voice/grant is a 503 (check-voices.mjs fakes the grant in the page).
+// Development harness for the overlay. Serves overlay/ (with each voice provider's page.js and
+// MediaPipe's tasks-vision, as the core does) and plays the core's side of /ws/overlay
+// (docs/protocol.md) from the script in scenario.mjs, against the fake desktop in desk.js (open
+// the page with ?backdrop=1 to see it). It has no voice: POST /api/voice/grant is a 503
+// (check-voices.mjs fakes the grant in the page).
 //
 //   node overlay/dev/mock-core.mjs [--port 8797] [--speed 1] [--from <mark>] [--hold]
 //
@@ -30,6 +31,7 @@ import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
 import { scenario } from './scenario.mjs'
 import { createOutbox } from '../../core/outbox.mjs'
+import { TASKS_VISION } from '../../core/server.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const VOICES = path.resolve(ROOT, '..', 'voices')
@@ -296,7 +298,7 @@ function onOverlayMessage(msg, reply) {
 
 // ------------------------------------------------------------ HTTP + WebSocket
 
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' }
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.wasm': 'application/wasm' }
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`])
 
 function json(res, status, body) {
@@ -341,10 +343,15 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true })
   }
   if (req.method !== 'GET') return json(res, 404, { error: 'not found' })
-  // The overlay at /, and a voice provider's page half at /voices/<name>/page.js, as the core serves them.
-  const voice = url.pathname.match(/^\/voices\/([a-z0-9-]+)\/page\.js$/)
-  const dir = voice ? VOICES : ROOT
-  const file = voice ? path.join(VOICES, voice[1], 'page.js') : path.join(ROOT, url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname))
+  // The overlay at /, a voice provider's page half at /voices/<name>/page.js and MediaPipe's
+  // tasks-vision at /vendor/tasks-vision/, as the core serves them.
+  const pathname = decodeURIComponent(url.pathname)
+  const voice = pathname.match(/^\/voices\/([a-z0-9-]+)\/page\.js$/)
+  const vendor = pathname.startsWith('/vendor/tasks-vision/')
+  const dir = voice ? VOICES : vendor ? TASKS_VISION : ROOT
+  const file = voice ? path.join(VOICES, voice[1], 'page.js')
+    : vendor ? path.join(TASKS_VISION, path.normalize(pathname.slice('/vendor/tasks-vision'.length)))
+    : path.join(ROOT, pathname === '/' ? 'index.html' : pathname)
   if (!file.startsWith(dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return json(res, 404, { error: 'not found' })
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' })
   fs.createReadStream(file).pipe(res)

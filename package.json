@@ -49,16 +49,17 @@
   ],
   "scripts": {
     "start": "node core/cli.mjs start",
-    "check": "for f in core/*.mjs core/executor/*.mjs core/voice/*.mjs core/dev/*.mjs executors/*/*.mjs executors/*/dev/*.mjs voices/*/*.mjs voices/*/*.js voices/*/dev/*.mjs overlay/*.js overlay/voice/*.js overlay/dev/*.mjs; do node --check $f || exit 1; done",
-    "test": "node core/dev/check-plugins.mjs && node core/dev/check-pipeline.mjs && node core/dev/check-outbox.mjs && node core/dev/check-executors.mjs && for f in executors/*/dev/check.mjs voices/*/dev/check.mjs; do node $f || exit 1; done && node overlay/dev/consent-check.mjs && node overlay/dev/floor-check.mjs && node overlay/dev/source-check.mjs",
-    "test:overlay": "node overlay/dev/check-voices.mjs && node overlay/dev/shoot.mjs",
+    "check": "for f in core/*.mjs core/executor/*.mjs core/voice/*.mjs core/dev/*.mjs executors/*/*.mjs executors/*/dev/*.mjs voices/*/*.mjs voices/*/*.js voices/*/dev/*.mjs overlay/*.js overlay/voice/*.js overlay/hand/*.js overlay/dev/*.mjs; do node --check $f || exit 1; done",
+    "test": "node core/dev/check-plugins.mjs && node core/dev/check-pipeline.mjs && node core/dev/check-outbox.mjs && node core/dev/check-executors.mjs && for f in executors/*/dev/check.mjs voices/*/dev/check.mjs; do node $f || exit 1; done && node overlay/dev/consent-check.mjs && node overlay/dev/floor-check.mjs && node overlay/dev/source-check.mjs && node overlay/dev/hand-check.mjs",
+    "test:overlay": "node overlay/dev/check-voices.mjs && node overlay/dev/check-hands.mjs && node overlay/dev/shoot.mjs",
     "test:key": "mkdir -p app/build && swiftc -swift-version 5 -parse-as-library -o app/build/talkkey-check app/Sources/TalkKey.swift app/dev/talkkey-check.swift && app/build/talkkey-check",
-    "test:gesture": "mkdir -p app/build && swiftc -swift-version 5 -parse-as-library -o app/build/gesture-check app/Sources/TalkKey.swift app/Sources/Gesture.swift app/dev/gesture-check.swift && app/build/gesture-check",
+    "test:gesture": "mkdir -p app/build && swiftc -swift-version 5 -parse-as-library -o app/build/gesture-check app/Sources/HandFrame.swift app/Sources/Gesture.swift app/dev/gesture-check.swift && app/build/gesture-check",
     "test:e2e": "node core/dev/e2e.mjs",
     "fake-app": "node core/dev/fake-app.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.330",
+    "@mediapipe/tasks-vision": "0.10.35",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "ws": "^8.23.0",
     "zod": "^4.0.0"

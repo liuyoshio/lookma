@@ -26,7 +26,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>While Lookma runs and is not paused, it listens, so you can give instructions and approvals by voice.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>With Hand Gestures on, Lookma watches your hands to scroll, switch apps and zoom. The video is processed on this Mac and is never stored or sent.</string>
+	<string>With Hand Gestures on, your hand moves the pointer, clicks and scrolls. The video is processed on this Mac and is never stored or sent.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
