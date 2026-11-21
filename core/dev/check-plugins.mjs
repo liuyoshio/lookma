@@ -27,7 +27,7 @@ const thrown = fn => {
   const all = await manifests()
   const names = Object.fromEntries(all.map(p => [`${p.kind}/${p.name}`, p.settings.map(s => s.name).join(' ')]))
   const want = {
-    'executors/claude': 'LOOKMA_CLAUDE_MODEL LOOKMA_CLAUDE_PERMISSION_MODE LOOKMA_CLAUDE_FLAGS LOOKMA_EXEC_SESSION',
+    'executors/claude': 'LOOKMA_CLAUDE_MODEL LOOKMA_CLAUDE_PERMISSION_MODE LOOKMA_CLAUDE_FLAGS',
     'executors/codex': 'LOOKMA_CODEX_MODEL LOOKMA_CODEX_FAST CODEX_HOME',
     'voices/openai': 'OPENAI_API_KEY LOOKMA_OPENAI_MODEL LOOKMA_OPENAI_VOICE LOOKMA_OPENAI_TRANSCRIBE_MODEL LOOKMA_OPENAI_MAX_TOKENS',
   }
@@ -62,7 +62,7 @@ const thrown = fn => {
     [{ title: 'X', settings: { model_name: setting } }, 'setting model_name: the key must be camelCase'],
     [{ title: 'X', settings: { model: { default: null, help: 'h' } } }, 'setting model: default must be'],
     [{ title: 'X', settings: { key: { default: 'k', help: 'h', required: true } } }, 'setting key: a required setting is a string with an empty default'],
-    [{ title: 'X', checks: ['tmux'] }, 'checks must be a list of functions'],
+    [{ title: 'X', checks: ['claude'] }, 'checks must be a list of functions'],
   ]
   const wrong = cases.map(([m, want]) => [want, thrown(() => validate('executors', 'x', m))]).filter(([want, got]) => !got.startsWith(`executors/x/manifest.mjs: ${want}`))
   check(`malformed manifests fail in words (${cases.length} cases)`, !wrong.length, JSON.stringify(wrong))

@@ -1,14 +1,13 @@
 #!/usr/bin/env node
-// End to end with a real interactive Claude Code in tmux, the fake app and an overlay client.
-//   node core/dev/e2e.mjs [port]     (default 8791; tmux session lookma-test; model sonnet)
-// Starts `core/cli.mjs start`, answers every card yes through the overlay socket (logged), then:
-//   1. the startup development-channel warning shows up as a card;
-//   2. "say hello in one short sentence" → a say in the outbox;
-//   3. "look at the screen and tell me what app is in front" → see through the pipeline;
-//   4. a Bash permission prompt gives exactly one card, answered through the relay;
-//   5. stop interrupts a running turn.
-// The test session runs in permission mode "default" so that step 4 has a prompt to answer.
-// Cleans up the tmux session and its processes at the end.
+// End to end with a real Claude Code, headless through the Agent SDK, the fake app and an overlay
+// client. Voice off, so nothing goes to OpenAI; one short Sonnet turn on your Claude plan.
+//   node core/dev/e2e.mjs [port]     (default 8791, a scratch data dir)
+// Starts `core/cli.mjs start`, then:
+//   1. the executor gets ready, with no card on the way;
+//   2. "say hello" → a say in the outbox, with no card (say never asks), and the turn ends done;
+//   3. the core stops on SIGTERM and takes its Claude Code and tools bridge with it.
+// Started from inside another agent's session, run it with a plain environment (env -i HOME=...
+// PATH=...), so the Claude Code session does not inherit that session's API settings.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -17,7 +16,6 @@ import WebSocket from 'ws'
 import { ROOT } from '../config.mjs'
 
 const PORT = Number(process.argv[2] || 8791)
-const SESSION = 'lookma-test'
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'lookma-e2e-'))
 const BASE = `http://127.0.0.1:${PORT}`
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -38,53 +36,48 @@ async function until(pred, ms) {
   }
   return null
 }
-const pane = () => {
+const alive = pid => {
   try {
-    return execFileSync('tmux', ['capture-pane', '-p', '-t', `=${SESSION}:`], { encoding: 'utf8' })
+    return process.kill(pid, 0)
   } catch {
-    return ''
+    return false
   }
+}
+// The process tree under pid.
+function descendants(pid) {
+  let out = ''
+  try {
+    out = execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
+  } catch {} // pgrep exits 1 when there is none
+  return out.split('\n').filter(Boolean).map(Number).flatMap(p => [p, ...descendants(p)])
 }
 
 // ---------------------------------------------------------------- processes
 
 function run(name, args, env) {
-  const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, LOOKMA_NO_APP: '1', ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
-  const lines = []
+  const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
   const take = buf => {
-    for (const line of String(buf).split('\n').filter(Boolean)) {
-      lines.push(line)
-      process.stdout.write(`${line.startsWith('0') || line.startsWith('1') || line.startsWith('2') ? '' : `${stamp()} ${name} `}${line}\n`)
-    }
+    for (const line of String(buf).split('\n').filter(Boolean)) process.stdout.write(`${/^\d/.test(line) ? '' : `${stamp()} ${name} `}${line}\n`)
   }
   child.stdout.on('data', take)
   child.stderr.on('data', take)
-  return { child, lines }
+  return child
 }
 
-const core = run('core', ['core/cli.mjs', 'start'], { LOOKMA_PORT: String(PORT), LOOKMA_EXEC_SESSION: SESSION, LOOKMA_CLAUDE_MODEL: 'sonnet', LOOKMA_DATA: DATA, LOOKMA_CLAUDE_PERMISSION_MODE: 'default' })
+const core = run('core', ['core/cli.mjs', 'start'], {
+  LOOKMA_PORT: String(PORT),
+  LOOKMA_DATA: DATA,
+  LOOKMA_NO_APP: '1',
+  LOOKMA_VOICE: 'off',
+  LOOKMA_EXECUTOR: 'claude',
+  LOOKMA_CLAUDE_MODEL: 'sonnet',
+})
 const app = run('fake-app', ['core/dev/fake-app.mjs', '--port', String(PORT), '--idle', '10'], {})
-
-async function cleanup() {
-  core.child.kill('SIGTERM')
-  app.child.kill('SIGTERM')
-  await sleep(1500)
-  let left = true
-  try {
-    execFileSync('tmux', ['has-session', '-t', `=${SESSION}`], { stdio: 'ignore' })
-  } catch {
-    left = false
-  }
-  if (left) execFileSync('tmux', ['kill-session', '-t', `=${SESSION}`])
-  check('cleanup: the core stopped its tmux session', !left)
-  fs.rmSync(DATA, { recursive: true, force: true })
-}
 
 // ---------------------------------------------------------------- overlay client
 
 const states = []
-const events = []
-const answered = new Set()
+const says = []
 const cards = []
 let ws
 for (let i = 0; i < 50 && !ws; i++) {
@@ -95,100 +88,53 @@ for (let i = 0; i < 50 && !ws; i++) {
     sock.on('error', () => resolve(null))
   })
 }
-if (!ws) {
-  check('overlay connects', false)
-  await cleanup()
-  process.exit(1)
-}
 const last = () => states.at(-1)
-const seen = new Set() // outbox entry ids
-ws.on('message', raw => {
+const seen = new Set() // outbox entry ids and card ids
+ws?.on('message', raw => {
   const m = JSON.parse(raw)
   if (m.type !== 'state') return
   states.push(m)
-  // Each new say in the outbox is an event (cards and reports are not says).
   for (const e of m.outbox) {
-    if (seen.has(e.id)) continue
+    if (seen.has(e.id) || e.kind === 'card' || e.kind === 'report') continue
     seen.add(e.id)
-    if (e.kind === 'card' || e.kind === 'report') continue
-    events.push({ type: 'say', ...e, at: Date.now() })
+    says.push(e)
     say(`say ${e.kind} ${JSON.stringify(e.display)}`)
   }
   for (const c of m.cards) {
-    if (answered.has(c.id)) continue
-    answered.add(c.id)
+    if (seen.has(c.id)) continue
+    seen.add(c.id)
     cards.push(c)
-    say(`card ${c.id} [${c.source}] ${JSON.stringify(c.title)} → answering yes`)
-    setTimeout(() => ws.send(JSON.stringify({ type: 'answer', id: `answer-${c.id}`, cardId: c.id, allow: true, via: 'voice' })), 500)
+    say(`card ${c.id} [${c.source}] ${JSON.stringify(c.title)}`)
   }
 })
-const tell = async text => {
-  say(`tell ${JSON.stringify(text)}`)
-  const r = await fetch(`${BASE}/api/tell`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-  return r.ok
-}
-const turnEnded = ms => until(() => last()?.turn && last().turn.phase !== 'working' && last().turn, ms)
 
+let tree = []
 try {
-  // 1. Startup warning as a card, answered through the overlay socket.
-  const warn = await until(() => cards.find(c => /development channels/i.test(`${c.title} ${c.detail}`)), 60000)
-  check('startup dev-channel warning arrives as a card', !!warn, warn ? warn.title : pane().slice(-600))
-  const ready = await until(() => last()?.executor.status === 'ready', 90000)
-  check('executor ready after the card is answered (channel connected)', !!ready, last()?.executor.detail)
-  if (!ready) throw new Error('not ready:\n' + pane())
+  check('overlay connects', !!ws)
+  if (!ws) throw new Error('no overlay socket')
+
+  // 1. Ready.
+  const ready = await until(() => last()?.executor.status === 'ready' && last(), 60000)
+  check('the executor gets ready, with no card on the way', !!ready && cards.length === 0, JSON.stringify(last()?.executor))
+  if (!ready) throw new Error('not ready')
+  tree = descendants(core.pid)
 
   // 2. Say hello.
-  let n = events.length
-  await tell('say hello in one short sentence')
-  const hello = await until(() => events.slice(n).find(e => e.type === 'say'), 90000)
-  check('tell "say hello" → a say reaches the overlay\'s outbox', !!hello, hello?.speech)
-  const t1 = await turnEnded(60000)
-  check('the Stop hook ends the turn (hooks reach /hook)', t1?.phase === 'done', t1?.phase)
-
-  // 3. See through the pipeline.
-  n = events.length
-  const opsBefore = app.lines.length
-  await tell('look at the screen and tell me what app is in front')
-  const seen = await until(() => app.lines.slice(opsBefore).find(l => / op see /.test(l)), 120000)
-  check('tell "look at the screen" → a see call reaches the fake app', !!seen, seen || '')
-  const grant = cards.find(c => c.title === 'Allow controlling Finder?')
-  check('the first see raised the core grant card', !!grant)
-  const answer = await until(() => events.slice(n).find(e => e.type === 'say' && /finder/i.test(`${e.speech} ${e.display}`)), 90000)
-  check('Claude says the front app is Finder', !!answer, answer?.speech)
-  const focus = states.findLast(s => s.focus?.action === 'see')?.focus
-  check('focus showed the see step with its label', !!focus?.label && focus.app === 'Finder', JSON.stringify(focus && { label: focus.label, phase: focus.phase }))
-  await turnEnded(60000)
-
-  // 4. A permission prompt: relayed and drawn in the terminal, one card, answered by relay.
-  n = events.length
-  const cardsBefore = cards.length
-  await tell('Use the Bash tool to run the command `ls /tmp` exactly once, then say how many entries it printed.')
-  const counted = await until(() => events.slice(n).find(e => e.type === 'say'), 120000)
-  await sleep(3000) // two more polls: a duplicate terminal card would show up by now
-  const asked = cards.slice(cardsBefore)
-  check('Bash prompt → exactly one card, from the relay', asked.length === 1 && asked[0].title === 'Allow Bash?', asked.map(c => c.title).join(' | '))
-  check('answered yes → the command ran and Claude reported', !!counted, counted?.speech)
-  await turnEnded(60000)
-
-  // 5. Stop.
-  n = events.length
-  await tell('Count from 1 to 40. Call say once per number, one call at a time, and nothing else.')
-  const first = await until(() => events.slice(n).find(e => e.type === 'say'), 90000)
-  check('a long turn starts saying numbers', !!first, first?.speech)
-  ws.send(JSON.stringify({ type: 'control', id: 'stop1', action: 'stop' }))
-  const cancelAt = Date.now()
-  say('sent stop')
-  const c = await until(() => last().turn?.phase === 'cancelled' && last().turn, 5000)
-  check('stop → turn.phase cancelled', !!c)
-  await sleep(8000)
-  const after = events.filter(e => e.type === 'say' && e.at > cancelAt + 1500)
-  const screen = pane()
-  check('stop stops Claude (no more says, terminal shows the interrupt)', after.length === 0 && /Interrupted/i.test(screen), `${after.length} says after; ${/Interrupted/i.test(screen) ? 'interrupted' : 'no interrupt mark'}`)
+  const r = await fetch(`${BASE}/api/tell`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'Say hello in one short sentence with the say tool, and do nothing else.' }) })
+  check('tell is accepted', r.ok, String(r.status))
+  const hello = await until(() => says[0], 90000)
+  check('a say reaches the outbox, with no card', !!hello && cards.length === 0, hello?.speech)
+  const end = await until(() => last()?.turn?.phase !== 'working' && last().turn, 60000)
+  check('the turn ends done', end?.phase === 'done', end?.phase)
 } catch (err) {
   check('e2e ran to the end', false, err.message)
 } finally {
-  ws.close()
-  await cleanup()
+  ws?.close()
+  core.kill('SIGTERM')
+  app.kill('SIGTERM')
+  const gone = await until(() => tree.every(p => !alive(p)) && !alive(core.pid), 10000)
+  check('SIGTERM: the core, its Claude Code and its tools bridge are gone', !!gone && tree.length > 0, `${tree.length} children, alive ${tree.filter(alive)}`)
+  fs.rmSync(DATA, { recursive: true, force: true })
   console.log('\n' + results.join('\n'))
   console.log(failures ? `${failures} FAILED` : 'all passed')
   process.exit(failures ? 1 : 0)

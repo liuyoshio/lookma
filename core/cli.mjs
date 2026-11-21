@@ -31,8 +31,8 @@ Options (each overrides the environment and .env):
   --audio <setup>      room (speakers, the default) or headset
   --set NAME=value     any setting below, e.g. --set LOOKMA_CLAUDE_MODEL=opus
 
-While it runs, watch the agent: Claude Code in its terminal (tmux attach -t lookma),
-Codex in the log of the terminal that started Lookma.
+While it runs, the agent's steps, cards and messages are in the log of the terminal
+that started Lookma.
 Just talk. While Lookma runs and is not paused, it listens: the microphone streams
 to the voice, and macOS shows its microphone indicator. To approve a card, say
 "yes, I approve". Pause or resume it with ⌃⌥P, its menu bar icon, or by saying

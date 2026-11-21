@@ -34,9 +34,9 @@
 // an explicit approval.
 //
 // Declines get the same checks 2-4, with an explicit "no" instead (isExplicitDecline):
-// a wrong "no" is not free either. It interrupts Claude's turn, and on a startup card it
-// shuts Claude Code down (seen live: the echo "Sure.", heard over the butler's question,
-// declined the development-channel card). Anything unclear asks again.
+// a wrong "no" is not free either. It refuses a step the user wanted, and the agent's work
+// goes on without it or stops short (an echo of the voice's own "Sure.", heard over its
+// question, has declined a card live). Anything unclear asks again.
 
 export const MIN_CARD_MS = 1000
 export const TRANSCRIPT_WAIT_MS = 3000

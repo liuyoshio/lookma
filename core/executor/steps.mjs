@@ -6,8 +6,9 @@
 //   list    a folder's path, or nothing               "List src", "List files"
 //   search  what is searched for in files, or nothing  "Search for ramen", "Search files"
 //   web     a web search's query, or nothing          "Search the web for ramen"
-//   run     a command line                            "npm test"
+//   run     a command line, or what it does           "npm test", "Add up totals"
 //   write, edit, delete   one path or several         "Edit a.md + 1 more"
+//   task    background work started, what it is for  "Start: Sum receipts"
 //   tool    another tool, as "server · tool"          "docs · search"
 import path from 'node:path'
 import { clip } from '../util.mjs'
@@ -32,6 +33,7 @@ const KINDS = {
   write: d => files('Write', d),
   edit: d => files('Edit', d),
   delete: d => files('Delete', d),
+  task: d => (d ? `Start: ${clip(d, 50)}` : 'Start a task'),
   tool: d => clip(d),
 }
 

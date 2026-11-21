@@ -1,141 +1,144 @@
-// Claude Code adapter. Interactive `claude` runs in tmux; channel.mjs (spawned by Claude Code)
-// connects back on /ws/executor; http hooks arrive through the core's /hook.
-//   prompt → channel message        cancel → Escape in tmux
-//   answer → relay or terminal keys (approvals.mjs)
+// Claude Code adapter (executor contract v2, docs/protocol.md), on the Claude Agent SDK: the SDK
+// runs the user's installed `claude` headless, isolated (session.mjs), with one open stream of
+// prompts per session.
+//   start      query(); resolves once Claude Code is initialised and the tools' MCP server is connected
+//   prompt     one user message into the stream; during a turn, Claude Code takes it into that turn
+//   interrupt  Query.interrupt(); resolves on the interrupted turn's result
+//   result → turnEnd     a main-agent message while idle → turnStart (a background task woke it)
+//   canUseTool → cards (approvals.mjs)     hooks → steps and tasks (hooks.mjs)
+// After close, start goes on with the same conversation, by its session id.
 import fs from 'node:fs'
 import path from 'node:path'
-import { logUnknown } from '../../core/util.mjs'
-import { serveTools } from '../../core/executor/tool-link.mjs'
-import { createTmux } from './tmux.mjs'
-import { parse, choose, escape } from './dialog.mjs'
-import { createApprovals } from './approvals.mjs'
-import { createHookHandler } from './hooks.mjs'
-import { writeSession } from './session.mjs'
+import { query } from '@anthropic-ai/claude-agent-sdk'
+import { clip, sleep } from '../../core/util.mjs'
+import { queryOptions } from './session.mjs'
+import { EVENTS, createHookHandler } from './hooks.mjs'
+import { createCanUseTool } from './approvals.mjs'
 
-const POLL_MS = 1000
-
-function findClaude(searchPath) {
-  for (const dir of searchPath.split(':')) {
-    const file = path.join(dir, 'claude')
-    if (dir && fs.existsSync(file)) return file
+// The prompt stream query() reads: open until end(), so the session lives between turns.
+function createInbox() {
+  const waiting = []
+  let wake = null
+  let ended = false
+  return {
+    push(text) {
+      waiting.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null })
+      wake?.()
+    },
+    end() {
+      ended = true
+      wake?.()
+    },
+    async *stream() {
+      for (;;) {
+        if (waiting.length) yield waiting.shift()
+        else if (ended) return
+        else await new Promise(resolve => (wake = resolve))
+      }
+    },
   }
-  throw new Error('claude is not on PATH')
+}
+
+// Resolves once Claude Code has connected the tools' MCP server; rejects in words if it failed.
+async function toolsUp(session, name) {
+  for (;;) {
+    const s = (await session.mcpServerStatus()).find(s => s.name === name)
+    if (s.status === 'connected') return
+    if (s.status !== 'pending') throw new Error(`the tools did not start (${s.status}${s.error ? `: ${s.error}` : ''})`)
+    await sleep(100)
+  }
 }
 
 export function create(ctx) {
-  const { emit, config, options: opts, log } = ctx
-  const tmux = createTmux(opts.session)
-  const queue = [] // prompts told before the channel connected
-  const unknown = logUnknown(log, 'channel')
-  let proxy = null
-  let status = null
-  let polling = false
-  let timer = null
+  const { emit, log } = ctx
+  const hook = createHookHandler({ emit, server: ctx.tools.server })
+  const hooks = Object.fromEntries(EVENTS.map(name => [name, [{ hooks: [async input => (hook(input), {})] }]]))
+  const canUseTool = createCanUseTool({ ask: ctx.ask, log })
+  let q = null // the session's Query
+  let inbox = null
+  let reading = null // settles when the session's stream ends
+  let sessionId = null // the conversation, resumed by the next start
+  let busy = false // a turn runs: from a prompt, or a main-agent message while idle, to its result
+  let closing = false
+  let ending = [] // interrupts waiting for the turn's result
 
-  function setStatus(next, detail = '') {
-    if (next === status) return
-    status = next
-    emit({ type: 'status', status: next, detail })
+  function settle() {
+    for (const resolve of ending) resolve()
+    ending = []
   }
 
-  function send(msg) {
-    if (proxy?.readyState !== 1) return false
-    proxy.send(JSON.stringify(msg))
-    return true
+  function onMessage(m) {
+    if (m.session_id !== sessionId) log(`session ${m.session_id}`)
+    sessionId = m.session_id
+    const main = !m.parent_tool_use_id
+    if (m.type === 'result') {
+      busy = false
+      // A success can still be an error (a usage limit, an API error), with the reason as its text.
+      const ok = m.subtype === 'success' && !m.is_error
+      const error = ok ? undefined : (m.subtype === 'success' ? m.result : m.errors.join('; ')) || m.subtype
+      log(`turn ${ok ? 'done' : `${m.subtype}: ${error}`}`)
+      emit({ type: 'turnEnd', ok, summary: m.result, error })
+      return settle()
+    }
+    if (!busy && main && (m.type === 'assistant' || (m.type === 'system' && m.subtype === 'init'))) {
+      busy = true
+      emit({ type: 'turnStart' })
+    }
+    // The model is told to speak only with say; its text replies are for this log.
+    if (m.type === 'assistant' && main) for (const b of m.message.content) if (b.type === 'text') log('message', clip(b.text, 200))
   }
 
-  const approvals = createApprovals({
-    emit,
-    log,
-    relayAnswer: (request_id, behavior) => send({ type: 'permissionAnswer', request_id, behavior }),
-    choose: (sig, n) => choose(tmux, sig, n),
-    escape: sig => escape(tmux, sig),
-  })
-  const hook = createHookHandler({ emit, approvals })
-
-  // While the session lives: read the terminal every second for dialogs only it shows.
-  async function poll() {
-    if (!polling) return
+  async function read(session) {
+    let reason = 'Claude Code ended the session'
     try {
-      if (!(await tmux.alive())) {
-        polling = false
-        approvals.clear()
-        setStatus('down', 'Claude Code exited')
-        return
-      }
-      approvals.screen(parse(await tmux.capture()))
+      for await (const m of session) if (session === q) onMessage(m)
     } catch (err) {
-      log('poll failed', err.message)
+      reason = err.message
     }
-    if (polling) timer = setTimeout(poll, POLL_MS)
-  }
-
-  function onProxyMessage(ws, raw) {
-    let msg
-    try {
-      msg = JSON.parse(raw)
-    } catch {
-      return
-    }
-    if (serveTools(ctx, ws, msg)) return
-    if (msg.type === 'permission') approvals.relay(msg)
-    else unknown(msg.type)
+    if (session !== q) return
+    busy = false
+    settle()
+    if (!closing) emit({ type: 'down', detail: reason })
   }
 
   return {
-    async start({ dirs = [] }) {
-      const dir = writeSession(config, opts.session, dirs)
-      await tmux.kill() // our own session left over from an earlier run
-      const PATH = process.env.PATH // where claude is found; Claude Code runs with the same PATH
-      const argv = [
-        findClaude(PATH),
-        '--model', opts.model,
-        '--permission-mode', opts.permissionMode,
-        '--settings', path.join(dir, 'settings.json'),
-        '--append-system-prompt-file', path.join(dir, 'executor.md'),
-        '--dangerously-load-development-channels', 'server:lookma',
-        ...opts.flags.split(/\s+/).filter(Boolean),
-      ]
-      await tmux.start({ cwd: dir, argv, env: { PATH } })
-      log(`Claude Code is starting in tmux session ${opts.session} (watch: tmux attach -t ${opts.session})`)
-      setStatus('starting', 'waiting for Claude Code')
-      polling = true
-      poll()
-      return { name: 'claude' }
+    // `lookma start` has checked the claude binary and the login already (manifest.mjs).
+    async start({ dirs }) {
+      closing = false
+      busy = false
+      const work = path.join(ctx.sessionDir, 'work')
+      fs.mkdirSync(work, { recursive: true })
+      inbox = createInbox()
+      const options = queryOptions({ options: ctx.options, tools: ctx.tools, instructions: ctx.instructions, env: ctx.env, work, dirs, resume: sessionId, canUseTool, hooks })
+      log(`Claude Code is starting (${options.pathToClaudeCodeExecutable}${sessionId ? `, resuming ${sessionId}` : ''})`)
+      q = query({ prompt: inbox.stream(), options })
+      reading = read(q)
+      const init = await q.initializationResult()
+      await toolsUp(q, ctx.tools.server)
+      // Who pays, in the log too: a plan's usage limits, or an API account.
+      const { subscriptionType, apiKeySource, apiProvider } = init.account
+      log(`Claude Code ${init.claude_code_version} ready, ${subscriptionType ? `on the ${subscriptionType} plan` : `billed through ${apiKeySource || apiProvider || 'an unknown login'}`}`)
     },
 
-    // The channel proxy connected on /ws/executor.
-    connect(ws) {
-      if (proxy) proxy.close(4000, 'replaced by a new channel connection')
-      proxy = ws
-      ws.on('message', raw => onProxyMessage(ws, raw))
-      ws.on('close', () => {
-        if (proxy !== ws) return
-        proxy = null
-        if (status !== 'down') setStatus('starting', 'channel disconnected')
-      })
-      setStatus('ready')
-      while (queue.length) send({ type: 'prompt', text: queue.shift() })
+    async prompt(text) {
+      busy = true
+      inbox.push(text)
     },
 
-    hook,
-
-    // Steering needs nothing of its own: Claude Code takes a message that arrives during a turn into
-    // that turn, so a correction is sent like any prompt.
-    prompt(text) {
-      if (!send({ type: 'prompt', text })) queue.push(text)
+    async interrupt() {
+      if (!busy) return
+      const end = new Promise(resolve => ending.push(resolve))
+      await q.interrupt()
+      await end
     },
-    cancel() {
-      tmux.keys('Escape').catch(err => log('cancel failed', err.message))
-    },
-    answer: (id, allow) => approvals.answer(id, allow),
 
-    async stop() {
-      polling = false
-      clearTimeout(timer)
-      proxy?.close()
-      await tmux.kill()
-      setStatus('down', 'stopped')
+    async close() {
+      closing = true
+      if (!q) return
+      inbox.end()
+      q.close()
+      await reading
+      q = inbox = reading = null
     },
   }
 }

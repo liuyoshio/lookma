@@ -22,7 +22,7 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and grants the voice its sessions. |
 | App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
 | Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
-| Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code running interactively in tmux, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
+| Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code run headless through the Claude Agent SDK, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
 | Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings, `mint.mjs` runs in the core and mints a short-lived grant for each session, and `page.js` runs in the overlay and connects to the service. The rest of the voice (`overlay/voice/`) is the same for every provider. |
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
 | Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies and permissions. |
@@ -32,7 +32,7 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 Say “find three ramen places near the ferry and put them in a new note”:
 
 1. **You talk.** You just say it. The overlay streams your microphone to OpenAI Realtime, and the server hears when you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
-2. **The core starts a turn** and hands the text to the executor. If a turn is already running, the text goes in as a correction instead (`prompt` with `steer: true`).
+2. **The core starts a turn** and hands the text to the executor. If a turn is already running, the text goes in as a correction instead: the agent takes it into the work it is doing.
 3. **The agent works.** Anything on screen goes through the six hands tools. Anything else (files, shell commands, web searches) uses the agent's own tools; the adapter reports each step, which shows up as the capsule's status line.
 4. **Every hands call runs the pipeline** below, one call at a time.
 5. **The agent talks back** with `say`: one short sentence in your language. You hear one assistant: the voice speaks it as soon as nobody is talking, on the same session. Questions, confirmations and approval cards go to the front of the queue. Without voice, these are captions only.
@@ -68,13 +68,13 @@ The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Ea
 
 Screenshots contain only the target app's windows, its menus and popups included. The overlay and anything covering the app are left out. The long edge is at most 1280 px.
 
-Saying “stop” aborts the step in flight and everything queued, and interrupts the agent: Escape for Claude Code, `turn/interrupt` for Codex.
+Saying “stop” aborts the step in flight and everything queued, and interrupts the agent: the Agent SDK's `interrupt()` for Claude Code, `turn/interrupt` for Codex.
 
 ## Approvals
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/approvals-dark.svg">
-  <img src="images/approvals.svg" width="100%" alt="Three sources raise the same approval card: the Lookma core the first time it touches an app, a Claude Code tool permission relayed through the channel, and dialogs that only appear in Claude Code's terminal. You answer by voice, through a consent gate, or by clicking. The answer goes back the way the question came.">
+  <img src="images/approvals.svg" width="100%" alt="Three sources raise the same approval card: the Lookma core the first time it touches an app, a Claude Code tool permission, and a Codex request to go beyond its sandbox. You answer by voice, through a consent gate, or by clicking. The answer goes back the way the question came.">
 </picture>
 
 Everything that needs your OK is the same thing: one card, answered by voice or by click. Cards come from the core and from the agent:
@@ -82,19 +82,10 @@ Everything that needs your OK is the same thing: one card, answered by voice or 
 | Source | Example | How the answer gets back |
 |---|---|---|
 | Core | “Allow controlling Maps?” | The waiting pipeline step continues, or fails. |
-| Relay (Claude Code) | A Claude Code tool permission request, forwarded by the channel | Through the channel. |
-| Terminal (Claude Code) | Dialogs only the terminal shows: the development-channel warning at startup, a path outside the working folders | Keys sent to the tmux pane. |
+| Claude Code | A tool call its permission mode does not allow by itself, e.g. a command or a path outside the working folders | The answer to the Agent SDK's `canUseTool`. |
 | app-server (Codex) | A command or file change that needs more than the sandbox allows | The reply to Codex's request. |
 
-The rest of this section is about Claude Code. Codex asks through its app-server, one request per question, so there is nothing to merge: Approve answers `accept` (this once, never `acceptForSession`) and Decline answers `decline`, and Codex goes on without that step.
-
-**Reading the terminal.** While the session lives, the adapter reads the tmux pane every second. One generic parser finds a dialog, a question plus numbered options, with no per-dialog code. Only permission and trust questions become cards: a question with Yes and No options, or a known startup warning. Settings pickers such as `/model` never do.
-
-**One card per dialog.** A relayed request is also drawn in the terminal, so the two routes would see the same dialog twice. A dialog is known by its signature, its question plus its options. It counts only after it has been on screen for two polls in a row, so a relay that arrives just after it is drawn still claims it. A card closes when the pane shows no dialog or a different one, so answering in the terminal yourself works too.
-
-**What Approve picks.** Approve always means “yes, this once”. On the relay it sends allow. In the terminal it picks the option that is exactly “Yes”, else the first that starts with “Yes”, else the first option. It always skips options that grant more than this one request: anything containing “allow”, “always”, “all future”, “don't ask again”, “accept edits” or “switch to auto mode”. Decline picks a “No” option, or presses Escape. The card shows the question and its detail, never Claude Code's numbered options, so it cannot suggest that Approve might pick “always”.
-
-**Keys.** Only arrow keys move the cursor, never digits. Enter is pressed only when a fresh read of the pane shows the cursor on the right option of the same dialog. If that check fails, nothing was answered, and the dialog still on screen gets a new card.
+Each agent asks one request at a time, in a structured form, so a card maps to exactly one question and nothing is read off a screen. Approve always means “yes, this once”: Claude Code gets allow for that call, without the rule it suggests for later, and Codex gets `accept`, never `acceptForSession`. Decline answers deny or `decline`, and the agent goes on without that step. A card withdrawn by a stop answers the same as a decline. The card shows what the step would do (the command, the file, the page), never the agent's own options, so it cannot suggest that Approve might mean “always”.
 
 ## When it listens
 
@@ -140,7 +131,7 @@ The voice model hears your audio, and a separate transcriber writes it down. On 
 
    A lone “approve” or “go ahead” is also how people ask back, so it never counts. Neither does a lone “ok” or “sure”. If the transcript does not arrive within 3 s, nothing is approved.
 
-Declines go through the same checks, with an explicit no instead (“no”, “cancel”, “don’t”). A wrong no is not free either: the agent loses that step, and on Claude Code's startup card it shuts Claude Code down.
+Declines go through the same checks, with an explicit no instead (“no”, “cancel”, “don’t”). A wrong no is not free either: the agent loses a step you wanted.
 
 When a voiced answer is refused, nothing is sent. The card shows “Not a clear yes” with what was heard, and the voice asks again. The approval words are English, whatever language you speak to it in; you can always click instead. Clicking Approve or Decline always works.
 
@@ -161,17 +152,19 @@ export function create(ctx)  // ctx: { emit, tools: { server, mcp(extras) }, ask
 
 The adapter only translates. Prompts and an interrupt go down; up come `turnStart`, `turnEnd` (with the failure's reason), `step` (a non-GUI step), `task` (background work) and `down`. The agent gets `say` and the hands from the tools bridge, which it spawns from `ctx.tools.mcp()`; the host serves those calls, so the adapter never touches the screen or the outbox. A question for you is `await ctx.ask(card)`. The host owns the rest once, for every agent: the status, the order of prompts, the stop gate (from "stop" until the agent confirms, nothing of the stopped work reaches you or the screen) and one restart when the agent dies or does not stop. Field-level details are in [protocol.md](protocol.md#executor-contract).
 
-The Claude Code adapter is still on the earlier contract, and a headless one on this contract replaces it. It fills the earlier one in like this:
+How the Claude Code adapter fills it in, through the Claude Agent SDK, which runs your installed `claude`:
 
 | Contract | Claude Code |
 |---|---|
-| `start` | Writes a session folder (`~/.lookma/sessions/lookma/`: `.mcp.json`, `settings.json`, `executor.md` from `prompts/`) and starts interactive `claude` in the tmux session `lookma`, with `--dangerously-load-development-channels server:lookma`. |
-| `prompt` | A channel message from `channel.mjs`, a stdio MCP server that Claude Code spawns. It is a thin pipe to the core that also exposes `say` and the hands tools. A correction is sent the same way: Claude Code takes a message that arrives during a turn into that turn. |
-| `cancel` | Escape, sent to the tmux pane. |
-| `answer` | The relay, or keys in the terminal (see Approvals). |
-| `hook` → `step`, `task`, `turnStart`, `turnEnd` | Claude Code's http hooks. |
+| `start` | Starts one `query()` in streaming-input mode, with an empty `work/` in `~/.lookma/sessions/claude/` as its working folder, Claude Code's own system prompt plus `executor.md`, and the tools bridge as its one MCP server. Resolves once that server is connected. |
+| `prompt` | One user message into the open input stream. A correction is sent the same way: Claude Code takes a message that arrives during a turn into that turn. |
+| `interrupt` | The SDK's `interrupt()`, resolving on the stopped turn's result. |
+| `ask` | The SDK's `canUseTool` callback, which waits for the card. |
+| `step`, `task` | Claude Code's hooks, as SDK callbacks: `PreToolUse` for the steps, `SubagentStart` and `SubagentStop` for background tasks. |
+| `turnEnd`, `turnStart` | The stream's `result` message; a main-agent message while idle, when a finished background task wakes it. |
+| `down` | Claude Code exiting by itself. A restart resumes the same conversation by its session id. |
 
-The session settings allow the hands tools, and deny Claude Code's built-in computer use (the hands are ours) and `AskUserQuestion` (you could not answer it from a card; Claude asks with `say` instead). The folders you pass to `lookma` go into `permissions.additionalDirectories`, so starting asks no trust question per folder.
+The session is isolated from your own Claude Code: none of your settings, CLAUDE.md, hooks, plugins or MCP servers, only Lookma's settings and tools. Those settings allow `say` and the hands, and deny Claude Code's built-in computer use (the hands are ours) and `AskUserQuestion` (you could not answer it from a card; Claude asks with `say` instead). It uses your own login: on a Claude plan, its work counts against the plan's usage limits, and `lookma doctor` says which login it is.
 
 How the Codex adapter fills it in:
 
@@ -202,7 +195,7 @@ There are no tokens or accounts beyond that.
 | Path | What |
 |---|---|
 | `~/.lookma/apps.json` | Per-app grants, e.g. `{ "Maps": true, "Notes": false }`. Read on every step, so a hand edit takes effect at once. |
-| `~/.lookma/sessions/lookma/` | The generated Claude Code session folder, rewritten on every start. |
+| `~/.lookma/sessions/claude/` | The Claude Code session's working folder, `work/`, empty unless the agent writes there. |
 | `~/.lookma/sessions/codex/` | The Codex session folder: `home/` (Codex's home, with a link to your login) and `work/` (its working folder). |
 | `app/build/Lookma.app` | The app, built from `app/Sources/` by `app/build.sh`. |
 | `.env` | Your settings and `OPENAI_API_KEY`. Real environment variables win. |

@@ -314,7 +314,7 @@ function architecture(c) {
     text(720, 440, 'Claude Code', { size: 16, weight: 700, fill: c.ink }),
     rect(856, 425, 78, 22, { rx: 11, fill: c.wash }),
     text(895, 440.5, 'swappable', { size: 11.5, weight: 700, anchor: 'middle', fill: c.coralText }),
-    text(720, 466, 'the executor, in tmux', { size: 14, fill: c.ink2 }),
+    text(720, 466, 'the executor, headless', { size: 14, fill: c.ink2 }),
     text(720, 487, 'on your Claude plan', { size: 14, fill: c.ink2 }),
     text(720, 516, 'or any agent behind the adapter', { size: 12, fill: c.muted }),
 
@@ -370,8 +370,8 @@ function approvals(c) {
   const cx = 340, cy = 252, cw = 320
   const body = [
     src(20, 'Lookma core', 'First time in an app', '“Allow controlling Jot?”', 'The waiting step goes on, or fails.'),
-    src(350, 'Claude Code · channel', 'A tool permission', '“Run a command: …”', 'Allow or deny, through the channel.'),
-    src(680, 'Claude Code · terminal', 'A terminal-only dialog', 'The startup warning, folder access', 'Arrow keys and Enter, in tmux.'),
+    src(350, 'Claude Code', 'A tool permission', '“Run this command?”', 'Allow or deny, this call only.'),
+    src(680, 'Codex', 'Beyond its sandbox', 'A command, a file change', 'Accept or decline, this once.'),
     curve(c, `M170 184C170 222 ${cx + 60} 214 ${cx + 70} ${cy - 6}`, { both: true }),
     arrow(c, 500, 184, 500, cy - 6, { both: true }),
     curve(c, `M830 184C830 222 ${cx + cw - 60} 214 ${cx + cw - 70} ${cy - 6}`, { both: true }),
@@ -381,8 +381,8 @@ function approvals(c) {
     text(20, 311, 'Approve always means “this once”,', { size: 14, fill: c.ink2 }),
     text(20, 330, 'never “always allow”.', { size: 14, fill: c.ink2 }),
     text(980, 288, 'It chimes, so you notice.', { size: 16.5, weight: 700, fill: c.ink, anchor: 'end' }),
-    text(980, 311, 'Answering in the terminal', { size: 14, fill: c.ink2, anchor: 'end' }),
-    text(980, 330, 'yourself closes it too.', { size: 14, fill: c.ink2, anchor: 'end' }),
+    text(980, 311, 'A stop withdraws', { size: 14, fill: c.ink2, anchor: 'end' }),
+    text(980, 330, 'every open card.', { size: 14, fill: c.ink2, anchor: 'end' }),
     // the gate and the two ways to answer
     box(c, 120, 392, 390, 60, { rx: 14, fill: c.wash, stroke: c.coral, sw: 1.2 }),
     shield(148, 407),
@@ -403,7 +403,7 @@ function approvals(c) {
     arrow(c, 720, 482, 590, cy + 108),
   ].join('\n')
   return svg(c, 1000, 612, 'Where approval cards come from',
-    'Three sources raise the same approval card: the Lookma core the first time it touches an app, a Claude Code tool permission relayed through the channel, and dialogs that only appear in Claude Code\'s terminal. You answer by voice, through a consent gate that needs an explicit yes, or by clicking. The answer goes back the way the question came.',
+    'Three sources raise the same approval card: the Lookma core the first time it touches an app, a Claude Code tool permission, and a Codex request to go beyond its sandbox. You answer by voice, through a consent gate that needs an explicit yes, or by clicking. The answer goes back the way the question came.',
     body)
 }
 

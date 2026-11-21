@@ -68,7 +68,7 @@
 <text x="720" y="440" font-size="16" font-weight="700" fill="#1B1B1F">Claude Code</text>
 <rect x="856" y="425" width="78" height="22" rx="11" fill="#FDE9E0"/>
 <text x="895" y="440.5" font-size="11.5" font-weight="700" fill="#C94A24" text-anchor="middle">swappable</text>
-<text x="720" y="466" font-size="14" fill="#4F4A46">the executor, in tmux</text>
+<text x="720" y="466" font-size="14" fill="#4F4A46">the executor, headless</text>
 <text x="720" y="487" font-size="14" fill="#4F4A46">on your Claude plan</text>
 <text x="720" y="516" font-size="12" fill="#857D77">or any agent behind the adapter</text>
 <path d="M150 262L240 262" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)" marker-start="url(#ah0)"/>

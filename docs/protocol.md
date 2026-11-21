@@ -283,25 +283,26 @@ The bridge returns `see`'s screenshot as an MCP image, and an error as a tool er
 
 ### Claude Code adapter (`executors/claude/`)
 
-Not yet on the contract above: this tmux adapter is still the earlier one (with `connect`, `hook` and `approval` events), and a headless adapter on the current contract replaces it. Until then, use `--agent codex`.
-
-- **Run.** Interactive `claude` runs in a tmux session (`lookma`; `tmux attach -t lookma` to watch). Its working dir is a generated session dir holding `.mcp.json`, `settings.json` and the executor prompt (`executor.md`, copied from `prompts/executor.md`).
-  - Flags: `--model`, `--permission-mode`, `--settings`, `--append-system-prompt-file`, `--dangerously-load-development-channels server:lookma`, then `LOOKMA_CLAUDE_FLAGS` (the user's folders are in the settings, see Folders below).
-  - No `--chrome`. The settings deny built-in computer use (`mcp__computer-use`).
-- **Channel.** `channel.mjs` is the tools bridge as a Claude Code development channel. On top of the bridge:
-  - it declares `claude/channel` and `claude/channel/permission`, and marks the tools `anthropic/alwaysLoad`;
-  - core → channel: `{ type: 'prompt', text }` and `{ type: 'permissionAnswer', request_id, behavior }`;
-  - channel → core: `{ type: 'permission', request_id, tool_name, description, input_preview }`.
-- **Commands.** `prompt` goes as a channel message, with or without `steer`: Claude Code takes a message that arrives during a turn into that turn. `cancel` is tmux `send-keys Escape`.
-- **Hooks.** Claude Code's http hooks POST to `/hook`; the core passes each body to the adapter's `hook`, which turns it into `step`, `task`, `turnStart` and `turnEnd`.
-- **Approvals.** There are two routes, and the adapter emits one `approval` per dialog:
-  - **Relay:** the permission request arrives through the channel.
-  - **Terminal:** while the session lives, the adapter polls `tmux capture-pane` every second. A generic parser (question plus numbered options) finds terminal-only dialogs, e.g. the startup development-channel warning or a path outside the workdir.
-  - **Which dialogs become cards:** only permission and trust questions (a question with Yes…/No… options, or a known startup warning). Settings pickers such as /model never do.
-  - **Identity:** a dialog's signature is its folded question plus its numbered options. A card closes when the pane shows no dialog or a different signature.
-  - **Answering:** `answer(id, true)` uses the relay if the dialog came from it. Otherwise it picks "Yes", or else the first option starting with "Yes", or else the first option, always skipping anything containing allow, always, all future, don't ask again, accept edits or auto mode. `answer(id, false)` picks a "No…" option, or Escape.
-  - **Keys:** arrows only, never digits. Enter is pressed only when a re-parse shows the cursor on the target and the same signature.
-- **Folders.** The user's folders go into the session's `permissions.additionalDirectories`, not `--add-dir`, so starting asks no per-folder trust question.
+- **Run.** The Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, imported by `index.mjs` only) runs the user's installed `claude` (the first on `ctx.env`'s `PATH`, `pathToClaudeCodeExecutable`), headless, as one `query()` per session in streaming-input mode: the prompt stream stays open between turns. It needs Claude Code 2.1.330 or later, the version the SDK was built against.
+- **Isolation.**
+  - `settingSources: []`: none of the user's, project or local settings, so no CLAUDE.md, hooks or plugins. Lookma's own settings go in as flag settings (`settings`): `permissions.allow` the `lookma` server (say and the hands never ask), `permissions.deny` `mcp__computer-use`, `AskUserQuestion` and `Agent(fork)`, and `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`.
+  - `strictMcpConfig: true`, `mcpServers: { lookma: ctx.tools.mcp({ toolMeta: { 'anthropic/alwaysLoad': true }, instructions }) }`, sent over stdin (`mcpServersDelivery: 'initialize'`) so the bridge's environment is not on the command line.
+  - `cwd`: the empty `<data>/sessions/claude/work`; `additionalDirectories`: the user's folders.
+  - The environment is `ctx.env` without a parent Claude Code's session markers (`CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_AGENT_SDK_*`), so a Lookma started from inside Claude Code still uses the user's own login.
+- **Options.** `model` (`LOOKMA_CLAUDE_MODEL`), `permissionMode` (`LOOKMA_CLAUDE_PERMISSION_MODE`), `systemPrompt`: Claude Code's own preset with `ctx.instructions` appended, plus the background-task convention below. `LOOKMA_CLAUDE_FLAGS` becomes `extraArgs`.
+- **Start.** `query()`, then its `initializationResult()`, then `mcpServerStatus()` until `lookma` is `connected` (a failed server rejects the start). The log names the login in use (`account.subscriptionType`, or the API key source). After `close`, `start` passes the last session id as `resume`, so a restart goes on with the same conversation.
+- **Turns.**
+  - `prompt` → one user message into the stream. During a turn, Claude Code takes it into that turn after the running tool calls.
+  - `interrupt` → `Query.interrupt()`, resolving on the stopped turn's `result` (`error_during_execution`). Nothing runs: it resolves at once.
+  - `result` → `turnEnd`: `ok` for a `success` that is not `is_error`; `error` from the result's text or its `errors`; `summary` is the result's text.
+  - A main-agent `system/init` or `assistant` message while no turn runs → `turnStart` (a finished background task woke the agent).
+  - The stream ending by itself (Claude Code exited) → `down`.
+- **Hooks**, as SDK callbacks (`hooks.mjs`):
+  - `PreToolUse` of the main agent → `step`, titled by `core/executor/steps.mjs`; the `lookma` server's tools are skipped. An `Agent` call is the step `Start: <description>`.
+  - `SubagentStart` (with an `agent_type`; Claude Code's internal agents have none) → `task` running, titled by the `Agent` call's description; the subagent's own `PreToolUse` → `task` with an `action`.
+  - `SubagentStop` → `task` done, with its report split into `SAY:` (speech) and `SHOW:` (display) lines. A subagent's `SubagentHandback` message is its report when there is one.
+  - The convention is the adapter's: it appends its paragraph (start background subagents only for long work with nothing on screen; no `say` or hands; end with `SAY:` and `SHOW:`) to `ctx.instructions`.
+- **Approvals.** `canUseTool` → `await ctx.ask(card, signal)` (`approvals.mjs`): the card is a question per tool (`Run this command?` with the command, `Write this file?`, `Open this web page?`, …, else `Allow this step?` with the step's title), plus Claude Code's `blockedPath` and `decisionReason`. `true` → `{ behavior: 'allow', updatedInput }` for this call only (the suggested rules are never passed back); `false` or `null` → `deny`. When Claude Code cancels the request itself (an interrupt), the SDK aborts `signal` and the card goes.
 
 ### Codex adapter (`executors/codex/`)
 

@@ -88,7 +88,7 @@ While you type, it never grabs your window. It waits until you pause, or say “
 
 ## Quick start
 
-You need macOS 15+, Node.js 20+, and Claude Code with tmux or Codex CLI ([details](#requirements)).
+You need macOS 15+, Node.js 20+, and Claude Code or Codex CLI ([details](#requirements)).
 
 **1. Install**
 
@@ -117,7 +117,7 @@ Then just say “turn on dark mode”. To work with Codex instead of Claude Code
 > Voice needs an OpenAI API key: `cp .env.example .env` and set `OPENAI_API_KEY`. Without one, Lookma still works by typing (menu bar → **Type a Request…**).
 
 <details>
-<summary><b>The first start</b>: the build, three permissions and one card</summary>
+<summary><b>The first start</b>: the build, three permissions and a card per app</summary>
 
 - **The build.** The first start compiles `Lookma.app` from source into `app/build/` with `swiftc`. It rebuilds whenever its sources change, for example after you pull.
 - **Permissions.** macOS asks for three. They belong to Lookma, not to your terminal. `lookma doctor` says what is missing, and `lookma doctor --fix` opens the right pane.
@@ -129,7 +129,6 @@ Then just say “turn on dark mode”. To work with Codex instead of Claude Code
   | Microphone | your voice | on the first start with voice on |
 
   After you switch on Screen Recording, macOS may want the app reopened: press Ctrl-C and run `lookma` again.
-- **The startup card** (Claude Code only). Every start, Claude Code warns that a development channel is loaded; that is how Lookma talks to it. The warning arrives as a card: say “yes, I approve”, or click **Approve**. Decline, and Claude Code exits.
 - **One card per app.** The first time it touches an app you get “Allow controlling Notes?”. The answer is kept in `~/.lookma/apps.json`.
 - **Signing.** The build signs with your Apple Development or Developer ID certificate if you have one (click **Always Allow** if macOS asks), and ad hoc otherwise. macOS ties the Accessibility and Screen Recording grants to that signature, so with ad hoc signing you grant them again after every rebuild. An old entry can look switched on and do nothing: remove it with the minus button, then start again.
 
@@ -150,7 +149,7 @@ And one agent:
 
 | Agent | What it needs |
 |---|---|
-| **[Claude Code](https://github.com/anthropics/claude-code)** (the default) | 2.1.312 or later on your `PATH`, logged in with your claude.ai account, and **tmux** (`brew install tmux`) |
+| **[Claude Code](https://github.com/anthropics/claude-code)** (the default) | 2.1.330 or later on your `PATH`, logged in (`claude auth login`). Lookma runs it headless with your login: on a Claude plan, its work counts against the plan's usage limits. `lookma doctor` says which login it uses. |
 | **[Codex CLI](https://github.com/openai/codex)** | 0.163.0 or later on your `PATH`, logged in with your ChatGPT account (`codex login`). Choose it with `LOOKMA_EXECUTOR=codex`. |
 
 ## Using it
@@ -174,7 +173,7 @@ And one agent:
 
 **The menu bar seal** fills its ring while you talk, shows a pause sign while paused, and dims when the app has lost the core.
 
-**Watch the agent itself.** Claude Code runs in tmux: `tmux attach -t lookma` (detach with Ctrl-b d). You can answer its prompts there too; the card closes by itself. Codex logs its steps, cards and messages in the terminal that started Lookma.
+**Watch the agent itself.** Both agents log their steps, cards and messages in the terminal that started Lookma.
 
 **From a script**, post your request to the core's `/api/tell` ([protocol](docs/protocol.md#overlay--core)).
 
@@ -244,7 +243,6 @@ The agent and the voice are plug-ins (folders in `executors/` and `voices/`), an
 | `LOOKMA_CLAUDE_MODEL` | `sonnet` | The model (`--model`), e.g. `opus`. |
 | `LOOKMA_CLAUDE_PERMISSION_MODE` | `auto` | The permission mode; `default` gives more cards. |
 | `LOOKMA_CLAUDE_FLAGS` | | Extra flags for `claude`, separated by spaces. |
-| `LOOKMA_EXEC_SESSION` | `lookma` | The tmux session that runs it. |
 
 **Codex** (`LOOKMA_EXECUTOR=codex`)
 
@@ -271,8 +269,8 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 - **macOS only, main display only.**
 - **No drag-and-drop or right-click menus yet.** The hands see, click, type, press keys, scroll and open apps, URLs and files.
 - **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking, plus about 350 ms per step so you see the target first.
-- **With Claude Code, the startup card every time.** Lookma reaches Claude Code through a development channel (a Claude Code research preview that needs a claude.ai login).
-- **Experimental:** terminal-only dialogs are read from the tmux pane, so a Claude Code update that redraws them can break this (checked against 2.1.314 and 2.1.329). Voice approval understands English and Chinese; in other languages, click.
+- **Claude Code runs headless**, through the Claude Agent SDK (checked against 2.1.330). On a Claude plan this counts against the plan's usage limits, as Anthropic counts headless use today; that may change, and `lookma doctor` shows the login in use.
+- **Voice approval understands English and Chinese**; in other languages, click.
 - **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
 - **One at a time:** one port, one agent session.
 - **It hears the room.** It stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Pause when that matters.
@@ -305,13 +303,13 @@ Issues and pull requests are welcome. Keep changes small, and when you change ho
 
 ```sh
 npm run check      # syntax check
-npm test           # pipeline vs a fake app, dialog parsing, the Codex adapter vs a stand-in, voice consent, turn filtering; no models called
-npm run test:e2e   # a real Claude Code session on your plan (port 8791, tmux session lookma-test)
+npm test           # pipeline vs a fake app, both agents vs stand-ins, voice consent, turn filtering; no models called
+npm run test:e2e   # one short turn of a real Claude Code session on your plan (port 8791)
 ```
 
 The diagrams are drawn by `node docs/images/src/draw.mjs`, in a light and a dark version each.
 
-Built on [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime), the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [ws](https://github.com/websockets/ws), [zod](https://zod.dev) and [tmux](https://github.com/tmux/tmux).
+Built on [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime), the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript), [ws](https://github.com/websockets/ws) and [zod](https://zod.dev).
 
 ## License
 
