@@ -269,7 +269,7 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 
 - **macOS only, main display only.**
 - **Drag works inside one app.** The hands see, click (right-click menus included), drag, type, press keys, scroll and open apps, URLs and files; a drag from one app to another is not supported.
-- **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking, plus about 350 ms per step so you see the target first.
+- **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking. Each action waits about 350 ms so you see the target first, and about 200 ms after for the app to settle; it then returns the app's elements, so the agent needs no extra look.
 - **Claude Code runs headless**, through the Claude Agent SDK (checked against 2.1.330). On a Claude plan this counts against the plan's usage limits, as Anthropic counts headless use today; that may change, and `lookma doctor` shows the login in use.
 - **Voice approval understands English and Chinese**; in other languages, click.
 - **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
