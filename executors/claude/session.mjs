@@ -37,7 +37,7 @@ const TOOLS = {
   toolMeta: { 'anthropic/alwaysLoad': true },
   instructions:
     'The user talks to you by voice through Lookma and watches the screen; they never see your text replies. ' +
-    'Speak to them only with the say tool. Work on screen only with the see, click, type, key, scroll and open tools.',
+    'Speak to them only with the say tool. Work on screen only with the see, click, drag, type, key, scroll and open tools.',
 }
 
 /** The `claude` on env's PATH, as an absolute path: the SDK starts that one, never its own. */

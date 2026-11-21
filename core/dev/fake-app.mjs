@@ -2,15 +2,20 @@
 // A fake app for tests: connects to /ws/app, reports attention and answers the ops of
 // docs/protocol.md with plausible rects and a placeholder PNG. Nothing on the real screen moves.
 //   node core/dev/fake-app.mjs [--port 8791] [--idle 10] [--front Finder]
-// As a module: startFakeApp({ port, idle, front }) → { ops, notices, setIdle, send, front, elementIds, ready, close }
+// As a module: startFakeApp({ port, idle, front }) → { ops, notices, setIdle, send, front, elementIds, failSee, ready, close }
 //   notices: what the core sent besides requests ({ type: 'paused' }, { type: 'talk' }, { type: 'quit' })
 //   send(msg): what the menu bar and hotkey send ({ type: 'pause' | 'resume' | 'quit' })
+//   failSee(error): see throws that error from now on; null makes it work again
 import zlib from 'node:zlib'
 import WebSocket from 'ws'
 
 const SCREEN = { w: 1440, h: 900, scale: 2 }
 const APPS = {
-  Finder: { window: { title: 'Downloads', rect: { x: 200, y: 120, w: 900, h: 560 } }, controls: [['button', 'Back'], ['textfield', 'Search'], ['row', 'report.pdf'], ['row', 'notes.txt']] },
+  Finder: {
+    window: { title: 'Downloads', rect: { x: 200, y: 120, w: 900, h: 560 } },
+    controls: [['button', 'Back'], ['textfield', 'Search'], ['row', 'report.pdf', ['selected']], ['row', 'notes.txt'], ['button', '']],
+    menu: [['menuitem', 'Open'], ['menuitem', 'Get Info'], ['menuitem', 'Move to Trash', ['disabled']]], // what a right click opens
+  },
   Slack: { window: { title: 'general', rect: { x: 80, y: 60, w: 1200, h: 800 } }, controls: [['row', '#general'], ['row', '#random'], ['textarea', 'Message #general'], ['button', 'Send']] },
   'Google Chrome': { window: { title: 'New Tab', rect: { x: 0, y: 38, w: 1440, h: 820 } }, controls: [['textfield', 'Address and search bar'], ['button', 'New Tab'], ['link', 'Gmail']] },
   Notes: { window: { title: 'Notes', rect: { x: 300, y: 150, w: 800, h: 600 } }, controls: [['button', 'New Note'], ['textarea', 'Note body']] },
@@ -48,8 +53,11 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
   let idleNow = idle
   let frontApp = front
   let nextId = 0
-  let elements = new Map() // id -> { id, role, text, rect, app } from the last see
-  let shot = null // { w, h, rect } of the last see
+  let elements = new Map() // id -> { id, role, text, states, rect, app } from the latest see
+  let shot = null // { w, h, rect, app } of the last screenshot
+  let seeError = null
+  let menuOpen = null // the app whose context menu is up
+  const scrolledTo = {} // app -> vertical scroll position, 0 to 1
 
   function resolve(args) {
     if (args.element != null) {
@@ -58,9 +66,9 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
       return { app: e.app, rect: e.rect, point: center(e.rect), frontmost: e.app === frontApp, pressable: e.role === 'button' || e.role === 'row' || e.role === 'link' }
     }
     if (args.point) {
-      if (!shot) throw new Error('No screenshot yet; call see first.')
+      if (!shot) throw new Error('No screenshot yet; call see with screenshot: true.')
       const p = [Math.round(shot.rect.x + (args.point[0] * shot.rect.w) / shot.w), Math.round(shot.rect.y + (args.point[1] * shot.rect.h) / shot.h)]
-      return { app: frontApp, rect: { x: p[0] - 10, y: p[1] - 10, w: 20, h: 20 }, point: p, frontmost: true, pressable: false }
+      return { app: shot.app, rect: { x: p[0] - 10, y: p[1] - 10, w: 20, h: 20 }, point: p, frontmost: shot.app === frontApp, pressable: false }
     }
     if (args.dock) {
       if (!APPS[args.dock]) throw new Error(`${args.dock} is not in the Dock.`)
@@ -73,23 +81,28 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
     return { app, rect, point: center(rect), frontmost: app === frontApp, pressable: false }
   }
 
+  // A screenshot only when asked for, and the last one of this app whenever there is one. An element
+  // listed in the previous see (same app, role and text) keeps its id, as the app's AX match does.
+  // Every control here is actionable, so one with no text counts as unlabeled. An open menu's items
+  // come first.
   function see(args) {
+    if (seeError) throw new Error(seeError)
     const app = args.app || frontApp
     const { window, controls } = APPS[app]
+    const menu = menuOpen === app ? APPS[app].menu : []
     const r = window.rect
+    const before = [...elements.values()]
     elements = new Map()
-    controls.forEach(([role, text], i) => {
-      const id = `e${++nextId}`
-      elements.set(id, { id, role, text, rect: { x: r.x + 20, y: r.y + 40 + i * 40, w: 200, h: 28 }, app })
+    ;[...menu, ...controls].forEach(([role, text, states = []], i) => {
+      const id = before.find(e => e.app === app && e.role === role && e.text === text)?.id ?? `e${++nextId}`
+      elements.set(id, { id, role, text, states, rect: { x: r.x + 20, y: r.y + 40 + i * 40, w: 200, h: 28 }, app })
     })
-    shot = { w: 640, h: 400, rect: r }
-    return {
-      image: IMAGE,
-      shot,
-      app,
-      window,
-      elements: [...elements.values()].map(({ id, role, text, rect }) => ({ id, role, text, rect })),
-    }
+    const list = [...elements.values()].map(({ id, role, text, states, rect }) => ({ id, role, text, states, rect }))
+    const res = { app, frontmost: frontApp, window, elements: list, menu: menu.length, cut: null, unlabeled: list.filter(e => !e.text).length }
+    if (args.screenshot) shot = { w: 640, h: 400, rect: r, app }
+    if (shot?.app !== app) return res
+    const held = { ...res, shot: { w: shot.w, h: shot.h, rect: shot.rect } }
+    return args.screenshot ? { ...held, image: IMAGE } : held
   }
 
   const handlers = {
@@ -99,18 +112,41 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
       frontApp = a.app
       return {}
     },
+    // Any act but a right click closes an open menu. A right click opens one where the app has one.
     press: a => {
       resolve({ element: a.element })
+      menuOpen = null
       return {}
     },
     click: a => {
+      if (a.button === 'right') {
+        menuOpen = APPS[frontApp].menu ? frontApp : null
+        return { menu: !!menuOpen }
+      }
+      menuOpen = null
       const dock = Object.keys(APPS).find(name => inside(a.point, dockRect(name)))
       if (dock) frontApp = dock
       return {}
     },
+    drag: () => {
+      menuOpen = null
+      return {}
+    },
     type: () => ({}),
-    key: () => ({}),
-    scroll: () => ({}),
+    key: () => {
+      menuOpen = null
+      return {}
+    },
+    // Up and down read a scroll bar that moves a quarter per page; left and right have none.
+    scroll: a => {
+      const vertical = a.direction === 'up' || a.direction === 'down'
+      const pixels = Math.round(APPS[frontApp].window.rect[vertical ? 'h' : 'w'] * 0.9 * a.pages)
+      if (!vertical) return { pixels, position: null, moved: null }
+      const was = scrolledTo[frontApp] ?? 0
+      const now = Math.min(1, Math.max(0, was + (a.direction === 'down' ? 0.25 : -0.25) * a.pages))
+      scrolledTo[frontApp] = now
+      return { pixels, position: now, moved: now !== was }
+    },
     open: a => {
       frontApp = a.url ? 'Google Chrome' : 'Finder'
       return { app: frontApp }
@@ -172,6 +208,9 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
       return frontApp
     },
     elementIds: () => [...elements.keys()],
+    failSee(error) {
+      seeError = error
+    },
     close() {
       closed = true
       clearInterval(timer)

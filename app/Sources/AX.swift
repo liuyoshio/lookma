@@ -1,6 +1,6 @@
 // Accessibility helpers: attributes, apps by name (running, installed or in the Dock) and their
-// windows, the app with keyboard focus, and the extra attributes web-based apps need before they
-// expose their tree (set only on apps the hands target).
+// windows and open menus, the app with keyboard focus, and the extra attributes web-based apps need
+// before they expose their tree (set only on apps the hands target).
 import AppKit
 import ApplicationServices
 
@@ -48,6 +48,40 @@ func axActions(_ e: AXUIElement) -> [String] {
 func axPid(_ e: AXUIElement) -> pid_t? {
     var pid: pid_t = 0
     return AXUIElementGetPid(e, &pid) == .success ? pid : nil
+}
+
+/// Roles whose frame is an area that scrolls: see clips its list by them, scroll measures a page by them.
+let scrollRoles: Set<String> = ["AXScrollArea", "AXWebArea"]
+
+/// The element itself or its nearest ancestor with one of `roles`. Bounded, since another app's
+/// tree is not trusted to end.
+func axAncestor(_ e: AXUIElement, _ roles: Set<String>) -> AXUIElement? {
+    var cur: AXUIElement? = e
+    for _ in 0..<64 {
+        guard let c = cur else { return nil }
+        if let r = axString(c, "AXRole"), roles.contains(r) { return c }
+        cur = axElement(axGet(c, "AXParent"))
+    }
+    return nil
+}
+
+/// The app's open menus, front first: a context menu, a pop-up button's list, a menu-bar menu and
+/// its submenus. Each is a window of the app above the normal layer, found in the window list and
+/// hit-tested at its centre for the AXMenu it shows, because where an open menu hangs in the AX tree
+/// differs by kind of menu. Other raised windows (panels, tooltips) have no AXMenu there and are
+/// left out. One lookup for both callers: the right click's wait and see.
+func openMenus(_ pid: pid_t) -> [AXUIElement] {
+    guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+    let appEl = AXUIElementCreateApplication(pid)
+    var menus: [AXUIElement] = []
+    for w in info where (w[kCGWindowOwnerPID as String] as? pid_t) == pid && ((w[kCGWindowLayer as String] as? Int) ?? 0) > 0 {
+        guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b) else { continue }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(appEl, Float(r.midX), Float(r.midY), &hit) == .success, let hit,
+              let menu = axAncestor(hit, ["AXMenu"]), !menus.contains(where: { CFEqual($0, menu) }) else { continue }
+        menus.append(menu)
+    }
+    return menus
 }
 
 // MARK: - apps
@@ -119,11 +153,24 @@ func dockItem(named name: String) -> AXUIElement? {
     return (items.first { $0.1 == n } ?? items.first { !$0.1.isEmpty && $0.1.contains(n) })?.0
 }
 
+/// The app bundle a Dock icon stands for.
+func dockItemURL(_ item: AXUIElement) -> URL? {
+    guard let v = axGet(item, "AXURL") else { return nil }
+    return (v as? URL) ?? URL(string: "\(v)")
+}
+
 /// The running app a Dock icon stands for, if it is running.
 func dockItemApp(_ item: AXUIElement) -> NSRunningApplication? {
-    guard let v = axGet(item, "AXURL") else { return nil }
-    guard let url = (v as? URL) ?? URL(string: "\(v)"), let id = Bundle(url: url)?.bundleIdentifier else { return nil }
+    guard let id = dockItemURL(item).flatMap(Bundle.init(url:))?.bundleIdentifier else { return nil }
     return NSRunningApplication.runningApplications(withBundleIdentifier: id).first
+}
+
+/// The name an app's localizedName will have once it runs, read from its bundle: the display name,
+/// else the bundle name, else the file's name (the order the running apps on a Mac were checked to follow).
+func bundleAppName(_ url: URL) -> String? {
+    guard let b = Bundle(url: url) else { return nil }
+    let key = { (k: String) in (b.localizedInfoDictionary?[k] ?? b.infoDictionary?[k]) as? String }
+    return key("CFBundleDisplayName") ?? key("CFBundleName") ?? FileManager.default.displayName(atPath: url.path)
 }
 
 // MARK: - attributes for web-based apps
@@ -140,7 +187,7 @@ private func frameworks(_ app: NSRunningApplication) -> [String] {
 }
 
 /// Sets the attributes on first contact. Returns true when the app builds its tree lazily and was
-/// just switched on, so the caller should give it a moment (measured: 0.6 to 2.6 s).
+/// just switched on, so the caller should wait for webTreeBuilt (measured: 0.6 to 2.6 s).
 func enableAX(_ app: NSRunningApplication) -> Bool {
     let pid = app.processIdentifier
     axLock.lock()
@@ -161,6 +208,24 @@ func enableAX(_ app: NSRunningApplication) -> Bool {
     }
     turnedOn[pid] = set
     return electron || chromium
+}
+
+/// Whether a web area with content is under `root`: the sign that a Chromium or Electron app has
+/// built its tree. Breadth first and bounded, since the tree is another app's.
+func webTreeBuilt(_ root: AXUIElement) -> Bool {
+    var queue = [root]
+    var i = 0
+    while i < queue.count && i < 1000 {
+        let e = queue[i]
+        i += 1
+        let kids = (axGet(e, "AXChildren") as? [AXUIElement]) ?? []
+        if axString(e, "AXRole") == "AXWebArea" {
+            if !kids.isEmpty { return true }
+        } else {
+            queue += kids
+        }
+    }
+    return false
 }
 
 func restoreAX() {

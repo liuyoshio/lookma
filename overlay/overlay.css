@@ -46,6 +46,17 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #ring.breathe::before { animation: breathe 1s ease-in-out 2 }
 @keyframes breathe { 50% { opacity: .9 } }
 
+/* a drag's drop end: a dimmer ring and a dashed line from the start, both shown before the press */
+#drop {
+  position: absolute; left: 0; top: 0; opacity: 0; transition: opacity .3s;
+  box-shadow: 0 0 0 calc(1px * var(--s)) rgba(255, 255, 255, .5), 0 0 0 calc(2.5px * var(--s)) rgb(var(--acc) / .6);
+}
+#path {
+  position: absolute; left: 0; top: 0; height: calc(2px * var(--s)); opacity: 0; transition: opacity .3s; transform-origin: 0 50%;
+  background: repeating-linear-gradient(90deg, rgb(var(--acc) / .75) 0 calc(6px * var(--s)), transparent 0 calc(11px * var(--s)));
+}
+#drop.on, #path.on { opacity: 1 }
+
 /* label hanging off the ring */
 #flabel {
   position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: .5em; height: 2.15em;

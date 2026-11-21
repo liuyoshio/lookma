@@ -166,10 +166,12 @@ function makeContext(r) {
       changed()
     },
 
-    // One hands step, the way the core's pipeline marks it.
-    async step({ action, app, label, rect, point = null, background = false, needsFront = false, mark, hold = 0.7 }) {
+    // One hands step, the way the core's pipeline marks it. `aim` is a mark while the marks are
+    // placed and nothing has happened yet (held a second longer, so it can be shot); `mark` is one
+    // as it acts.
+    async step({ action, app, label, rect, point = null, to = null, background = false, needsFront = false, aim, mark, hold = 0.7 }) {
       guard()
-      const f = state.focus = { id: `step-${++ids}`, label, action, app, rect, point, phase: 'moving', background, at: now() }
+      const f = state.focus = { id: `step-${++ids}`, label, action, app, rect, point, to, phase: 'moving', background, at: now() }
       state.turn.status = label
       if (needsFront && state.attention.busy) {
         f.phase = 'waiting'
@@ -184,6 +186,7 @@ function makeContext(r) {
         f.at = now()
       }
       changed()
+      if (aim) { s.mark(aim); await s.sleep(1) }
       await s.sleep(0.4)
       f.phase = 'acting'; f.at = now(); changed()
       if (mark) s.mark(mark)

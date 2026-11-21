@@ -23,13 +23,23 @@ func onScreenWindow(_ pid: pid_t) -> CGRect? {
 /// frontmost well before its window shows.
 func ready(_ pid: pid_t) -> Bool { frontPid() == pid && onScreenWindow(pid) != nil }
 
+/// A screenshot, the screen rect it shows, and the seconds spent finding the app's window in the
+/// shareable content (`share`) and taking the picture (`grab`), for see's log line.
+struct Capture {
+    let image: CGImage
+    let rect: CGRect
+    let share: Double
+    let grab: Double
+}
+
 /// A screenshot of `rect` (screen points) with only the app's own windows in it: its menus and
 /// popups are in; our overlay and anything covering the app are out. The long edge is at most
 /// `maxEdge` pixels and never more than one pixel per point. Waits up to about a second for the
 /// app's window to show up in the shareable content.
-func capture(_ rect: CGRect, pid: pid_t, maxEdge: CGFloat = 1280) async throws -> (CGImage, CGRect) {
+func capture(_ rect: CGRect, pid: pid_t, maxEdge: CGFloat = 1280) async throws -> Capture {
+    let start = now()
     var content: SCShareableContent? = nil
-    let end = now() + 1.0
+    let end = start + 1.0
     repeat {
         let c = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         if c.windows.contains(where: { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.isOnScreen }) {
@@ -51,7 +61,9 @@ func capture(_ rect: CGRect, pid: pid_t, maxEdge: CGFloat = 1280) async throws -
     cfg.height = max(1, Int((r.height * scale).rounded()))
     cfg.showsCursor = false
     let filter = SCContentFilter(display: d, including: [app], exceptingWindows: [])
-    return (try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg), r)
+    let found = now()
+    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
+    return Capture(image: image, rect: r, share: found - start, grab: now() - found)
 }
 
 /// PNG without an alpha channel: about a quarter smaller, and the model has no use for alpha.

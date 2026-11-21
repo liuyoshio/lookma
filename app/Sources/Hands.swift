@@ -1,6 +1,7 @@
 // The hands: the ops of docs/protocol.md ("App ⇄ core"). The core resolves a target before every
-// step; that target is the only app the step may touch. Input that needs the front (click,
+// step; that target is the only app the step may touch. Input that needs the front (click, drag,
 // type, key, scroll) is posted only when it will land in the target. Ops run one at a time.
+// An act op returns once its effect has had time to show, since the core lists the app right after.
 import AppKit
 import ApplicationServices
 
@@ -21,6 +22,15 @@ private func point(_ v: Any?) throws -> CGPoint {
     return CGPoint(x: x, y: y)
 }
 
+/// Left unless the core asks for right.
+private func button(_ v: Any?) throws -> CGMouseButton {
+    switch v as? String {
+    case nil, "left": return .left
+    case "right": return .right
+    default: throw HandsError("click button must be \"left\" or \"right\".")
+    }
+}
+
 private func text(_ args: [String: Any], _ key: String) -> String? {
     guard let s = args[key] as? String, !s.isEmpty else { return nil }
     return s
@@ -37,14 +47,17 @@ private func isFront(_ pid: pid_t?) -> Bool { pid != nil && frontPid() == pid }
 
 func runOp(_ op: String, _ args: [String: Any]) async throws -> [String: Any] {
     switch op {
-    case "see": return try await see(text(args, "app"))
+    case "see":
+        guard let shot = args["screenshot"] as? Bool else { throw HandsError("see needs screenshot: true or false.") }
+        return try await see(text(args, "app"), screenshot: shot)
     case "resolve": return try resolve(args)
     case "front": return try await front(text(args, "app"))
-    case "press": return try press(args)
-    case "click": return try await click(point(args["point"]))
-    case "type": return try typeInTarget(args)
-    case "key": return try keyInTarget(args)
-    case "scroll": return try scroll(args)
+    case "press": return try await press(args)
+    case "click": return try await click(point(args["point"]), button: button(args["button"]))
+    case "drag": return try await drag(from: point(args["from"]), to: point(args["to"]))
+    case "type": return try await typeInTarget(args)
+    case "key": return try await keyInTarget(args)
+    case "scroll": return try await scroll(args)
     case "open": return try await open(args)
     default: throw HandsError("Unknown op \(op).")
     }
@@ -61,7 +74,11 @@ private func resolve(_ args: [String: Any]) throws -> [String: Any] {
     }
     if args["point"] != nil && !(args["point"] is NSNull) {
         let p = try point(args["point"])
-        guard let s = lastShot else { throw HandsError("No screenshot yet; call see first.") }
+        guard let s = lastShot else { throw HandsError("No screenshot yet; call see with screenshot: true.") }
+        // A point is in the picture's pixels: once the window moves, it names another place.
+        guard axFrame(s.window) == s.frame else {
+            throw HandsError("The window moved or closed since the screenshot; call see with screenshot: true for a new one.")
+        }
         let q = CGPoint(x: s.rect.minX + p.x * s.rect.width / CGFloat(s.w), y: s.rect.minY + p.y * s.rect.height / CGFloat(s.h))
         guard s.rect.insetBy(dx: -1, dy: -1).contains(q) else { throw HandsError("That point is outside the last screenshot (\(s.w)x\(s.h)).") }
         target = Target(pid: s.pid, name: s.app)
@@ -75,7 +92,11 @@ private func resolve(_ args: [String: Any]) throws -> [String: Any] {
         }
         let title = axString(item, "AXTitle") ?? name
         let running = dockItemApp(item)
-        target = Target(pid: running?.processIdentifier, name: running?.localizedName ?? title, dockTitle: title)
+        // An app that is not running yet is named as it will be once it runs (its Dock title can
+        // differ: "Visual Studio Code" runs as "Code"), so the grant, the list after the press and
+        // the next steps all name the same app.
+        let appName = running?.localizedName ?? dockItemURL(item).flatMap(bundleAppName) ?? title
+        target = Target(pid: running?.processIdentifier, name: appName, dockTitle: title)
         return ["app": target!.name, "rect": rectJSON(r), "point": center(r), "frontmost": isFront(running?.processIdentifier), "pressable": true]
     }
     let name = text(args, "app")
@@ -115,11 +136,20 @@ private func front(_ name: String?) async throws -> [String: Any] {
 
 // MARK: - acting
 
-private func press(_ args: [String: Any]) throws -> [String: Any] {
+// How long an op waits after its last event before its effect is read (by the core's list, or by
+// scroll's own position read). The same for every op, so no wait stacks on another.
+private let settleNs: UInt64 = 200_000_000
+
+private func settled() async throws -> [String: Any] {
+    try await Task.sleep(nanoseconds: settleNs)
+    return [:]
+}
+
+private func press(_ args: [String: Any]) async throws -> [String: Any] {
     let e = try element(args["element"])
     let err = AXUIElementPerformAction(e.ax, "AXPress" as CFString)
     guard err == .success else { throw HandsError("Pressing \(e.id) failed (AX error \(err.rawValue)); call see again.") }
-    return [:]
+    return try await settled()
 }
 
 /// What is under a point, as the window server routes a click (click-through windows skipped).
@@ -139,11 +169,29 @@ private func checkPointer(_ p: CGPoint, _ verb: String) throws {
     guard isFront(pid) else { throw HandsError("Did not \(verb): \(appName(frontPid())) is in front, not \(t.name).") }
 }
 
-private func click(_ p: CGPoint) async throws -> [String: Any] {
-    if let item = dockItems().first(where: { axFrame($0)?.contains(p) ?? false }) { return try await pressDockIcon(item) }
+// How long a right click waits for its menu. Menus open within a frame or two; a click where the
+// app has no context menu waits this long and reports none.
+private let menuWait = 0.5
+
+/// A left click returns when settled. A right click returns once its menu is up (`menu: true`), or
+/// after `menuWait` with `menu: false`. Only a left click on a Dock icon opens that app.
+private func click(_ p: CGPoint, button: CGMouseButton) async throws -> [String: Any] {
+    if button == .left, let item = dockItems().first(where: { axFrame($0)?.contains(p) ?? false }) { return try await pressDockIcon(item) }
     try checkPointer(p, "click")
-    mouseClick(p)
-    return [:]
+    mouseClick(p, button: button)
+    guard button == .right else { return try await settled() }
+    let pid = target!.pid!
+    return ["menu": await until(menuWait, { !openMenus(pid).isEmpty })]
+}
+
+/// A left-button drag inside the target app: both ends must be on its window, as for a click, and
+/// apart. Returns when settled after the drop.
+private func drag(from: CGPoint, to: CGPoint) async throws -> [String: Any] {
+    guard from != to else { throw HandsError("Did not drag: it starts and ends at the same point.") }
+    try checkPointer(from, "drag")
+    try checkPointer(to, "drag")
+    mouseDrag(from: from, to: to)
+    return try await settled()
 }
 
 /// Opening an app is pressing its Dock icon. Done when the app is in front with a window on screen.
@@ -166,25 +214,57 @@ private func checkKeyboard(_ verb: String) throws {
     guard f == pid else { throw HandsError("Did not \(verb): \(appName(f)) has keyboard focus, not \(t.name).") }
 }
 
-private func typeInTarget(_ args: [String: Any]) throws -> [String: Any] {
+private func typeInTarget(_ args: [String: Any]) async throws -> [String: Any] {
     guard let s = args["text"] as? String else { throw HandsError("type needs text.") }
     try checkKeyboard("type")
     typeText(s)
-    return [:]
+    return try await settled()
 }
 
-private func keyInTarget(_ args: [String: Any]) throws -> [String: Any] {
+private func keyInTarget(_ args: [String: Any]) async throws -> [String: Any] {
     guard let combo = text(args, "combo") else { throw HandsError("key needs a combo, e.g. \"cmd+t\".") }
     try checkKeyboard("press \(combo)")
     try pressKey(combo)
-    return [:]
+    return try await settled()
 }
 
-private func scroll(_ args: [String: Any]) throws -> [String: Any] {
+// The wheel's signs per direction: positive scrolls toward the top (dy) or the left (dx).
+private let wheel: [String: (dx: Int, dy: Int)] = ["up": (0, 1), "down": (0, -1), "left": (1, 0), "right": (-1, 0)]
+
+/// One scroll in pixels: `pages` of the visible length, less a tenth so the last line stays in view.
+private func pagePixels(_ visible: CGFloat, _ pages: Double) -> Int { Int((visible * 0.9 * pages).rounded()) }
+
+private func barValue(_ bar: AXUIElement) -> Double? { (axGet(bar, "AXValue") as? NSNumber)?.doubleValue }
+
+/// Scrolls `pages` of what is visible at the point: the nearest scroll area or web area there, cut
+/// to the window, else the window. Done when the scroll bar has been read again after settling.
+/// The bar belongs to the nearest scroll area, which is the web area's parent in a WebKit view;
+/// `position` and `moved` are null when there is none to read (typical for Chromium content).
+private func scroll(_ args: [String: Any]) async throws -> [String: Any] {
     let p = try point(args["point"])
+    guard let dir = args["direction"] as? String, let sign = wheel[dir] else { throw HandsError("scroll needs a direction: up, down, left or right.") }
+    guard let pages = num(args["pages"]), pages > 0 else { throw HandsError("scroll needs pages above 0.") }
     try checkPointer(p, "scroll")
-    try scrollWheel(at: p, direction: (args["direction"] as? String ?? "").lowercased(), amount: (args["amount"] as? NSNumber)?.intValue ?? 3)
-    return [:]
+    let t = target!
+    let appEl = AXUIElementCreateApplication(t.pid!)
+    var hit: AXUIElement?
+    let area = AXUIElementCopyElementAtPosition(appEl, Float(p.x), Float(p.y), &hit) == .success
+        ? hit.flatMap { axAncestor($0, scrollRoles) } : nil
+    let win = frontWindow(appEl).flatMap(axFrame)
+    var visible = win
+    if let f = area.flatMap(axFrame) { visible = win.map { f.intersection($0) } ?? f }
+    guard let v = visible, !v.isEmpty else { throw HandsError("Did not scroll: found no visible area of \(t.name) at that point.") }
+
+    let vertical = sign.dy != 0
+    let px = pagePixels(vertical ? v.height : v.width, Double(pages))
+    let bar = area.flatMap { axAncestor($0, ["AXScrollArea"]) }
+        .flatMap { axElement(axGet($0, vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar")) }
+    let before = bar.flatMap(barValue)
+    scrollWheel(at: p, dx: sign.dx * px, dy: sign.dy * px)
+    try await Task.sleep(nanoseconds: settleNs)
+    let after = bar.flatMap(barValue)
+    guard let before, let after else { return ["pixels": px, "position": NSNull(), "moved": NSNull()] }
+    return ["pixels": px, "position": after, "moved": abs(after - before) > 0.0005]
 }
 
 /// A URL in its app, or a file, folder or app by path. Done when that app is in front with a window.

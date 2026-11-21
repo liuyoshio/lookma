@@ -68,6 +68,7 @@ export const FINDER = {
     Downloads: at('Finder', 8, TITLE_H + 138, 154, 24),
   },
   list: at('Finder', 170, TITLE_H + 24, F.w - 170, F.h - TITLE_H - 24),
+  file: i => at('Finder', 180, TITLE_H + 28 + 24 * i, F.w - 190, 24), // row i of CONTENT.finderFiles
 }
 
 export const NOTES = { body: at('Notes', 0, TITLE_H, WINDOWS.Notes.w, WINDOWS.Notes.h - TITLE_H) }

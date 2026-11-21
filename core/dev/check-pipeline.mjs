@@ -2,9 +2,11 @@
 // Checks the core against the fake app and a stub executor adapter, with this script as its tools
 // bridge on /ws/executor: server rules, snapshot coalescing, routing (with the outbox's say and
 // report entries, and the executor's cards), the overlay's requests and their acks, unknown
-// messages, the hands pipeline (grant, busy vs idle,
-// waiting plus go ahead, stale element, bad args, scroll, open, stop, one step at a time), pause
-// and resume, and quit.
+// messages, the hands pipeline (grant, see with and without a screenshot, busy vs idle, the mark
+// wait only before an act, the list after every act and a failed list after a done act, ids kept
+// across lists, two queued clicks from one list, a right click and its menu, a drag and its two
+// ends, waiting plus go ahead, stale element, bad args, scroll, open, stop, one step at a time),
+// pause and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
 import fs from 'node:fs'
 import os from 'node:os'
@@ -203,14 +205,17 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   check('first touch of an app raises a core card', card?.title === 'Allow controlling Finder?', card?.title)
   tellOverlay({ type: 'answer', cardId: card?.id, allow: true, via: 'click' })
   const r = await p
-  check('grant yes: see returns image and element text', r.ok && r.v.image?.length > 100 && /App: Finder/.test(r.v.text) && /e\d+ button "Back"/.test(r.v.text))
+  check('grant yes: see returns the element text, states and facts, and no image unless asked', r.ok && !r.v.image && /App: Finder/.test(r.v.text) && /No screenshot/.test(r.v.text) && /e\d+ button "Back"\n/.test(r.v.text) && /e\d+ row "report.pdf" \(selected\)/.test(r.v.text) && /1 element has no label/.test(r.v.text), r.v?.text || r.e?.message)
   check('grant yes is saved in apps.json', JSON.parse(fs.readFileSync(config.appsFile, 'utf8')).Finder === true)
+  const n = app.ops.length
+  const s = await settle(hands('see', { label: 'Look closer', screenshot: true }))
+  check('see with screenshot: true asks the app for one and returns the image', s.ok && app.ops.slice(n).find(o => o.op === 'see')?.args.screenshot === true && s.v.image?.length > 100 && /Screenshot: 640x400 px/.test(s.v.text), s.v?.text || s.e?.message)
 }
 
 {
   // Grant: no.
   const p = settle(hands('see', { label: 'Look at Slack', app: 'Slack' }))
-  const card = await until(() => last().cards.find(c => c.source === 'core'))
+  const card = await until(() => last().cards.find(c => c.title === 'Allow controlling Slack?')) // see is quick: the last snapshot may still show Finder's
   tellOverlay({ type: 'answer', cardId: card?.id, allow: false, via: 'voice' })
   const r = await p
   check('grant no: the step fails with a readable error', !r.ok && /did not allow controlling Slack/.test(r.e.message), r.e?.message)
@@ -231,11 +236,14 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const resolveAt = ops.find(o => o.op === 'resolve')?.at
   const seeAt = ops.find(o => o.op === 'see')?.at
   check('idle: see of a background app brings it forward', r.ok && JSON.stringify(opsSince(n).slice(0, 3)) === '["resolve","front","see"]', opsSince(n).join(','))
-  check('idle: ~350 ms between resolve and act', seeAt - resolveAt >= 340, `${seeAt - resolveAt} ms`)
+  check('idle: see has no mark wait: it only looks', seeAt - resolveAt < 340, `${seeAt - resolveAt} ms`)
   check('idle: focus is done and not background', !!(await until(() => last().focus?.phase === 'done' && last().focus.background === false && last().focus.app === 'Notes')))
   const id = app.elementIds().find(Boolean)
+  const m = app.ops.length
   const c = await settle(hands('click', { label: 'Press New Note', element: id }))
-  check('click on a pressable element uses AX press', c.ok && app.ops.at(-2)?.op === 'press' && /Frontmost: Notes/.test(c.v.text), c.v?.text || c.e?.message)
+  const at = op => app.ops.slice(m).find(o => o.op === op)?.at
+  check('click on a pressable element uses AX press, then lists the app', c.ok && JSON.stringify(opsSince(m)) === '["resolve","press","see"]' && /^Clicked e\d+ in Notes\.\nApp: Notes — window "Notes"\. Frontmost: Notes\./.test(c.v.text) && c.v.text.includes(`${id} button "New Note"`), c.v?.text || c.e?.message)
+  check('idle: ~350 ms between resolve and an act, and no wait before the list', at('press') - at('resolve') >= 340 && at('see') - at('press') < 100, `${at('press') - at('resolve')} ms, ${at('see') - at('press')} ms`)
 }
 
 {
@@ -244,7 +252,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   await until(() => last().attention.busy)
   const n = app.ops.length
   const r = await settle(hands('see', { label: 'Look at Finder', app: 'Finder' }))
-  check('busy: see proceeds in the background without front', r.ok && !opsSince(n).includes('front') && last().focus.background === true, opsSince(n).join(','))
+  check('busy: see proceeds in the background without front', r.ok && !opsSince(n).includes('front') && !!(await until(() => last().focus.app === 'Finder' && last().focus.background === true)), opsSince(n).join(','))
 
   const m = app.ops.length
   const p = settle(hands('type', { label: 'Type the title', text: 'hello' }))
@@ -271,14 +279,81 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 }
 
 {
-  // Stale element.
+  // Ids last while their element is listed; an id of an element no longer listed is stale.
   app.setIdle(10)
   await until(() => !last().attention.busy)
   await hands('see', { label: 'Look', app: 'Finder' })
   const old = app.elementIds()[0]
-  await hands('see', { label: 'Look again', app: 'Finder' })
+  const again = await hands('see', { label: 'Look again', app: 'Finder' })
+  check('a list of an unchanged window keeps the ids', again.text.includes(`${old} button "Back"`), again.text)
+  await hands('see', { label: 'Look at Notes', app: 'Notes' })
+  await hands('see', { label: 'Back to Finder', app: 'Finder' })
   const r = await settle(hands('click', { label: 'Press Back', element: old }))
   check('stale element: a readable error that says to call see again', !r.ok && /call see again/.test(r.e.message), r.e?.message)
+}
+
+{
+  // Observe after an act: two clicks sent from one list both land, each followed by its list.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const [back, , row] = app.elementIds() // a button and a row, both pressable
+  const n = app.ops.length
+  const [a, b] = await Promise.all([settle(hands('click', { label: 'Back', element: back })), settle(hands('click', { label: 'Row', element: row }))])
+  const seq = opsSince(n).join(',')
+  check('two clicks queued from one list both act, with a list after each', a.ok && b.ok && seq === 'resolve,press,see,resolve,press,see' && b.v.text.startsWith(`Clicked ${row} in Finder.`), seq + (a.e?.message || b.e?.message || ''))
+
+  // screenshot: true on an acting tool reaches the list; without it, the list says the screenshot is older.
+  const m = app.ops.length
+  const shot = await settle(hands('click', { label: 'Back', element: back, screenshot: true }))
+  check('screenshot: true on an action returns the list with the image', shot.ok && app.ops.slice(m).find(o => o.op === 'see')?.args.screenshot === true && shot.v.image?.length > 100 && /Screenshot: 640x400 px/.test(shot.v.text), shot.v?.text || shot.e?.message)
+  const plain = await settle(hands('key', { label: 'Escape', combo: 'escape' }))
+  check('an action without screenshot: no image, and the old screenshot is called older', plain.ok && !plain.v.image && /^Pressed escape in Finder\.\n/.test(plain.v.text) && /The last screenshot is older than this list/.test(plain.v.text), plain.v?.text || plain.e?.message)
+
+  // A list that fails after a done act: the action is reported done, never as failed.
+  app.failSee('Finder has no open window.')
+  const done = await settle(hands('click', { label: 'Back', element: back }))
+  check('a failed list after an act: the action line plus "Could not list", not an error', done.ok && done.v.text === `Clicked ${back} in Finder.\nCould not list Finder: Finder has no open window.` && !!(await until(() => last().focus?.phase === 'done' && last().focus.label === 'Back')), done.v?.text || done.e?.message)
+  const looked = await settle(hands('see', { label: 'Look', app: 'Finder' }))
+  check('a failed see is a failed step', !looked.ok && /no open window/.test(looked.e.message), looked.v?.text)
+  app.failSee(null)
+}
+
+{
+  // Right click: always a real click in front, never an AX press; the menu it opened leads the list.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const row = app.elementIds()[2] // pressable
+  const n = app.ops.length
+  const r = await settle(hands('click', { label: 'Menu of the row', element: row, button: 'right' }))
+  const click = app.ops.slice(n).find(o => o.op === 'click')
+  check('right click on a pressable element: a real right click, never press', r.ok && !opsSince(n).includes('press') && click?.args.button === 'right' && Array.isArray(click.args.point) && opsSince(n).at(-1) === 'see', opsSince(n).join(','))
+  check('right click: the menu items are listed first', r.ok && r.v.text.startsWith(`Right-clicked ${row} in Finder.\n`) && /\nMenu open:\ne\d+ menuitem "Open"\ne\d+ menuitem "Get Info"\ne\d+ menuitem "Move to Trash" \(disabled\)\nWindow:\ne\d+ button "Back"/.test(r.v.text), r.v?.text || r.e?.message)
+  const esc = await hands('key', { label: 'Close the menu', combo: 'escape' })
+  check('a closed menu is no longer listed', !/Menu open|menuitem/.test(esc.text), esc.text)
+  await hands('see', { label: 'Look', app: 'Notes' })
+  const none = await settle(hands('click', { label: 'Menu', element: app.elementIds()[0], button: 'right' }))
+  check('right click where no menu opens: says so', none.ok && /^Right-clicked e\d+ in Notes; no menu opened\.\n/.test(none.v.text), none.v?.text || none.e?.message)
+}
+
+{
+  // Drag: both ends resolved in one app and both marked before the act; then a drag between their
+  // points and the list.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const ids = app.elementIds()
+  const n = app.ops.length
+  const s0 = states.length
+  const r = await settle(hands('drag', { label: 'Drag the file', from: { element: ids[2] }, to: { element: ids[0] } }))
+  const ops = app.ops.slice(n)
+  const drag = ops.find(o => o.op === 'drag')
+  const resolved = ops.filter(o => o.op === 'resolve').map(o => o.args.element)
+  check('drag: both ends resolved, then one drag between their points, then the list', r.ok && opsSince(n).join() === 'resolve,resolve,drag,see' && JSON.stringify(resolved) === JSON.stringify([ids[2], ids[0]]) && Array.isArray(drag.args.from) && Array.isArray(drag.args.to) && r.v.text.startsWith(`Dragged ${ids[2]} to ${ids[0]} in Finder.\nApp: Finder`), opsSince(n).join() + (r.v?.text || r.e?.message))
+  const marked = states.slice(s0).find(st => st.focus?.action === 'drag' && st.focus.phase === 'moving')
+  check('drag: the drop end is in focus while the step is still moving, and ~350 ms before the act', JSON.stringify(marked?.focus.to?.point) === JSON.stringify(drag?.args.to) && JSON.stringify(marked.focus.point) === JSON.stringify(drag.args.from) && drag.at - ops.findLast(o => o.op === 'resolve').at >= 340, JSON.stringify(marked?.focus))
+
+  // The two ends in two apps: refused before anything is marked or done.
+  await hands('see', { label: 'Look', app: 'Finder', screenshot: true })
+  await hands('see', { label: 'Look at Notes', app: 'Notes' })
+  const m = app.ops.length
+  const two = await settle(hands('drag', { label: 'Drag', from: { element: app.elementIds()[0] }, to: { point: [100, 50] } }))
+  check('drag across two apps: refused, nothing acted', !two.ok && /A drag stays inside one app: it starts in Notes but ends in Finder/.test(two.e.message) && opsSince(m).join() === 'resolve,resolve', two.e?.message || opsSince(m).join())
 }
 
 {
@@ -302,11 +377,20 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const n = app.ops.length
   const bad = [
     ['click', {}, /click needs an element id or a point/],
+    ['click', { element: 'e1', button: 'middle' }, /click button must be "left" or "right"/],
     ['scroll', { direction: 'sideways' }, /scroll needs a direction/],
+    ['scroll', { direction: 'down', pages: 0 }, /scroll pages must be a number above 0 and at most 10/],
+    ['scroll', { direction: 'down', pages: 11 }, /scroll pages must be/],
+    ['scroll', { direction: 'down', pages: '2' }, /scroll pages must be/],
+    ['see', { screenshot: 'yes' }, /screenshot must be true or false/],
+    ['click', { element: 'e1', screenshot: 1 }, /screenshot must be true or false/],
     ['type', {}, /type needs text/],
     ['key', {}, /key needs a combo/],
     ['open', {}, /open needs an app, a url or a path/],
-    ['drag', {}, /Unknown hands tool: drag/],
+    ['drag', {}, /drag needs from and to, each \{ element \} or \{ point \}/],
+    ['drag', { from: { element: 'e1' } }, /drag needs from and to/],
+    ['drag', { from: 'e1', to: { point: [1, 2] } }, /drag needs from and to/],
+    ['drag', { from: { element: 'e1' }, to: {} }, /drag needs from and to/],
   ]
   const wrong = []
   for (const [tool, args, msg] of bad) {
@@ -318,25 +402,32 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 
 {
   // Scroll: at an element, at a point, or in the app of the last step.
-  await hands('see', { label: 'Look', app: 'Finder' })
+  await hands('see', { label: 'Look', app: 'Finder', screenshot: true })
   const scrolled = async args => {
     const n = app.ops.length
     const r = await settle(hands('scroll', { label: 'Scroll', ...args }))
     return { r, resolve: app.ops.slice(n).find(o => o.op === 'resolve')?.args, scroll: app.ops.slice(n).find(o => o.op === 'scroll')?.args }
   }
   const el = await scrolled({ element: app.elementIds()[0], direction: 'down' })
-  check('scroll at an element: at its point, 3 steps by default', el.r.ok && el.resolve?.element === app.elementIds()[0] && el.scroll?.amount === 3 && el.scroll.direction === 'down' && Array.isArray(el.scroll.point) && /Scrolled down in Finder/.test(el.r.v.text), el.r.v?.text || el.r.e?.message)
-  const pt = await scrolled({ point: [100, 50], direction: 'up', amount: 5 })
-  check('scroll at a point of the screenshot', pt.r.ok && JSON.stringify(pt.resolve?.point) === '[100,50]' && pt.scroll?.amount === 5, pt.r.v?.text || pt.r.e?.message)
+  check('scroll at an element: at its point, 1 page by default, where it is now', el.r.ok && el.resolve?.element === app.elementIds()[0] && el.scroll?.pages === 1 && el.scroll.direction === 'down' && Array.isArray(el.scroll.point) && /Scrolled down 1 page \(504 px\) in Finder, now at 25%/.test(el.r.v.text), el.r.v?.text || el.r.e?.message)
+  const pt = await scrolled({ point: [100, 50], direction: 'up', pages: 0.25 })
+  check('scroll at a point of the screenshot, a fraction of a page', pt.r.ok && JSON.stringify(pt.resolve?.point) === '[100,50]' && pt.scroll?.pages === 0.25 && /Scrolled up 0.25 pages \(126 px\) in Finder, now at 19%/.test(pt.r.v.text), pt.r.v?.text || pt.r.e?.message)
+  await scrolled({ direction: 'up', pages: 10 })
+  const top = await scrolled({ direction: 'up' })
+  check('scroll that cannot move: says so', top.r.ok && /Did not move: already at the top in Finder/.test(top.r.v.text), top.r.v?.text || top.r.e?.message)
   const cur = await scrolled({ direction: 'left' })
-  check('scroll with no target: in the app of the last step', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left', JSON.stringify(cur.resolve))
+  check('scroll with no target: in the app of the last step; no scroll bar, just the pixels', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left' && /^Scrolled left 1 page \(810 px\) in Finder\.\nApp: Finder/.test(cur.r.v.text), cur.r.v?.text || JSON.stringify(cur.resolve))
 }
 
 {
-  // Open a url or a path: nothing to resolve; the system opens it in its app.
+  // Open a url or a path: nothing to resolve; the system opens it in its app, which is not listed
+  // (nor granted) by this step.
+  fs.writeFileSync(config.appsFile, JSON.stringify({ Finder: true, Notes: true }))
   const n = app.ops.length
+  const cards = states.length
   const u = await settle(hands('open', { label: 'Open the site', url: 'https://example.com' }))
-  check('open url: no resolve, the system opens it', u.ok && app.ops[n]?.op === 'open' && app.ops[n].args.url === 'https://example.com' && /Opened https:\/\/example.com in Google Chrome/.test(u.v.text), u.v?.text || u.e?.message)
+  check('open url: no resolve, the system opens it', u.ok && app.ops[n]?.op === 'open' && app.ops[n].args.url === 'https://example.com' && u.v.text === 'Opened https://example.com in Google Chrome. Call see to list it.', u.v?.text || u.e?.message)
+  check('open url: no list and no grant card for the app it opened in', !opsSince(n).includes('see') && !states.slice(cards).some(st => st.cards.length), opsSince(n).join(','))
   const m = app.ops.length
   const p = await settle(hands('open', { label: 'Open the folder', path: '/tmp' }))
   check('open path: the system opens it', p.ok && app.ops[m]?.op === 'open' && app.ops[m].args.path === '/tmp' && /Opened \/tmp in Finder/.test(p.v.text), p.v?.text || p.e?.message)

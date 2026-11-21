@@ -13,7 +13,7 @@ Your adapter is a driver for one agent session. It only translates: prompts and 
 
 - **The core** owns the user's turn, the cards, the outbox and the screen.
 - **The executor host** (`core/executor/host.mjs`) is the only code that loads your adapter. It owns readiness, the order of prompts, the stop gate and one restart, the same way for every agent.
-- **The tools bridge** (`core/executor/bridge.mjs`) is a stdio MCP server your agent spawns. It gives the agent `say` and the six hands tools, and the host serves every call. Your adapter never touches the screen or the voice.
+- **The tools bridge** (`core/executor/bridge.mjs`) is a stdio MCP server your agent spawns. It gives the agent `say` and the seven hands tools, and the host serves every call. Your adapter never touches the screen or the voice.
 
 So your adapter never sees a socket, a card id, a port or another plug-in's secret.
 

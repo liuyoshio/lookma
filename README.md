@@ -196,7 +196,7 @@ And one agent:
   <img src="docs/images/architecture.svg" width="100%" alt="You talk to the overlay in Lookma.app, which streams your microphone to OpenAI Realtime while it listens. The overlay passes your words to the core on 127.0.0.1. The core prompts Claude Code, the swappable executor, which calls back with hands steps. The core runs each step through the app's hands in your real apps.">
 </picture>
 
-The voice does no work: it passes your exact words to the core, which hands them to the agent, Claude Code or Codex. The agent touches the screen only through six *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act**. Files, shell commands and web searches use the agent's own tools and show up as status lines.
+The voice does no work: it passes your exact words to the core, which hands them to the agent, Claude Code or Codex. The agent touches the screen only through seven *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act → observe**, and returns the app's elements to the agent. Files, shell commands and web searches use the agent's own tools and show up as status lines.
 
 ### A yes means yes
 
@@ -282,8 +282,8 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 ## Limitations
 
 - **macOS only, main display only.**
-- **No drag-and-drop or right-click menus yet.** The hands see, click, type, press keys, scroll and open apps, URLs and files.
-- **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking, plus about 350 ms per step so you see the target first.
+- **Drag works inside one app.** The hands see, click (right-click menus included), drag, type, press keys, scroll and open apps, URLs and files; a drag from one app to another is not supported.
+- **Not fast.** A task of a few steps takes 10–20 s, mostly model thinking. Each action waits about 350 ms so you see the target first, and about 200 ms after for the app to settle; it then returns the app's elements, so the agent needs no extra look. The core's log has a `step` line per hands call that says where its time went.
 - **Claude Code runs headless**, through the Claude Agent SDK (checked against 2.1.330). On a Claude plan this counts against the plan's usage limits, as Anthropic counts headless use today; that may change, and `lookma doctor` shows the login in use.
 - **Voice approval understands English and Chinese**; in other languages, click.
 - **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
@@ -316,8 +316,7 @@ Lookma is built to swap both ends: the agent that does the work, and the voice y
 
 1. **Gemini Live** as a second voice.
 2. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
-3. **Drag and drop, and right-click menus** for the hands.
-4. **An on-device “Hey Lookma” wake word**, as an option next to the fn key.
+3. **An on-device “Hey Lookma” wake word**, as an option next to the fn key.
 
 Adapters for other agents (Gemini CLI, Aider, OpenCode, …) and other voices are very welcome. See [Swap the agent, swap the voice](#swap-the-agent-swap-the-voice) and [CONTRIBUTING.md](CONTRIBUTING.md).
 

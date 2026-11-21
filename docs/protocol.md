@@ -42,7 +42,7 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
 { type: 'state',
   executor: { name: 'claude', status: 'starting' | 'ready' | 'busy' | 'down', detail },
   turn: null | { id, sent, status, phase: 'working' | 'done' | 'failed' | 'cancelled', said, startedAt, endedAt },
-  focus: null | { id, label, action, app, rect, point, phase: 'moving' | 'waiting' | 'acting' | 'done' | 'failed', background, at },
+  focus: null | { id, label, action, app, rect, point, to, phase: 'moving' | 'waiting' | 'acting' | 'done' | 'failed', background, at },
   attention: { busy, idle },
   app: null | { version, permissions },          // the app's hello; null while it is not connected
   cards: [ { id, title, detail, source: 'executor' | 'core', turnId, createdAt } ],
@@ -57,6 +57,7 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
 - `turn.status` is the latest one-line step description (the third row). Steps that have no screen target, such as reading a file or running a command, only update this line.
 - `focus` is the current or last hands step:
   - `rect` is the target's frame and `point` is where the ghost cursor goes;
+  - `to` is a drag's drop end, `{ rect, point }` in the same app, set from the start so both ends are marked before the button goes down; null for every other step;
   - `background: true` means it is acting without bringing the target forward, because the user is busy;
   - `phase: 'waiting'` means it needs the front and is waiting for the user to stop. The overlay shows the edge hint.
 - `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app. `turnId` is the turn that was working when the card was raised (null outside a turn). A stop withdraws every open card.
@@ -190,32 +191,69 @@ Core → app requests, and the app's replies:
 
 | op | args | result |
 |---|---|---|
-| `see` | `{ app? }` (default: frontmost) | `{ image (png base64), shot: { w, h, rect }, app, window: { title, rect }, elements: [{ id, role, text, rect }] }` |
+| `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, frontmost, window: { title, rect }, elements: [{ id, role, text, states, rect }], menu, cut, unlabeled, shot?, image? }` |
 | `resolve` | `{ element } \| { point:[x,y] } \| { dock: appName } \| { app }` | `{ app, rect, point, frontmost, pressable }` |
 | `front` | `{ app }` | `{}` (best effort: the ops that post input check the front themselves) |
 | `press` | `{ element }` | AX press: `{}` |
-| `click` | `{ point }` (screen points) | `{}` |
+| `click` | `{ point, button? }` (screen points; `button` `'left'` or `'right'`, default left) | `{}`; a right click: `{ menu }` |
+| `drag` | `{ from, to }` (screen points) | `{}` |
 | `type` | `{ text }` | `{}` |
 | `key` | `{ combo }` e.g. `"cmd+t"` | `{}` |
-| `scroll` | `{ point, direction, amount }` | `{}` |
+| `scroll` | `{ point, direction, pages }` | `{ pixels, position, moved }` |
 | `open` | `{ url } \| { path }` | `{ app }` |
 
-Element ids come from the last `see` and stay valid until the next one. A stale id is an error: "call see again".
+An act op (`press`, `click`, `drag`, `type`, `key`, `scroll`, `open`) returns once its effect has had time to show, because the core lists the app right after it: `press`, a left `click`, `drag`, `type` and `key` 200 ms after their last event, a right `click` once its menu is up (at most 500 ms; `menu: false` when none opened), `scroll` once it has read its scroll bar again, `open` and a Dock `click` once the app has a window in front. The core adds no wait of its own.
+
+**An id names the same element for as long as that element is listed.** Each `see` keeps the id of every element it finds again (the same AX element, matched with `CFEqual`), gives the others new ids, and drops the ones it did not find. So two calls sent from one list both work, and an id of an element that is no longer listed is an error: "call see again".
+
+`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. An element's `text` is one line, cut at 400 characters for text, headings and text areas, so a paragraph can be read from the list, and at 120 for the rest. `frontmost` names the app with keyboard focus. `states` holds only what is set, from `disabled`, `selected` and `focused`. An open menu of the app (a context menu, a pop-up button's list, a menu-bar menu and its open submenus) is listed first: `menu` counts those leading elements (0 when none is open), and the visible area, and a screenshot, grow to take the menu in. A submenu is listed only when it is open; an element reached from both a menu and the window is listed once. `cut` says why the walk stopped early (`'elements'` when there was more to list than 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) comes only with `screenshot: true`. `shot: { w, h, rect }` describes the last screenshot of this app, whenever there is one: with no `image`, it is older than this list. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
+
+A `point` is in the pixels of the last screenshot taken, which a `see` without one does not replace. `resolve { point }` refuses it when there is none, or when the window it was taken of has moved or closed since.
+
+`drag` is a left-button drag: both points must be on the target's window, as for a click, and must differ. It moves the pointer to `from`, presses, holds about 300 ms (apps start a drag only after a hold; the exact value is still to be set on a text view), moves to `to` in 20 eased steps over 500 ms, waits there 200 ms so the drop target can take it, and lets go. The button is let go on every path once it is down. About 1.3 s in all, settle included.
+
+`scroll` moves `pages` (above 0) of the visible area at the point: the nearest scroll area or web area there, cut to its window, or else the window. A page is 90% of that length, so the last line stays in view, sent as pixel wheel events of at most 100 px. The op returns once it has read the area's scroll bar on that axis again, 200 ms after the last event: `position` is where it is now, from 0 (top or left) to 1, and `moved` says whether it changed. The bar is the one of the nearest scroll area there, which in a WebKit view is the web area's parent. Both are null when there is no scroll bar to read (typical for Chromium content).
 
 ## The hands pipeline (core, one function, one step at a time)
 
-The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language. Every call runs the same steps:
+The executor's GUI tools are `see`, `click` (left, or `button: 'right'` for a context menu), `drag` (`from` and `to`, each `{ element }` or `{ point }`, in one app), `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language, and `screenshot` (default false), which asks for a screenshot with the step's list. Every call runs the same steps:
 
-1. **Resolve** the target to `{ app, rect, point }`: an element, a screenshot point, a Dock item (`open` an app = press its Dock icon), or the app itself (`see`, `type`, `key`).
+1. **Resolve** the target to `{ app, rect, point }`: an element, a screenshot point, a Dock item (`open` an app = press its Dock icon), or the app itself (`see`, `type`, `key`). A `drag` resolves its two ends, and fails when they are in two apps: a step has one app to grant, to bring forward and to act in.
 2. **Grant.** If the hands have never touched this app, raise a `core` card ("Allow controlling Maps?") and wait. A no ends the step with an error the executor can read. Answers persist in `~/.lookma/apps.json`.
 3. **Attention.** Visible by default: if the user is not busy (idle ≥ 3 s), bring the target forward. If they are busy:
    - steps that can act in the background (AX `press`, `see`) proceed with `background: true` and an edge hint;
-   - steps that need the front (`type`, `key`, a coordinate `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
-4. **Mark.** Set `focus` (label, rect, point). Wait about 350 ms so the ring and ghost cursor arrive before anything happens.
-5. **Act** through the app, then set `focus.phase` to `done` or `failed`.
-6. **Return** to the executor:
-   - `see` → the image plus the element list as text;
-   - every other tool → one line saying what happened and what is frontmost now.
+   - steps that need the front (`type`, `key`, a coordinate `click`, a right `click`, `drag`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
+4. **Mark.** Set `focus` (label, rect, point, and a drag's `to`). Before an act, wait about 350 ms so the ring and ghost cursor arrive before anything happens. `see` acts on nothing, so it does not wait.
+5. **Act** through the app, then set `focus.phase` to `done` or `failed`. `see` has no act. The op returns once its effect shows (see the op table).
+6. **Observe**: the `see` op of the app this step resolved and granted, with `screenshot` when the call asks for it. This is the only place the core asks for `see`. Two rules:
+   - **An action that happened is never reported as failed.** If the list fails after the act, for any reason, the result is the action line followed by "Could not list <app>: <error>", and `focus.phase` stays `done`. A failed `see` step is a failed step.
+   - **Only the resolved, granted app is listed.** `open` with a `url` or a `path` resolves nothing, so it lists nothing and takes no screenshot, even when asked: its result names the app that opened it ("Call see to list it", or "No screenshot: call see with screenshot: true"), and the agent's `see` of that app takes the grant path.
+7. **Return** to the executor, as text:
+   - the action line, when the step acted: what happened. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put;
+   - the facts that say whether the list is enough: the app, its window and the frontmost app; a screenshot or "No screenshot"; "The last screenshot is older than this list" when there is an older one, which a `point` still refers to; a list cut short; how many elements have no label;
+   - the elements, one per line: id, role, text and states. When a menu is open, its items come first, under "Menu open:", and the window's after them, under "Window:".
+
+   The image comes only when the call asked for it.
+
+**Timing.** Every step writes one line to the core's log when it returns, failed or not, so a slow task shows where its time went:
+
+```
+12:04:31.220 core step click Maps gap=2140 queue=0 resolve=6 grant=0 wait=0 front=0 mark=351 act=348 observe=212 total=917 elements=143 chars=3120 image=0
+12:04:43.100 core step scroll Maps gap=540 queue=0 resolve=4 grant=0 wait=0 front=0 mark=351 act=62 observe=0 total=423 elements=0 chars=0 image=0 failed="Did not scroll: Finder is in front, not Maps."
+```
+
+- The tool and the app it resolved (`-` when none). All values are ms except `elements` (lines listed), `chars` (length of the text returned) and `image` (base64 length, 0 when none).
+- `gap`: from the previous step's return to this call reaching the core, which is the agent's thinking plus the hops. `-` for the first step of a turn, so time between turns never counts; 0 for a call sent while another was still running.
+- `queue`: time spent behind earlier steps. `resolve` (both ends of a drag), `grant` (the card, 0 when already granted), `wait` (for the user to go idle), `front`, `mark`, `act` (the op, its settle included) and `observe` (the list) are the stages; a stage the step skips is 0. `total` runs from the step's start to its return.
+- A failed step stops at the stage it failed in and adds `failed="<error>"`. A list that fails after an act is not a failed step: it shows as `elements=0` and a short `chars`.
+
+The app logs one line per `see` op beside it:
+
+```
+12:04:33.895 app see parts ax-wait=0 walk=188 visited=1840 elements=143 cut=- share=96 capture=71 png=52 bytes=309291
+```
+
+`ax-wait` is the first-contact wait for a web-based app's tree (3000 means it gave up), `walk` the walk of the tree (alongside the capture when there is one), `visited` the elements it read, `cut` as in the result (`-` for none), `share` the wait for the app's window in the shareable content, `capture` the picture itself, `png` its encoding and `bytes` the PNG's size. The last four are 0 without a screenshot.
 
 ## Plug-ins
 
@@ -295,7 +333,7 @@ GUI steps are not in the contract. They arrive as hands tool calls through the t
 - bridge → host: `{ type: 'call', id, tool, args }`;
 - host → bridge: `{ type: 'res', id, ok, result | error }`: `{ text, image? }` (a `say` is `{ text: 'said' }`), or the error the agent reads.
 
-The bridge returns `see`'s screenshot as an MCP image, and an error as a tool error.
+The bridge returns a step's screenshot, when it took one, as an MCP image, and an error as a tool error.
 
 **Conformance.** `core/dev/check-executors.mjs` runs one list of scenarios over every executor with a `dev/fake-agent.mjs`, a script that speaks the agent's protocol in place of its binary: ready, prompts, tools through the bridge, cards allowed, declined and withdrawn, steering, a stop and its stragglers, a correction told just before a stop, a stop that never resolves, the agent dying, and `close`.
 

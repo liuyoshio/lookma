@@ -1,13 +1,16 @@
 // The tools every executor gives its agent, as JSON Schema in the { name, description, inputSchema }
-// shape that MCP and tool-use APIs take: say, the agent's only way to speak to the user, and the six
-// hands tools that core/hands.mjs runs. An adapter hands them to its agent as they are and adds
-// only what its agent needs on top.
+// shape that MCP and tool-use APIs take: say, the agent's only way to speak to the user, and the seven
+// hands tools that core/hands.mjs runs. Every hands tool returns the app's element list, so every one
+// takes `screenshot`. An adapter hands them to its agent as they are and adds only what its agent
+// needs on top.
 
 const tool = (name, description, properties, required) => ({ name, description, inputSchema: { type: 'object', properties, required } })
 
 const label = { type: 'string', description: 'What this step does, in a few words in the language of the user\'s latest message, e.g. "Open #general". Shown on screen at the target.' }
-const element = { type: 'string', description: 'An element id from the last see.' }
-const point = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[x, y] in the pixels of the last see screenshot.' }
+const screenshot = { type: 'boolean', description: 'Also return a screenshot of the app after this step. Ask only when the element list is not enough: a canvas, a map, unlabeled icons, a list that says it was cut, or to confirm a drag or a scroll you cannot read from the list. Default false.' }
+const element = { type: 'string', description: 'An element id from the latest list.' }
+const point = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: '[x, y] in the pixels of the last screenshot (screenshot: true on any call).' }
+const place = description => ({ type: 'object', properties: { element, point }, description })
 
 export const SAY = tool('say', 'Say one short sentence to the user, spoken and shown as a caption. The only way the user hears you.', {
   speech: { type: 'string', description: 'The sentence to speak, in the language of the user\'s latest message, with numbers written as spoken.' },
@@ -16,28 +19,45 @@ export const SAY = tool('say', 'Say one short sentence to the user, spoken and s
 }, ['speech'])
 
 export const HANDS = [
-  tool('see', 'Look at an app: a screenshot plus its elements with ids. Defaults to the frontmost app. Call it before acting and again after the screen changes.', {
+  tool('see', 'List an app\'s elements with ids, and states such as (selected) or (disabled). Defaults to the frontmost app. Every action already returns this list, so call see to start, or to look again after waiting.', {
     label,
+    screenshot,
     app: { type: 'string', description: 'App name, e.g. "Slack". Omit for the frontmost app.' },
   }, ['label']),
-  tool('click', 'Click an element by id (preferred), or a point in the last screenshot.', { label, element, point }, ['label']),
+  tool('click', 'Click an element by id (preferred), or a point in the last screenshot. `button: "right"` opens the context menu; its items come back first in the list, and key "escape" closes it.', {
+    label,
+    screenshot,
+    element,
+    point,
+    button: { type: 'string', enum: ['left', 'right'], description: 'Default left.' },
+  }, ['label']),
+  tool('drag', 'Drag from one place to another inside one app, with the left button held: each end is an element id or a point in the last screenshot. Check the returned list, or ask for a screenshot, to confirm the drop.', {
+    label,
+    screenshot,
+    from: place('Where the drag starts: { "element": id } or { "point": [x, y] }.'),
+    to: place('Where it drops, in the same app: { "element": id } or { "point": [x, y] }.'),
+  }, ['label', 'from', 'to']),
   tool('type', 'Type text into the focused field of the app you are working in.', {
     label,
+    screenshot,
     text: { type: 'string' },
   }, ['label', 'text']),
   tool('key', 'Press a key or a combination in the app you are working in, e.g. "return", "escape", "cmd+t".', {
     label,
+    screenshot,
     combo: { type: 'string' },
   }, ['label', 'combo']),
-  tool('scroll', 'Scroll at an element, a point, or the app you are working in.', {
+  tool('scroll', 'Scroll at an element, a point, or the app you are working in. `pages` is how far, in pages of the visible area: default 1, 0.25 for a small move. The result says where it is now, or that it did not move.', {
     label,
+    screenshot,
     element,
     point,
     direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
-    amount: { type: 'number', description: 'How far, in wheel steps. Default 3.' },
+    pages: { type: 'number', description: 'How far, in pages of the visible area: above 0, at most 10. Default 1.' },
   }, ['label', 'direction']),
-  tool('open', 'Open an app (by pressing its Dock icon), a URL (in the default browser) or a file or folder. Give exactly one of app, url or path.', {
+  tool('open', 'Open an app (by pressing its Dock icon), a URL (in the default browser) or a file or folder. Give exactly one of app, url or path. Opening an app returns its list; a URL or a file says which app opened it, and see lists that app.', {
     label,
+    screenshot,
     app: { type: 'string' },
     url: { type: 'string' },
     path: { type: 'string' },

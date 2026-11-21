@@ -1,21 +1,29 @@
 // Focus marks: where the agent's hands are. A coral ring around the target, a label
-// hanging off it, and a ghost cursor that glides to the point and presses. All of it
-// comes from `focus` and is placed once per step (no per-frame tracking). When the
-// user is busy, the marks stand down and a yellow tab at the screen edge says where
-// the agent is working, or that it is waiting for the front.
+// hanging off it, and a ghost cursor that glides to the point and presses. A drag
+// (`focus.to`) also gets a dimmer ring on its drop end and a dashed line to it before
+// the press; then the ghost holds, glides there with the real pointer, and the ring
+// follows. All of it comes from `focus` and is placed once per step (no per-frame
+// tracking). When the user is busy, the marks stand down and a yellow tab at the
+// screen edge says where the agent is working, or that it is waiting for the front.
 
 import { $, css, cls, txt, replay, clamp, rectOf, pointOf, onScreen, overlaps } from './dom.js'
 
 const STALE = 10000 // a finished step older than this no longer marks anything
 const GRACE = 1600  // marks stay this long after the turn ends
 const GLIDE = 340   // ghost flight; fits inside the core's ~350 ms pause before acting
+// A drag as the app's mouseDrag (Input.swift) posts it: the move to the start and the hold
+// (60 + 300 ms), the glide to the drop end (20 events 25 ms apart), and the dwell there before
+// the button goes up.
+const DRAG_HOLD = 360
+const DRAG_MS = 500
+const DRAG_DWELL = 200
 const SPRING = 'cubic-bezier(.32,.72,0,1)'
 
-const ring = $('ring'), flabel = $('flabel'), ghost = $('ghost'), ripple = $('ripple'), edge = $('edge'), stack = $('stack')
+const ring = $('ring'), drop = $('drop'), path = $('path'), flabel = $('flabel'), ghost = $('ghost'), ripple = $('ripple'), edge = $('edge'), stack = $('stack')
 const flTx = flabel.querySelector('.tx')
 const edgeTx = edge.querySelector('.tx')
 
-const g = { ringOn: false, labelOn: false, ringStep: null, turnId: null, pos: null, flewStep: null, pressedStep: null, flight: null }
+const g = { ringOn: false, labelOn: false, ringStep: null, turnId: null, pos: null, flewStep: null, pressedStep: null, flight: null, actStep: null, actAt: 0, droppedStep: null }
 const scale = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--s')) || 1
 
 export function renderMarks(ui, now, wake) {
@@ -29,18 +37,20 @@ export function renderMarks(ui, now, wake) {
   const fresh = inTurn && (busyPhase || now - f.at < STALE)
   if (fresh && !busyPhase) wake(f.at + STALE)
   const aside = fresh && (!!f.background || f.phase === 'waiting')
-  const r = fresh ? rectOf(f.rect) : null
+
+  // A drag's drop end. Once the ghost starts gliding there, the ring follows it.
+  const to = fresh && f.to ? { r: rectOf(f.to.rect), p: pointOf(f.to.point) } : null
+  if (to && f.phase === 'acting' && g.actStep !== f.id) { g.actStep = f.id; g.actAt = now }
+  const gliding = !!to && f.phase === 'acting' && now - g.actAt >= DRAG_HOLD
+  if (to && f.phase === 'acting' && !gliding) wake(g.actAt + DRAG_HOLD)
+  const dropped = gliding || (!!to && f.phase === 'done')
+  const r = !fresh ? null : dropped ? to.r : rectOf(f.rect)
 
   // ring + label
   const showRing = !!r && !aside && onScreen(r)
   if (showRing) {
-    const S = scale(), pad = 4 * S
-    const box = { x: r.x - pad, y: r.y - pad, w: r.w + 2 * pad, h: r.h + 2 * pad }
     if (!g.ringOn) ring.classList.add('snap') // appear in place, don't glide from a stale target
-    css(ring, 'transform', `translate(${box.x}px,${box.y}px)`)
-    css(ring, 'width', `${box.w}px`)
-    css(ring, 'height', `${box.h}px`)
-    css(ring, 'borderRadius', `${Math.min(12, Math.min(r.w, r.h) / 2) + pad}px`)
+    const box = frame(ring, r)
     if (!g.ringOn) { void ring.offsetWidth; ring.classList.remove('snap') }
     if (g.ringStep !== f.id) { g.ringStep = f.id; replay(ring, 'breathe') } // 2 s, then still
 
@@ -54,9 +64,21 @@ export function renderMarks(ui, now, wake) {
   cls(ring, 'on', showRing)
   cls(flabel, 'on', showRing)
 
+  // a drag's drop ring and the line to it: both ends are marked before the button goes down
+  const p = fresh && !aside ? pointOf(f.point) : null
+  const showDrop = showRing && !!to?.r && !dropped && ['moving', 'acting'].includes(f.phase) && onScreen(to.r)
+  if (showDrop) frame(drop, to.r)
+  cls(drop, 'on', showDrop)
+  const showPath = showDrop && !!p && !!to.p
+  if (showPath) {
+    const dx = to.p.x - p.x, dy = to.p.y - p.y
+    css(path, 'width', `${Math.hypot(dx, dy)}px`)
+    css(path, 'transform', `translate(${p.x}px,${p.y}px) rotate(${Math.atan2(dy, dx)}rad)`)
+  }
+  cls(path, 'on', showPath)
+
   // ghost cursor: rests where it last pressed until the turn ends
   if (turn?.id !== g.turnId) { g.turnId = turn?.id; g.pos = null }
-  const p = fresh && !aside ? pointOf(f.point) : null
   if (p && g.flewStep !== f.id) {
     g.flewStep = f.id
     fly(g.pos || capsuleTop(), p)
@@ -64,8 +86,14 @@ export function renderMarks(ui, now, wake) {
   }
   if (p && g.pressedStep !== f.id && (f.phase === 'acting' || f.phase === 'done')) {
     g.pressedStep = f.id
-    const go = () => press(p)
+    const end = to?.p
+    if (end) g.pos = end
+    const go = () => (end ? drag(p, end) : press(p))
     g.flight ? g.flight.finished.then(go, go) : go()
+  }
+  if (p && to?.p && f.phase === 'done' && g.droppedStep !== f.id) {
+    g.droppedStep = f.id
+    pulse(to.p)
   }
   cls(ghost, 'on', turnLive && !!g.pos && !aside)
 
@@ -106,9 +134,41 @@ function fly(a, b) {
 function press(p) {
   const at = ghostAt(p)
   ghost.animate([{ transform: at }, { transform: `${at} scale(.84)` }, { transform: at }], { duration: 240, easing: 'ease-out' })
+  pulse(p)
+}
+
+function pulse(p) {
   const R = ripple.offsetWidth / 2
   const t = `translate(${p.x - R}px,${p.y - R}px)`
   ripple.animate([{ opacity: 0.9, transform: `${t} scale(.25)` }, { opacity: 0, transform: `${t} scale(1.35)` }], { duration: 600, easing: SPRING })
+}
+
+// Press at a, hold while the app does, glide to b with the real pointer (the same ease as
+// dragPath in Input.swift), wait there as it does, and let go with it. The ripple waits for the
+// step to be done.
+function drag(a, b) {
+  const from = ghostAt(a), to = ghostAt(b), up = DRAG_HOLD + DRAG_MS + DRAG_DWELL, total = up + 120
+  ghost.style.transform = to
+  g.flight = ghost.animate([
+    { transform: from, offset: 0 },
+    { transform: `${from} scale(.84)`, offset: 120 / total },
+    { transform: `${from} scale(.84)`, offset: DRAG_HOLD / total, easing: 'cubic-bezier(.65,0,.35,1)' },
+    { transform: `${to} scale(.84)`, offset: (DRAG_HOLD + DRAG_MS) / total },
+    { transform: `${to} scale(.84)`, offset: up / total },
+    { transform: to, offset: 1 },
+  ], { duration: total })
+  g.flight.finished.then(() => { g.flight = null }, () => {})
+}
+
+/** Puts a ring-like element around r, padded, and returns its box. */
+function frame(el, r) {
+  const pad = 4 * scale()
+  const box = { x: r.x - pad, y: r.y - pad, w: r.w + 2 * pad, h: r.h + 2 * pad }
+  css(el, 'transform', `translate(${box.x}px,${box.y}px)`)
+  css(el, 'width', `${box.w}px`)
+  css(el, 'height', `${box.h}px`)
+  css(el, 'borderRadius', `${Math.min(12, Math.min(r.w, r.h) / 2) + pad}px`)
+  return box
 }
 
 function capsuleTop() {
