@@ -1,6 +1,8 @@
 # Protocol (v1)
 
-How the pieces talk. The core holds one model: the turn, the focus (the current hands step) and the user's attention, and every step is visible by default. All user-facing text in the product is English. Anything spoken or narrated follows the language the user speaks.
+How the pieces talk, and the two plug-in contracts. The core holds one model: the turn, the focus (the current hands step) and the user's attention, and every step is visible by default. All user-facing text in the product is English. Anything spoken or narrated follows the language the user speaks.
+
+This page is normative. For a walkthrough of adding an agent or a voice, see [Writing an executor](writing-an-executor.md) and [Writing a voice](writing-a-voice.md).
 
 ## Processes
 
@@ -13,8 +15,9 @@ Three WebSockets meet at the core: the overlay page on `/ws/overlay`, the app on
 
 - **core** (`core/`) is the only place that decides anything. It serves the overlay page at `/`, WebSockets at `/ws/overlay`, `/ws/app` and `/ws/executor`, and HTTP at `/api/state`, `/api/tell` and `/api/voice/grant`. Beside the overlay it serves the selected voice provider's page half, `/voices/<name>/page.js` (and `/voices/<name>/page/*`), and nothing else of that folder.
 - **app** (`app/`) is launched with `open` so macOS permissions belong to it. It connects back to the core, provides primitives, and the menu bar item (pause, resume, type, quit), and makes no decisions.
-- **overlay** (`overlay/`) is a page loaded by the app's full-screen, click-through WKWebView. It renders core state and runs the realtime voice session. It also opens in a normal browser for development.
-- **executor adapter** (`executors/<name>/`) wraps one agent behind the contract below, and the core's executor host (`core/executor/host.mjs`) is the only code that runs it. `claude` and `codex` ship.
+- **overlay** (`overlay/`) is a page loaded by the app's full-screen, click-through WKWebView. It renders core state and runs the voice session. It also opens in a normal browser for development.
+- **executor adapter** (`executors/<name>/`) wraps one agent behind the [executor contract](#executor-contract), and the core's executor host (`core/executor/host.mjs`) is the only code that runs it. `claude` and `codex` ship.
+- **voice provider** (`voices/<name>/`) is one voice service behind the [voice provider contract](#voice-provider-contract): its `mint.mjs` runs in the core, under the voice host (`core/voice/host.mjs`), and its `page.js` in the overlay, under the voice session. `openai` ships.
 
 Port: `LOOKMA_PORT`, default 8790. During development use another port (the dev scripts default to 8791), because your everyday Lookma may still hold 8790.
 
@@ -55,7 +58,7 @@ On connect, and on every change (coalesced to one per frame), the core sends a f
   - `rect` is the target's frame and `point` is where the ghost cursor goes;
   - `background: true` means it is acting without bringing the target forward, because the user is busy;
   - `phase: 'waiting'` means it needs the front and is waiting for the user to stop. The overlay shows the edge hint.
-- `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app. `turnId` is the turn that was working when the card was raised (null outside a turn, e.g. a startup card). A stop withdraws every open card.
+- `cards` are pending approvals, oldest first. `source: 'core'` means the core asks for itself, e.g. the first time the hands touch an app. `turnId` is the turn that was working when the card was raised (null outside a turn). A stop withdraws every open card.
 - `tasks` are background work with no screen presence. It is shown yellow.
 - `turn.said` counts the lines the work said during the turn (see the outbox below).
 - `outbox` is what the user is owed by voice, oldest first. See The outbox below.
@@ -80,20 +83,20 @@ The answer to an overlay request (see Overlay → core) goes to the requesting s
 
 **Voice session** (`overlay/voice.js`, `overlay/voice/`). Always listening, full duplex: while voice is on and not paused, one warm session is connected with the microphone attached.
 
-- **Warm session.** One Realtime WebRTC session, its audio transceiver `sendrecv` with the microphone track. macOS shows its mic indicator. The voice speaks on the same session, and it keeps the conversation across turns.
-- **Turns** come from the server: `turn_detection` is `semantic_vad` with `eagerness: 'medium'` and `create_response: false`. The audio setup (`LOOKMA_AUDIO`) sets the rest: `room` (the default) has `interrupt_response: false` and `far_field` noise reduction, so speech over the voice does not cut it off; `headset` has `interrupt_response: true` and `near_field`, so it does (barge-in).
-- **The floor** (`overlay/voice/floor.js`) decides who speaks: one reply at a time, and only once the user's turn is committed. What the voice owes is user turns (a reply) and outbox entries (an announcement). Every committed turn gets a `response.create` at once; the voice itself decides whether it was meant for it, and a reply that is a `pass` call, or has nothing in it, deletes that turn from the conversation. A turn is shown as heard when the reply's first output that is not a `pass` arrives.
-- **Replies.** `response.create` carries the grant's `session.responses[kind]` and never instructions: a reply to new turns (`turn`) may call tools; every other reply (`speak`: an announcement, or a tool result to say) is speak-only (`tool_choice: 'none'`). A tool result the user has not heard (an error, `status`, or any result after a reply that said nothing) gets a speak-only reply.
-- **Announcements.** What the outbox owes is announced once nobody has talked for 0.7 s, after any user turn, all of it in one reply, in outbox order, as user items marked as updates. When its audio has played, the entries get `spoken`. Talked over by a user who then gets an answer (the reply to their turn is not a `pass`), they get `cut`. A reply that fails (cancelled by noise, rejected, cut off by a dropped session, or with no news for 30 s) is tried again; a reply the user's voice cancelled counts as failed only once the reply to their turn turns out not to be an answer, so a request spoken in pieces is never lost. After two failures an entry gets `shown`, and a request the voice never acted on shows "say that again". A receipt is sent again while a snapshot still shows the entry owed, so one lost with the core link heals itself.
-- **Turn records.** Each turn is recorded when its speech starts: its item id, `startedAt` (when the event arrived) and `overButler` (whether the voice's audio was playing then). Its transcript is matched by item id when it arrives.
-- **Health.** The session reconnects in the background when it closes or fails, with backoff. While idle (nothing heard, said or owed for 10 s), it is renewed after the grant's `renewAfter` (before the Realtime session limit), with its grant minted ahead.
-- **Context.** Every new session is first given the outbox entries that already have a receipt (the last 5 minutes, and the card on screen), as user items marked "from earlier" and with no `response.create`. So "yes, I approve" still answers a card announced on the old session, also after a page reload.
-- **Paused:** no session at all, and no microphone; what is owed stays in the outbox and is announced after resume. **Voice off** (`LOOKMA_VOICE=off`, no OpenAI key): no session, captions only, and everything owed gets `shown`. A page opened with `?voice=0` is a spectator: no session, captions only, and no receipts, so it never settles what the app's voice still owes.
+- **Warm session.** One connection of the selected voice provider (see Voice provider contract), with the microphone. macOS shows its mic indicator. The voice speaks on the same session, and it keeps the conversation across turns.
+- **Turns** come from the provider, which owns turn detection; the service never replies by itself. The audio setup (`LOOKMA_AUDIO`) sets the rest: in a `room` (the default) speech over the voice does not cut it off; with a `headset` it does (barge-in).
+- **The floor** (`overlay/voice/floor.js`) decides who speaks: one reply at a time, and only once the user's turn is committed. What the voice owes is user turns (a reply) and outbox entries (an announcement). Every committed turn gets a `create` at once; the voice itself decides whether it was meant for it, and a reply that is a `pass` call, or has nothing in it, drops that turn from the conversation. A turn is shown as heard when the reply's first output that is not a `pass` arrives.
+- **Replies.** A reply to new turns (`create` of kind `turn`) may call tools; every other reply (`speak`: an announcement, or a tool result to say) only speaks. A tool result the user has not heard (an error, `status`, or any result after a reply that said nothing) gets a `speak` reply.
+- **Announcements.** What the outbox owes is announced once nobody has talked for 0.7 s, after any user turn, all of it in one reply, in outbox order, as items marked as updates (`tell`). When its audio has played, the entries get `spoken`. Talked over by a user who then gets an answer (the reply to their turn is not a `pass`), they get `cut`. A reply that fails (cancelled by noise, rejected, cut off by a dropped session, or with no news for 30 s) is tried again; a reply the user's voice cancelled counts as failed only once the reply to their turn turns out not to be an answer, so a request spoken in pieces is never lost. After two failures an entry gets `shown`, and a request the voice never acted on shows "say that again". A receipt is sent again while a snapshot still shows the entry owed, so one lost with the core link heals itself.
+- **Turn records.** Each turn is recorded when its speech starts: its id, `startedAt` (when the event arrived) and `overButler` (whether the voice's audio was playing then). Its transcript is matched by that id when it arrives.
+- **Health.** The session reconnects in the background when it closes or fails, with backoff. While idle (nothing heard, said or owed for 10 s), it is renewed after the grant's `renewAfter`, with its grant minted ahead.
+- **Context.** Every new session is first told the outbox entries that already have a receipt (the last 5 minutes, and the card on screen), marked "from earlier", with no reply. So "yes, I approve" still answers a card announced on the old session, also after a page reload.
+- **Paused:** no session at all, and no microphone; what is owed stays in the outbox and is announced after resume. **Voice off** (`LOOKMA_VOICE=off`, or a required setting such as `OPENAI_API_KEY` unset): no session, captions only, and everything owed gets `shown`. A page opened with `?voice=0` is a spectator: no session, captions only, and no receipts, so it never settles what the app's voice still owes.
 
 **Voice approval** (`overlay/consent.js`): a spoken answer (approve or decline) counts only when all of these hold:
 - it was spoken at least 1 s after the card rendered (the turn's `startedAt`);
 - it cannot be the assistant's own voice: said over the voice (`overButler`), it counts unless the voice itself was saying an approval phrase;
-- its own transcript, matched by the turn's item id and awaited up to 3 s, is explicit: "yes, I approve", "approved, do it", or a clear "no", "don't". A lone "approve" or "go ahead" is not enough, and any hesitation fails. "Cancel" is a stop, never a decline.
+- its own transcript, matched by the turn's id and awaited up to 3 s, is explicit: "yes, I approve", "approved, do it", or a clear "no", "don't". A lone "approve" or "go ahead" is not enough, and any hesitation fails. "Cancel" is a stop, never a decline.
 - the core accepts it: the butler's `answer` sends an `answer` request, and the card shows Approved (or Declined) only after the ack says `ok`.
 
 Otherwise the voice asks again. The card's hint reads: Say “yes, I approve”. Clicking Approve always works.
@@ -120,30 +123,14 @@ Without an ack:
 
 Spoken "stop", "go ahead" and "pause" are the voice's: it calls its `control` tool. Every tool that reaches the core (`do` sends `tell`, `answer`, `control`) gets the ack as its output, verbatim, so the voice says what really happened. A typed line of just "stop", "go ahead" or "pause" is sent as that `control` request whatever the state (`commandFor` in `overlay/consent.js`); a failed typed request shows its error on screen.
 
-`POST /api/voice/grant` → `{ provider, credential?, startBy?, renewAfter, label, session? }`, one grant per voice session, minted by the selected provider's `mint.mjs` through the voice host (`core/voice/host.mjs`). `provider` names the page half the session imports (`/voices/<provider>/page.js`); `credential` is what it connects with, never the real key, which stays in the core; `startBy` (epoch ms) is the last moment a connection may start with it; `renewAfter` (ms) is when the session is swapped at the next idle moment; `label` is for the log; `session` is the provider's own data. A 503 means no voice, for good (`LOOKMA_VOICE=off`, or a required setting such as `OPENAI_API_KEY` unset). Any other error (a 502 when the provider's service refused) means try again later.
-
-For `openai`, `credential` is an ephemeral OpenAI Realtime key, with the session config (the voice's instructions from `prompts/butler.md`, its tools `do`, `status`, `answer`, `control` and `pass` from `prompts/butler-tools.json`, transcription (with `language` from `LOOKMA_VOICE_LANGUAGE` when set, and no prompt), server turn detection as above, `max_output_tokens` from `LOOKMA_OPENAI_MAX_TOKENS` (default 200), and voice) baked in by the core; `startBy` is the key's expiry, `renewAfter` 50 minutes, and `session.responses` the parameters of each kind of reply (`voices/openai/mint.mjs`), so the page never builds one.
-
-**Voice provider contract** (provisional until a second provider exists). A provider is `voices/<name>/`: `manifest.mjs` (as an executor's, below), `mint.mjs` in the core and `page.js` in the overlay; `overlay/voice/contract.js` has the exact shapes.
-
-```js
-// voices/<name>/mint.mjs
-export async function mint({ options, instructions, tools, audio, language, log }) → { credential?, startBy?, renewAfter, label, session? }
-// voices/<name>/page.js, a browser module
-export function connect(grant, { signal, openMic, onEvent, onClose, log }) → Promise<{ send(effect) }>
-```
-
-- `tools` are `prompts/butler-tools.json`, `[{ name, description, parameters }]`; `audio` is `room` or `headset`; `language` is `LOOKMA_VOICE_LANGUAGE` or `''`. A `mint` that throws is the 502.
-- `connect` resolves once the connection is live and rejects in words. `signal` aborts when the session ends it, live or not: release everything. `openMic()` is the session's microphone, kept across reconnects. `onClose(why)`: the connection ended by itself.
-- The provider owns turn detection and emits the voice events: `turn.started`, `turn.stopped`, `turn.committed { id }` (one id per user turn; `started` as soon as the user is audibly speaking), `turn.transcript { id, text | null }` (once per committed turn), `response.started { response }` (once per reply it began for a `create`, before its other events), `response.item { response, kind }` (as soon as the reply's first output is known), `butler.said { response, text, final }`, `response.done { response, status, items }` (`completed`, `cancelled`, `failed` or `incomplete`; items through `item()`, which makes a `pass` call an item of kind `pass`), `audio.started`, `audio.stopped`, `audio.cleared { response }` (the truth about playback at the speaker), and `error { eventId, message }`.
-- It carries out the four effects and nothing else: `create { kind: 'turn' | 'speak', eventId }` starts one reply now (a `speak` reply only speaks; the service never replies by itself), `tell { texts }` adds texts the butler was told, with no reply, `drop { items }` voids items (a pending call among them is resolved silently), and `output { results: [{ callId, output }] }` gives call results, with no reply.
+`POST /api/voice/grant` → `{ provider, credential?, startBy?, renewAfter, label, session? }`, one grant per voice session, minted by the selected provider (see Voice provider contract). A 503 means no voice, for good (`LOOKMA_VOICE=off`, or a required setting such as `OPENAI_API_KEY` unset): the page stops asking. Any other error (a 502 when the provider's service refused) means try again later.
 
 **Overlay ↔ app (local, not the core).** The page posts `{ hitRects: [rect…], typing, voice, listening, speaking }` to `window.webkit.messageHandlers.lookma` whenever one of them changes:
 
 - `hitRects`: the app makes the window accept mouse events only while the pointer is inside one of those rects (the card), and click-through everywhere else.
 - `typing`: the app gives the window the keyboard only while the typed input is open, and hands it back when the page closes it.
 - `voice`: voice works (voice on, not paused, the session not failing).
-- `listening`: the user is speaking (the server heard speech start, and not yet stop). The app shows it in the menu bar.
+- `listening`: the user is speaking (the provider's `turn.started`, and not yet `turn.stopped`). The app shows it in the menu bar.
 - `speaking`: the voice is answering (thinking or talking).
 
 The app calls the page with `evaluateJavaScript`; it returns nothing:
@@ -175,7 +162,7 @@ Core → app, besides requests:
 The core is the only place where `paused` changes; the overlay and the app only ask.
 
 - **Pause** (`control` `pause` from the overlay, or `pause` from the app). If a turn is working, the core stops it exactly as `stop` does. Then `paused` becomes true. While paused:
-  - the overlay closes the voice session entirely (WebRTC closed, mic track stopped), so nothing is heard, sent or billed, and the voice stops talking; what is owed stays in the outbox;
+  - the overlay closes the voice session entirely (the connection closed, the microphone stopped), so nothing is heard, sent or billed, and the voice stops talking; what is owed stays in the outbox;
   - the capsule shows "Paused" and how to resume: the menu bar or ⌃⌥P;
   - marks clear, and the hands refuse every step;
   - `tell` is refused with the same hint (its ack's `error`; `POST /api/tell` answers 409).
@@ -221,6 +208,26 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
    - `see` → the image plus the element list as text;
    - every other tool → one line saying what happened and what is frontmost now.
 
+## Plug-ins
+
+The agent and the voice are plug-ins: a folder in `executors/` or `voices/`, selected by `LOOKMA_EXECUTOR` (default `claude`) and `LOOKMA_VOICE` (default `openai`, or `off`). A plug-in's name is its folder's: lowercase letters and digits with single hyphens, unique across both kinds. Each has a `manifest.mjs`, read and validated only by `core/plugins.mjs`:
+
+```js
+export default {
+  title,       // the name people read: 'Codex'
+  settings,    // { key: { default, help, env?, secret?, required? } }
+  checks,      // optional: [options => finding], run by lookma doctor (an executor's also before lookma start)
+}
+```
+
+- A setting's type is the type of its `default`: a string, a number, or a boolean written `1` or `0`. An empty value is unset.
+- Its name is derived, `LOOKMA_<NAME>_<KEY>` (`codex` + `model` is `LOOKMA_CODEX_MODEL`), unless `env` names a well-known variable (`OPENAI_API_KEY`, `CODEX_HOME`).
+- `secret`: never printed, and kept out of every other plug-in's environment (an executor's `ctx.env`).
+- `required`: a string with an empty default. An executor's stops `lookma start` while unset; a voice's leaves Lookma running without voice.
+- The plug-in gets the checked values as `options`. Nothing else reads its settings.
+- A finding is `ok(text)`, `warn(text, fix)` or `fail(text, fix)`. A manifest imports only Node's own modules and the helpers `ok`, `warn`, `fail`, `sh` and `atLeast` from `core/doctor.mjs`, so it works before `npm install`.
+- `lookma --help` lists the selected plug-ins' settings, `lookma config` shows the ones in effect and where each came from, and `lookma doctor` warns once about any `LOOKMA_*` variable no one declares.
+
 ## Executor contract
 
 An executor adapter is a driver for one agent session. The core owns the user's turn, the cards, the tools and the outbox; the executor host (`core/executor/host.mjs`) loads the adapter, and the adapter only translates: prompts and an interrupt go down, the agent's activity comes up.
@@ -230,7 +237,8 @@ An executor adapter is a driver for one agent session. The core owns the user's 
 export function create(ctx) → {
   start({ dirs }) → Promise   // resolves when the agent can take a prompt and call its tools;
                               // rejects in words. Called again after close() (a restart).
-  prompt(text) → Promise      // deliver one user message; rejects if it could not
+  prompt(text) → Promise      // deliver one user message; resolves once the agent has taken it
+                              // (not when the work is done), rejects if it could not
   interrupt() → Promise       // stop the current work; resolves when the agent is idle and nothing
                               // of the stopped work will be emitted or called any more
   close() → Promise           // end the session and every child process
@@ -258,7 +266,8 @@ Events:
 { type: 'down', detail }                    // the session died by itself
 ```
 
-- **Steering.** `prompt` while the agent works adds the text to the running work as soon as the agent can take it; it never restarts the conversation and is never lost.
+- **Events.** `turnEnd` once each time the agent goes idle, with `error` in words when it failed; a prompt that joined the running work gets none of its own. `turnStart` only for work the core did not start (a background task waking the agent), never for a prompt just delivered. `task` only for background work (`result` is the report the voice reads). `down` once, when the session died by itself: never after `close`, and during `start` the start rejects instead. An event an agent cannot produce is simply never emitted; nothing is declared.
+- **Steering.** `prompt` while the agent works adds the text to the running work as soon as the agent can take it; it never restarts the conversation and is never lost. An agent that cannot take a message mid-turn is interrupted by its adapter, and the text sent as the next prompt in the same conversation, with no `turnEnd` for that inner interrupt.
 - **Cards.** `await ctx.ask(card)` is `true` or `false`, the user's answer, or `null` when the card was withdrawn (a stop, a restart, close, or the adapter's own `signal`, for a request the agent closed itself); the adapter then answers its agent "deny". Approve means once: an adapter never maps a yes to an "always allow" option.
 - **Steps.** `step.title` comes from `core/executor/steps.mjs`, `title(kind, detail)`; calls to `ctx.tools.server` are never steps (the hands show themselves).
 - **The host** owns everything else, once:
@@ -268,7 +277,6 @@ Events:
   - **recovery**: a `down` event, or an `interrupt()` that has not resolved after 10 s, fails the running turn with the reason, closes the session and starts it again (status `starting`, "…; restarting"); a second failure within a minute leaves it `down`;
   - **the turn text**: a failed turn that said nothing tells "That did not work: <error>."; `summary` goes to the log only.
 - `lookma start` launches the app without waiting for the executor: prompts told while it starts wait in the host.
-- `executors/<name>/manifest.mjs` (a voice has one too, in `voices/<name>/`) exports `default { title, settings, checks? }`, read and validated only by `core/plugins.mjs`. A setting is `{ default, help, env?, secret?, required? }`: its type is the type of `default` (string, boolean written `1` or `0`, number), its name is `LOOKMA_<NAME>_<KEY>` unless `env` names a well-known variable (`OPENAI_API_KEY`), an empty value is unset, and `secret` is never printed and kept out of other plug-ins' `ctx.env`. The adapter gets the checked values as `ctx.options`. `checks` is a list of functions `options => finding`, run by `lookma doctor` and before `lookma start`. A manifest may import only Node's own modules and the helpers `ok`, `warn`, `fail`, `sh` and `atLeast` from `core/doctor.mjs`, so it works before `npm install`.
 
 GUI steps are not in the contract. They arrive as hands tool calls through the tools bridge.
 
@@ -331,3 +339,67 @@ The bridge returns `see`'s screenshot as an MCP image, and an error as a tool er
 
   Never `acceptForSession` or `scope: 'session'`: Approve is this once. If a request does not offer `accept`, Approve answers `decline`. A card is withdrawn, with no answer, on `serverRequest/resolved`, at the end of its turn, or when app-server exits. Without a card: `mcpServer/elicitation/request` is declined and `currentTime/read` is answered. Any other request gets the JSON-RPC error `-32601`, so no request can block a turn.
 - **Not used.** `task` (Codex's subagents are off).
+
+## Voice provider contract
+
+**Provisional until a second provider exists.** A voice provider is one conversational voice service in the floor's own terms: it turns the microphone and the speaker into voice events and carries out the floor's four effects. The floor (`overlay/voice/floor.js`) decides who speaks; the provider decides nothing. The session's lifecycle (the grant, the microphone, the connect deadline, reconnecting, renewal, pause) is `overlay/voice/session.js`, the same for every provider. `overlay/voice/contract.js` has the exact shapes and is the only code a provider shares with the overlay. [Writing a voice](writing-a-voice.md) walks through it.
+
+```js
+// voices/<name>/mint.mjs, in the core, under the voice host (core/voice/host.mjs)
+export async function mint({ options, instructions, tools, audio, language, log })
+  → { credential?, startBy?, renewAfter, label, session? }
+
+// voices/<name>/page.js, a browser module, served at /voices/<name>/page.js (and page/*)
+export function connect(grant, { signal, openMic, onEvent, onClose, log }) → Promise<{ send(effect) }>
+```
+
+**The grant.** `POST /api/voice/grant` answers `{ provider, ...mint's result }`.
+
+- In: `options`, the provider's checked settings; `instructions`, `prompts/butler.md`; `tools`, `prompts/butler-tools.json` as `[{ name, description, parameters }]`; `audio`, `room` or `headset` (`LOOKMA_AUDIO`); `language`, `LOOKMA_VOICE_LANGUAGE` or `''`. The host reads the prompts for every grant, so an edit applies to the next session.
+- `credential` is what the page connects with, never the real key, which stays in the core. `startBy` (epoch ms) is the last moment a connection may start with the grant. `renewAfter` (ms) is when the session is swapped at the next idle moment. `label` is for the log. `session` is the provider's own data for its `page.js`, opaque to everyone else.
+- A `mint` that throws is a 502 (try again later). No voice at all is a 503.
+
+**The connection.** `connect` resolves once the connection is live and rejects in words.
+
+- `signal` aborts when the session ends the connection, live or still coming up: release everything. From then on the session ignores it.
+- `openMic()` resolves with the session's microphone, kept open across reconnects. A provider whose audio is captured elsewhere never calls it.
+- `onClose(why)`: the connection ended by itself. The session reconnects with backoff.
+- `send(effect)` is called only while the connection is live.
+
+**Events** (provider → floor). The provider owns turn detection.
+
+| Event | Obligation |
+|---|---|
+| `turn.started { id }`, `turn.stopped { id }`, `turn.committed { id }` | One id per user turn, the service's or minted. `started` as soon as the user is audibly speaking |
+| `turn.transcript { id, text \| null }` | Once per committed turn; `null` when there is none |
+| `response.started { response }` | Once per reply begun for a `create`, before its other events |
+| `response.item { response, kind }` | As soon as the reply's first output is known to be a `message`, a `call` or a `pass` |
+| `butler.said { response, text, final }` | What the butler is saying; whole with `final: true` |
+| `response.done { response, status, items, reason? }` | `completed`, `cancelled` (cut by the user or the client), `failed` or `incomplete`; items through `item()`, which makes a `pass` call an item of kind `pass` |
+| `audio.started`, `audio.stopped`, `audio.cleared { response }` | The truth about playback at the speaker: started, played to the end, cut off |
+| `error { eventId, message }` | `eventId` of a rejected `create` when the service can tell, else `null` |
+
+**Effects** (floor → provider), and nothing else:
+
+| Effect | Meaning | When the service lacks it |
+|---|---|---|
+| `create { kind: 'turn', eventId }` | Start one reply now, covering the whole conversation, tools allowed. The service never replies by itself | Required: hold the service's own trigger until `create` |
+| `create { kind: 'speak', eventId }` | Start one reply now that only speaks | An ordinary reply: the floor never runs a speak reply's calls |
+| `tell { texts }` | Add texts the butler was told; no reply | Required |
+| `drop { items }` | These items are void: remove them; a call among them still waiting for its result is resolved silently | Resolve the calls only |
+| `output { results: [{ callId, output }] }` | The results of calls; no reply | Required |
+
+A service that cannot report playback truthfully, or cannot hold its reply until `create`, cannot be a Lookma voice. Per-reply parameters are the provider's own: `mint` puts them in `grant.session`, and `page.js` reads them.
+
+**`room` and `headset`.** In a `room`, the user's voice never cuts a reply and noise reduction is for a far microphone. With a `headset`, the user's voice cuts a reply at once (`audio.cleared`, then `response.done` `cancelled`) and noise reduction is for a near microphone.
+
+**Conformance.** `overlay/dev/check-voices.mjs` runs the overlay's voice with every provider's real `page.js` in headless Chrome, against the provider's `dev/fake.mjs`, which stands in for the service: it exports `grant`, `page` (a script that replaces the transport with a fake service), `toService(event)` and `fromService(message)`.
+
+### OpenAI Realtime provider (`voices/openai/`)
+
+- **Settings.** `OPENAI_API_KEY` (secret, required), `LOOKMA_OPENAI_MODEL` (default `gpt-realtime-2.1`), `LOOKMA_OPENAI_VOICE` (`marin`), `LOOKMA_OPENAI_TRANSCRIBE_MODEL` (`gpt-4o-transcribe`), `LOOKMA_OPENAI_MAX_TOKENS` (200).
+- **Mint.** `POST /v1/realtime/client_secrets` with the whole session: the butler's instructions and tools (`do`, `status`, `answer`, `control`, `pass`), `tool_choice: 'auto'`, `max_output_tokens`, transcription (with `language` when set, and no prompt: it makes the transcriber drop the question marks the approval check relies on), the voice, and turn detection: `semantic_vad` with `eagerness: 'medium'` and `create_response: false`. `room` sets `interrupt_response: false` and `far_field` noise reduction; `headset` `interrupt_response: true` and `near_field`. The grant: `credential` is the ephemeral key, `startBy` its expiry, `renewAfter` 50 minutes (the session limit is 60), `label` the model, and `session.responses` the parameters of each kind of reply: `turn` none, `speak` `tool_choice: 'none'`.
+- **Connect.** One WebRTC call: the microphone track `sendrecv`, an SDP offer posted to `/v1/realtime/calls` with the key, the butler's voice on an `<audio>` element, and the events on the `oai-events` data channel. It resolves when the channel opens; `onClose` on the channel closing or the connection failing.
+- **Events.** `input_audio_buffer.speech_started`, `speech_stopped`, `committed` → `turn.*` by `item_id`; `conversation.item.input_audio_transcription.completed` (or `.failed`, as `null`) → `turn.transcript`; `response.created` → `response.started`; `response.output_item.added` → `response.item`; `response.output_audio_transcript.delta` and `.done` → `butler.said`; `response.done` → `response.done`; `output_audio_buffer.started`, `stopped`, `cleared` → `audio.*`; `error` → `error`.
+- **Effects.** `create` → `response.create` with `event_id` and that kind's parameters, never instructions; `tell` → a user message `conversation.item.create` per text; `drop` → `conversation.item.delete` per item; `output` → a `function_call_output` `conversation.item.create` per result.
+- **Limits.** None.

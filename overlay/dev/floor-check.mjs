@@ -48,7 +48,7 @@ const receipts = fx => only(fx, 'delivered').map(e => `${e.how}:${e.ids.join(','
 const drops = fx => only(fx, 'drop').flatMap(e => e.items)
 const owedTurns = f => f.state().turns.map(t => t.id)
 
-// Response items, as voice/realtime.js gives them
+// Response items, as a provider's page.js gives them (voice/contract.js item())
 const MSG = { kind: 'message' }
 const PASS = id => ({ kind: 'pass', id })
 const CALL = (id, name = 'do', complete = true) => ({ kind: 'call', id, callId: `c_${id}`, name, args: {}, complete })

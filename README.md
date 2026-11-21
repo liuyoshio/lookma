@@ -42,7 +42,8 @@ Lookma is a free, open-source app for your Mac. Just say what you want, in any l
   <a href="#how-it-works">How it works</a> ·
   <a href="#privacy-and-costs">Privacy</a> ·
   <a href="#configuration">Configuration</a> ·
-  <a href="#limitations">Limitations</a>
+  <a href="#limitations">Limitations</a> ·
+  <a href="#swap-the-agent-swap-the-voice">Plug-ins</a>
 </p>
 
 ## Why Lookma
@@ -275,27 +276,35 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 - **One at a time:** one port, one agent session.
 - **It hears the room.** It stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Pause when that matters.
 
-## Swapping the executor
+## Swap the agent, swap the voice
 
-The agent is anything behind a small adapter in `executors/<name>/`: a `manifest.mjs` that declares its settings and checks, and an `index.mjs`:
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/plug-ins-dark.svg">
+  <img src="docs/images/plug-ins.svg" width="100%" alt="Lookma in the middle, the same whatever is plugged in. On the left, the voice plug-in in voices/<name>/, chosen with LOOKMA_VOICE: page.js in the overlay talks to the voice service and mint.mjs in the core mints a short-lived grant. On the right, the agent plug-in in executors/<name>/, chosen with LOOKMA_EXECUTOR: index.mjs drives the agent with start, prompt, interrupt and close. The agent calls say and the hands through the tools bridge, which the core runs.">
+</picture>
 
-```js
-export function create(ctx)  // ctx: { emit, tools: { server, mcp(extras) }, ask, options, instructions, sessionDir, env, log }
-  → { start({ dirs }), prompt(text), interrupt(), close() }   // each returns a promise
-```
+Both ends are plug-ins: a folder each, picked with one setting or flag.
 
-It emits `turnStart` / `turnEnd`, `step`, `task` and `down`, and asks you with `ctx.ask`. The agent gets `say` and the hands from Lookma's tools bridge, which it spawns from `ctx.tools.mcp()`, so on-screen steps are not part of the adapter at all. Lookma's executor host owns the rest for every agent: readiness, the order of prompts, the stop gate and one restart. Two ship today, `claude` and `codex`; pick one with `LOOKMA_EXECUTOR`. The full contract is in [docs/protocol.md](docs/protocol.md#executor-contract).
+| | Agent | Voice |
+|---|---|---|
+| Pick it | `--agent codex` or `LOOKMA_EXECUTOR=codex` | `--voice off` or `LOOKMA_VOICE=off` |
+| Ships with | `claude` (default), `codex` | `openai` (default), or `off` to type instead |
+| Its folder | `executors/<name>/` | `voices/<name>/` |
+| Its settings | `LOOKMA_CLAUDE_*`, `LOOKMA_CODEX_*` | `LOOKMA_OPENAI_*`, `OPENAI_API_KEY` |
+| Write one | [Writing an executor](docs/writing-an-executor.md) | [Writing a voice](docs/writing-a-voice.md) (provisional) |
+
+Whatever is plugged in, the agent touches the screen only through Lookma's hands, so every step stays visible, granted and stoppable, and the voice only talks: the floor in the overlay decides when. `lookma --help` lists the settings of the agent and voice you picked.
 
 ## Roadmap
 
-Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with two agents, Claude Code and Codex, and one voice, OpenAI Realtime, a plug-in in `voices/` like the agents are in `executors/` (its contract, in [docs/protocol.md](docs/protocol.md), is provisional until a second voice exists). Next, in order:
+Lookma is built to swap both ends: the agent that does the work, and the voice you talk to. Today it ships with two agents, Claude Code and Codex, and one voice, OpenAI Realtime (the voice contract is provisional until a second voice exists). Next, in order:
 
 1. **Gemini Live** as a second voice.
 2. **An offline voice**: on-device speech recognition and the system voice. Free, and nothing leaves your Mac.
 3. **Drag and drop, and right-click menus** for the hands.
 4. **Push-to-talk and an on-device “Hey Lookma” wake word**, as options.
 
-Adapters for other agents (Gemini CLI, Aider, OpenCode, …) are very welcome. See [Swapping the executor](#swapping-the-executor) and [CONTRIBUTING.md](CONTRIBUTING.md).
+Adapters for other agents (Gemini CLI, Aider, OpenCode, …) and other voices are very welcome. See [Swap the agent, swap the voice](#swap-the-agent-swap-the-voice) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributing
 

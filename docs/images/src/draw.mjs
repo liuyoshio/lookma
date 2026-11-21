@@ -495,9 +495,105 @@ function handsPipeline(c) {
     body)
 }
 
+// ------------------------------------------------------------------ 6. the two plug-in seams
+
+function plugIns(c) {
+  const mono = (x, y, s, o = {}) => text(x, y, s, { family: MONO, ...o })
+  const sub = (x, y, w, h, file, where, lines) =>
+    box(c, x, y, w, h, { rx: 12, fill: c.sunk }) +
+    mono(x + 16, y + 26, file, { size: 14.5, weight: 700, fill: c.ink }) +
+    text(x + w - 16, y + 26, where, { size: 12.5, anchor: 'end', fill: c.muted }) +
+    lines.map(([s, o], i) => text(x + 16, y + 50 + i * 21, s, { size: 13, fill: c.ink2, ...o })).join('')
+  // A plug-in folder: dashed coral, because it is the part you swap.
+  const folder = (x, name) =>
+    box(c, x, 204, 320, 270, { stroke: c.coral, sw: 1.6, dash: '6 4' }) +
+    mono(x + 16, 230, name, { size: 14, weight: 700, fill: c.coralText }) +
+    chip(c, x + 304 - 112, 213, 'manifest.mjs', { w: 112 })
+  const terminal = (x, y) => rect(x, y, 28, 22, { rx: 5, fill: 'none', stroke: c.muted, strokeWidth: 1.8 }) +
+    pathEl(`M${x + 6} ${y + 7}l5 4-5 4M${x + 14} ${y + 16}h7`, { fill: 'none', stroke: c.muted, strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' })
+  const cloudGlyph = (x, y) => pathEl(`M${x + 7} ${y + 18}h15a6 6 0 0 0 .5-12a8 8 0 0 0-15.4 1.8a5.2 5.2 0 0 0-.1 10.2z`, { fill: 'none', stroke: c.muted, strokeWidth: 1.8, strokeLinejoin: 'round' })
+  const code = { family: MONO, size: 12.5, fill: c.ink }
+  const small = { size: 12.5, anchor: 'middle', fill: c.muted }
+
+  const body = [
+    // what you pick
+    text(50, 42, 'Swap the voice', { size: 17, weight: 700, fill: c.ink }),
+    mono(50, 64, 'LOOKMA_VOICE=openai | off', { size: 12.5, fill: c.muted }),
+    text(950, 42, 'Swap the agent', { size: 17, weight: 700, fill: c.ink, anchor: 'end' }),
+    mono(950, 64, 'LOOKMA_EXECUTOR=claude | codex', { size: 12.5, fill: c.muted, anchor: 'end' }),
+    // the services behind the plug-ins
+    box(c, 50, 84, 320, 80, { shadow: true }),
+    cloudGlyph(66, 104),
+    text(104, 116, 'OpenAI Realtime', { size: 16, weight: 700, fill: c.ink }),
+    text(104, 139, 'Gemini Live and offline: planned', { size: 13, fill: c.muted }),
+    box(c, 630, 84, 320, 80, { shadow: true }),
+    terminal(646, 104),
+    text(686, 116, 'Claude Code · Codex', { size: 16, weight: 700, fill: c.ink }),
+    text(686, 139, 'or any agent, with an adapter', { size: 13, fill: c.muted }),
+    arrow(c, 210, 168, 210, 200, { both: true, dash: '5 4' }),
+    text(222, 189, 'audio and events', { size: 12.5, fill: c.muted }),
+    arrow(c, 790, 168, 790, 200, { both: true }),
+    text(778, 189, 'its own protocol', { size: 12.5, fill: c.muted, anchor: 'end' }),
+    // the voice plug-in
+    folder(50, 'voices/<name>/'),
+    sub(66, 248, 288, 98, 'page.js', 'in the overlay', [
+      ['connect(grant, io)', code],
+      ['↑ turn, response and audio events'],
+      ['↓ create · tell · drop · output'],
+    ]),
+    sub(66, 372, 288, 88, 'mint.mjs', 'in the core', [
+      ['mint(ctx) → a short-lived grant'],
+      ['the real key never leaves the core', { fill: c.muted }],
+    ]),
+    // the agent plug-in
+    folder(630, 'executors/<name>/'),
+    sub(646, 248, 288, 212, 'index.mjs', 'in the core', [
+      ['create(ctx)', code],
+      ['↓ start · prompt · interrupt · close'],
+      ['↑ turnStart · turnEnd · step · task · down', { size: 12.5 }],
+      ['ctx.ask(): a card for you'],
+      ['ctx.tools.mcp(): say and the hands'],
+    ]),
+    text(662, 444, 'readiness, stop and restart: the host’s', { size: 12.5, fill: c.muted }),
+    // Lookma, the same whatever is plugged in
+    box(c, 410, 84, 180, 390, { rx: 16, stroke: c.coral, sw: 2, shadow: true }),
+    appIcon(426, 100, 26),
+    text(460, 119, 'Lookma', { size: 16, weight: 700, fill: c.ink }),
+    text(426, 152, 'the same for every', { size: 13.5, fill: c.ink2 }),
+    text(426, 171, 'voice and agent', { size: 13.5, fill: c.ink2 }),
+    box(c, 424, 248, 152, 98, { rx: 12, fill: c.sunk }),
+    text(440, 274, 'Overlay', { size: 16, weight: 700, fill: c.ink }),
+    text(440, 298, 'the floor decides', { size: 13, fill: c.ink2 }),
+    text(440, 317, 'who speaks', { size: 13, fill: c.ink2 }),
+    mono(440, 336, 'session.js', { size: 12, fill: c.muted }),
+    box(c, 424, 372, 152, 88, { rx: 12, fill: c.sunk }),
+    text(440, 398, 'Core', { size: 16, weight: 700, fill: c.ink }),
+    text(440, 422, 'turn · cards · hands', { size: 13, fill: c.ink2 }),
+    text(440, 443, 'hosts the plug-ins', { size: 13, fill: c.ink2 }),
+    arrow(c, 500, 349, 500, 369, { both: true }),
+    // the seams
+    arrow(c, 358, 282, 420, 282),
+    text(389, 274, 'events', small),
+    arrow(c, 420, 312, 358, 312),
+    text(389, 330, 'effects', small),
+    arrow(c, 358, 416, 420, 416, { both: true }),
+    text(389, 408, 'grant', small),
+    arrow(c, 580, 400, 642, 400),
+    text(611, 392, 'prompts', small),
+    arrow(c, 642, 430, 580, 430),
+    text(611, 448, 'events', small),
+    // the agent's tools come back to the core, whatever the agent
+    curve(c, 'M950 124H968Q980 124 980 136V492Q980 504 968 504H512Q500 504 500 492V464', { color: c.coral, width: 2 }),
+    text(968, 496, 'tools bridge: the agent calls say and the hands, which the core runs', { size: 12.5, anchor: 'end', fill: c.coralText }),
+  ].join('\n')
+  return svg(c, 1000, 528, 'The two plug-ins: a voice and an agent',
+    'Lookma in the middle, the same whatever is plugged in: the overlay, whose floor decides who speaks, and the core, which hosts the plug-ins. On the left, the voice plug-in in voices/<name>/, chosen with LOOKMA_VOICE: page.js in the overlay connects to the voice service, emits voice events and carries out the floor\'s four effects, and mint.mjs in the core mints a short-lived grant, so the real key stays in the core. On the right, the agent plug-in in executors/<name>/, chosen with LOOKMA_EXECUTOR: index.mjs in the core drives the agent with start, prompt, interrupt and close, and reports turnStart, turnEnd, step, task and down. The agent calls say and the hands through the tools bridge, which the core runs.',
+    body)
+}
+
 // ------------------------------------------------------------------ write
 
-const DIAGRAMS = { 'overlay-anatomy': overlayAnatomy, architecture, approvals, 'consent-chart': consentChart, 'hands-pipeline': handsPipeline }
+const DIAGRAMS = { 'overlay-anatomy': overlayAnatomy, architecture, approvals, 'consent-chart': consentChart, 'hands-pipeline': handsPipeline, 'plug-ins': plugIns }
 for (const [name, draw] of Object.entries(DIAGRAMS)) {
   for (const [theme, c] of Object.entries(THEMES)) {
     const file = path.join(OUT, `${name}${theme === 'dark' ? '-dark' : ''}.svg`)

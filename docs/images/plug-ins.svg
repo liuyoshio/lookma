@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 528" width="1000" height="528" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif">
+<title id="t">The two plug-ins: a voice and an agent</title>
+<desc id="d">Lookma in the middle, the same whatever is plugged in: the overlay, whose floor decides who speaks, and the core, which hosts the plug-ins. On the left, the voice plug-in in voices/&lt;name&gt;/, chosen with LOOKMA_VOICE: page.js in the overlay connects to the voice service, emits voice events and carries out the floor's four effects, and mint.mjs in the core mints a short-lived grant, so the real key stays in the core. On the right, the agent plug-in in executors/&lt;name&gt;/, chosen with LOOKMA_EXECUTOR: index.mjs in the core drives the agent with start, prompt, interrupt and close, and reports turnStart, turnEnd, step, task and down. The agent calls say and the hands through the tools bridge, which the core runs.</desc>
+<defs><marker id="ah0" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1.2 1.2L8.8 5L1.2 8.8Z" fill="#9A918A"/></marker><marker id="ah1" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M1.2 1.2L8.8 5L1.2 8.8Z" fill="#FF805C"/></marker>
+<filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#000" flood-opacity=".28"/></filter>
+<filter id="soft" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity=".10"/></filter>
+<filter id="glow" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="5"/></filter>
+<filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22"/></filter>
+</defs>
+<rect x="0" y="0" width="1000" height="528" rx="18" fill="#F7F2EC"/>
+<text x="50" y="42" font-size="17" font-weight="700" fill="#1B1B1F">Swap the voice</text>
+<text x="50" y="64" font-size="12.5" fill="#857D77" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">LOOKMA_VOICE=openai | off</text>
+<text x="950" y="42" font-size="17" font-weight="700" fill="#1B1B1F" text-anchor="end">Swap the agent</text>
+<text x="950" y="64" font-size="12.5" fill="#857D77" text-anchor="end" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">LOOKMA_EXECUTOR=claude | codex</text>
+<rect x="50" y="84" width="320" height="80" rx="14" fill="#FFFFFF" stroke="#E3D9CF" stroke-width="1.2" filter="url(#soft)"/>
+<path d="M73 122h15a6 6 0 0 0 .5-12a8 8 0 0 0-15.4 1.8a5.2 5.2 0 0 0-.1 10.2z" fill="none" stroke="#857D77" stroke-width="1.8" stroke-linejoin="round"/>
+<text x="104" y="116" font-size="16" font-weight="700" fill="#1B1B1F">OpenAI Realtime</text>
+<text x="104" y="139" font-size="13" fill="#857D77">Gemini Live and offline: planned</text>
+<rect x="630" y="84" width="320" height="80" rx="14" fill="#FFFFFF" stroke="#E3D9CF" stroke-width="1.2" filter="url(#soft)"/>
+<rect x="646" y="104" width="28" height="22" rx="5" fill="none" stroke="#857D77" stroke-width="1.8"/><path d="M652 111l5 4-5 4M660 120h7" fill="none" stroke="#857D77" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="686" y="116" font-size="16" font-weight="700" fill="#1B1B1F">Claude Code · Codex</text>
+<text x="686" y="139" font-size="13" fill="#857D77">or any agent, with an adapter</text>
+<path d="M210 168L210 200" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-dasharray="5 4" stroke-linecap="round" marker-end="url(#ah0)" marker-start="url(#ah0)"/>
+<text x="222" y="189" font-size="12.5" fill="#857D77">audio and events</text>
+<path d="M790 168L790 200" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)" marker-start="url(#ah0)"/>
+<text x="778" y="189" font-size="12.5" fill="#857D77" text-anchor="end">its own protocol</text>
+<rect x="50" y="204" width="320" height="270" rx="14" fill="#FFFFFF" stroke="#FF805C" stroke-width="1.6" stroke-dasharray="6 4"/><text x="66" y="230" font-size="14" font-weight="700" fill="#C94A24" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">voices/&lt;name&gt;/</text><rect x="242" y="213" width="112" height="24" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1"/><text x="298" y="229.5" font-size="12.5" fill="#4F4A46" text-anchor="middle">manifest.mjs</text>
+<rect x="66" y="248" width="288" height="98" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1.2"/><text x="82" y="274" font-size="14.5" font-weight="700" fill="#1B1B1F" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">page.js</text><text x="338" y="274" font-size="12.5" fill="#857D77" text-anchor="end">in the overlay</text><text x="82" y="298" font-size="12.5" fill="#1B1B1F" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">connect(grant, io)</text><text x="82" y="319" font-size="13" fill="#4F4A46">↑ turn, response and audio events</text><text x="82" y="340" font-size="13" fill="#4F4A46">↓ create · tell · drop · output</text>
+<rect x="66" y="372" width="288" height="88" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1.2"/><text x="82" y="398" font-size="14.5" font-weight="700" fill="#1B1B1F" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">mint.mjs</text><text x="338" y="398" font-size="12.5" fill="#857D77" text-anchor="end">in the core</text><text x="82" y="422" font-size="13" fill="#4F4A46">mint(ctx) → a short-lived grant</text><text x="82" y="443" font-size="13" fill="#857D77">the real key never leaves the core</text>
+<rect x="630" y="204" width="320" height="270" rx="14" fill="#FFFFFF" stroke="#FF805C" stroke-width="1.6" stroke-dasharray="6 4"/><text x="646" y="230" font-size="14" font-weight="700" fill="#C94A24" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">executors/&lt;name&gt;/</text><rect x="822" y="213" width="112" height="24" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1"/><text x="878" y="229.5" font-size="12.5" fill="#4F4A46" text-anchor="middle">manifest.mjs</text>
+<rect x="646" y="248" width="288" height="212" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1.2"/><text x="662" y="274" font-size="14.5" font-weight="700" fill="#1B1B1F" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">index.mjs</text><text x="918" y="274" font-size="12.5" fill="#857D77" text-anchor="end">in the core</text><text x="662" y="298" font-size="12.5" fill="#1B1B1F" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">create(ctx)</text><text x="662" y="319" font-size="13" fill="#4F4A46">↓ start · prompt · interrupt · close</text><text x="662" y="340" font-size="12.5" fill="#4F4A46">↑ turnStart · turnEnd · step · task · down</text><text x="662" y="361" font-size="13" fill="#4F4A46">ctx.ask(): a card for you</text><text x="662" y="382" font-size="13" fill="#4F4A46">ctx.tools.mcp(): say and the hands</text>
+<text x="662" y="444" font-size="12.5" fill="#857D77">readiness, stop and restart: the host’s</text>
+<rect x="410" y="84" width="180" height="390" rx="16" fill="#FFFFFF" stroke="#FF805C" stroke-width="2" filter="url(#soft)"/>
+<svg x="426" y="100" width="26" height="26" viewBox="0 0 32 32">
+
+<defs>
+<linearGradient id="ai-bg" x1="0" y1="2" x2="0" y2="30" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2C2B31"/><stop offset="1" stop-color="#18181C"/></linearGradient>
+<clipPath id="ai-tile"><path d="M11.6 2L20.4 2C23.1 2 24.5 2 26 2.5C27.7 3.1 28.9 4.3 29.5 6C30 7.5 30 8.9 30 11.6L30 20.4C30 23.1 30 24.5 29.5 26C28.9 27.7 27.7 28.9 26 29.5C24.5 30 23.1 30 20.4 30L11.6 30C8.9 30 7.5 30 6 29.5C4.3 28.9 3.1 27.7 2.5 26C2 24.5 2 23.1 2 20.4L2 11.6C2 8.9 2 7.5 2.5 6C3.1 4.3 4.3 3.1 6 2.5C7.5 2 8.9 2 11.6 2Z"/></clipPath>
+</defs>
+<path d="M11.6 2L20.4 2C23.1 2 24.5 2 26 2.5C27.7 3.1 28.9 4.3 29.5 6C30 7.5 30 8.9 30 11.6L30 20.4C30 23.1 30 24.5 29.5 26C28.9 27.7 27.7 28.9 26 29.5C24.5 30 23.1 30 20.4 30L11.6 30C8.9 30 7.5 30 6 29.5C4.3 28.9 3.1 27.7 2.5 26C2 24.5 2 23.1 2 20.4L2 11.6C2 8.9 2 7.5 2.5 6C3.1 4.3 4.3 3.1 6 2.5C7.5 2 8.9 2 11.6 2Z" fill="url(#ai-bg)"/>
+<g clip-path="url(#ai-tile)">
+<g transform="rotate(12 14.3 21.6)">
+  <path d="M0.6 34.2L5.5 18.8A9.2 9.2 0 0 1 23.5 20.8L24.9 36.9A12.5 12.5 0 1 1 0.6 34.2Z" fill="#FF805C"/>
+  <circle cx="13" cy="23.8" r="1.8" fill="#FFC6B2"/>
+  <circle cx="15.7" cy="23.8" r="1.8" fill="#FFC6B2"/>
+  <ellipse cx="14.3" cy="22.3" rx="1.2" ry="0.9" fill="#1B1B1F"/>
+  <circle cx="10.2" cy="20.4" r="1.7" fill="#1B1B1F"/>
+  <circle cx="18.4" cy="20.4" r="1.7" fill="#1B1B1F"/>
+  <circle cx="10.9" cy="19.7" r="0.6" fill="#FFFFFF"/>
+  <circle cx="19" cy="19.7" r="0.6" fill="#FFFFFF"/>
+</g>
+<circle cx="19.6" cy="7" r="3.8" fill="none" stroke="#FF805C" stroke-width="2.5"/>
+</g>
+</svg>
+<text x="460" y="119" font-size="16" font-weight="700" fill="#1B1B1F">Lookma</text>
+<text x="426" y="152" font-size="13.5" fill="#4F4A46">the same for every</text>
+<text x="426" y="171" font-size="13.5" fill="#4F4A46">voice and agent</text>
+<rect x="424" y="248" width="152" height="98" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1.2"/>
+<text x="440" y="274" font-size="16" font-weight="700" fill="#1B1B1F">Overlay</text>
+<text x="440" y="298" font-size="13" fill="#4F4A46">the floor decides</text>
+<text x="440" y="317" font-size="13" fill="#4F4A46">who speaks</text>
+<text x="440" y="336" font-size="12" fill="#857D77" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace">session.js</text>
+<rect x="424" y="372" width="152" height="88" rx="12" fill="#FBF8F4" stroke="#E3D9CF" stroke-width="1.2"/>
+<text x="440" y="398" font-size="16" font-weight="700" fill="#1B1B1F">Core</text>
+<text x="440" y="422" font-size="13" fill="#4F4A46">turn · cards · hands</text>
+<text x="440" y="443" font-size="13" fill="#4F4A46">hosts the plug-ins</text>
+<path d="M500 349L500 369" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)" marker-start="url(#ah0)"/>
+<path d="M358 282L420 282" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)"/>
+<text x="389" y="274" font-size="12.5" fill="#857D77" text-anchor="middle">events</text>
+<path d="M420 312L358 312" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)"/>
+<text x="389" y="330" font-size="12.5" fill="#857D77" text-anchor="middle">effects</text>
+<path d="M358 416L420 416" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)" marker-start="url(#ah0)"/>
+<text x="389" y="408" font-size="12.5" fill="#857D77" text-anchor="middle">grant</text>
+<path d="M580 400L642 400" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)"/>
+<text x="611" y="392" font-size="12.5" fill="#857D77" text-anchor="middle">prompts</text>
+<path d="M642 430L580 430" fill="none" stroke="#9A918A" stroke-width="1.6" stroke-linecap="round" marker-end="url(#ah0)"/>
+<text x="611" y="448" font-size="12.5" fill="#857D77" text-anchor="middle">events</text>
+<path d="M950 124H968Q980 124 980 136V492Q980 504 968 504H512Q500 504 500 492V464" fill="none" stroke="#FF805C" stroke-width="2" stroke-linecap="round" marker-end="url(#ah1)"/>
+<text x="968" y="496" font-size="12.5" fill="#C94A24" text-anchor="end">tools bridge: the agent calls say and the hands, which the core runs</text>
+</svg>

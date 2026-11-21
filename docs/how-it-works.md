@@ -27,11 +27,27 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
 | Launcher | `bin/lookma`, `core/cli.mjs` | `bin/lookma` only finds Node and runs `core/cli.mjs`, which checks dependencies, builds the app when its sources changed (`core/app-build.mjs`), and starts the core. `lookma doctor` checks dependencies and permissions. |
 
+## Two plug-ins
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/plug-ins-dark.svg">
+  <img src="images/plug-ins.svg" width="100%" alt="Lookma in the middle, the same whatever is plugged in: the overlay, whose floor decides who speaks, and the core, which hosts the plug-ins. On the left, the voice plug-in in voices/<name>/, chosen with LOOKMA_VOICE: page.js in the overlay connects to the voice service, emits voice events and carries out the floor's four effects, and mint.mjs in the core mints a short-lived grant. On the right, the agent plug-in in executors/<name>/, chosen with LOOKMA_EXECUTOR: index.mjs drives the agent with start, prompt, interrupt and close, and reports turnStart, turnEnd, step, task and down. The agent calls say and the hands through the tools bridge, which the core runs.">
+</picture>
+
+Both ends of Lookma can be swapped: the agent that does the work and the voice you talk to. Each is one folder with a `manifest.mjs` that says what it needs, behind a small contract, and a host in the core is the only code that loads it. Nothing else knows which one is plugged in.
+
+- **The agent** (`executors/<name>/`, `LOOKMA_EXECUTOR`) is a driver for one agent session. Prompts and an interrupt go down; the agent's activity comes up as five events. The agent gets `say` and the hands from Lookma's tools bridge, so every step on screen still goes through the core. The executor host owns readiness, the order of prompts, the stop gate and one restart, the same for every agent.
+- **The voice** (`voices/<name>/`, `LOOKMA_VOICE`) is one voice service in the floor's own terms. Its `page.js` in the overlay turns what the service sends into voice events and carries out four effects; its `mint.mjs` in the core mints a short-lived grant per session, so your API key stays in the core. The floor decides who speaks, and the session keeps the connection healthy, the same for every voice.
+
+What a plug-in cannot do is never declared. An agent without background work simply never reports a task; a voice service that cannot, say, delete a conversation item does the nearest safe thing, and rules the floor already has absorb the difference.
+
+[Writing an executor](writing-an-executor.md) and [Writing a voice](writing-a-voice.md) walk through adding one; [protocol.md](protocol.md#plug-ins) has the exact contracts.
+
 ## A turn, end to end
 
 Say “find three ramen places near the ferry and put them in a new note”:
 
-1. **You talk.** You just say it. The overlay streams your microphone to OpenAI Realtime, and the server hears when you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
+1. **You talk.** You just say it. The overlay streams your microphone to the voice (OpenAI Realtime today), which hears when you stop. The voice starts the work with its `do` tool, keeping your names, numbers and dates; to you it is one assistant doing the work. The capsule shows what it heard and the exact text sent, so a mishearing shows at once.
 2. **The core starts a turn** and hands the text to the executor. If a turn is already running, the text goes in as a correction instead: the agent takes it into the work it is doing.
 3. **The agent works.** Anything on screen goes through the six hands tools. Anything else (files, shell commands, web searches) uses the agent's own tools; the adapter reports each step, which shows up as the capsule's status line.
 4. **Every hands call runs the pipeline** below, one call at a time.
@@ -91,9 +107,9 @@ Each agent asks one request at a time, in a structured form, so a card maps to e
 
 While Lookma runs, voice is on and it is not paused, it listens. You just talk, from the desk or from across the room. With a headset you can talk over the voice to interrupt it. macOS shows its microphone indicator the whole time. Pause from the menu bar, with ⌃⌥P or by saying “pause”, and the microphone is off until you resume.
 
-**One warm session.** The overlay (`overlay/voice.js`) keeps one OpenAI Realtime session connected over WebRTC, with the microphone attached. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_VOICE=off` or no OpenAI key) there is no session and no microphone.
+**One warm session.** The overlay (`overlay/voice.js`) keeps one session of the voice connected, with the microphone attached: with OpenAI Realtime, one WebRTC call. The voice speaks on the same session, so it can tell you something at any time, and it remembers the conversation from one turn to the next. Pausing closes the session; resuming opens a fresh one. With voice off (`LOOKMA_VOICE=off` or no OpenAI key) there is no session and no microphone.
 
-**Turns.** The server finds them: semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the server creates no reply on its own.
+**Turns.** The voice service finds them. OpenAI's uses semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the service never replies on its own, and the overlay's floor asks for every reply.
 
 **No replies to silence or noise.** A microphone that is always on hears the whole room. So the page asks for a reply only when the turn's transcript means something:
 
@@ -110,7 +126,7 @@ The decision is one small pure function, with its own tests. Speech that gets th
 
 **Language.** Set `LOOKMA_VOICE_LANGUAGE` (an ISO code such as `en` or `zh`) and the transcriber is told the language you speak. There is no transcription prompt: it makes the transcriber drop question marks, and the approval check relies on them.
 
-**Health.** If the session closes or fails, the overlay reconnects in the background. Before the Realtime session time limit, it opens a fresh one while nothing is going on, never in the middle of a turn, with its grant (a short-lived key) minted ahead of time. A session that replaces an old one starts knowing what you were just told: the pending cards and the updates and reports of the last 5 minutes, marked as from earlier, with no reply. So “yes, I approve” still answers a card announced on the old session.
+**Health.** If the session closes or fails, the overlay reconnects in the background. Before the service's session time limit, it opens a fresh one while nothing is going on, never in the middle of a turn, with its grant (a short-lived key) minted ahead of time. A session that replaces an old one starts knowing what you were just told: the pending cards and the updates and reports of the last 5 minutes, marked as from earlier, with no reply. So “yes, I approve” still answers a card announced on the old session.
 
 ## Voice consent
 
@@ -179,14 +195,14 @@ How the Codex adapter fills it in:
 
 Besides its own shell, file edits and web search, Codex gets only Lookma's tools: its own home keeps your Codex MCP servers, plugins and settings out, and Lookma turns off its connectors, plugins, computer and browser use, subagents, memories and image generation. Its commands run in the workspace-write sandbox, which may write only in the folders you pass to `lookma` (plus its `work/` folder and tmp), with no network; anything beyond that is a card.
 
-**Adding an executor.** Write `executors/<name>/manifest.mjs` with its title, settings and checks: the settings reach your adapter as `ctx.options`, named `LOOKMA_<NAME>_<KEY>`, and `lookma doctor` and the start run the checks. Then write `executors/<name>/index.mjs` on the contract above, and have your agent spawn the tools bridge from `ctx.tools.mcp()` as one of its MCP servers. Write `executors/<name>/dev/fake-agent.mjs`, a script that speaks your agent's protocol, and `core/dev/check-executors.mjs` runs the same scenarios over your adapter as over the others. Then start with `LOOKMA_EXECUTOR=<name>`.
+**Adding an executor** takes one folder: a manifest, the adapter and a fake agent for the conformance check. [Writing an executor](writing-an-executor.md) walks through it, with a complete minimal adapter.
 
 ## Local only
 
 - The core listens on 127.0.0.1 only.
 - POST bodies must be `application/json`, so another web page cannot send commands with a plain form.
 - WebSocket upgrades are accepted only without an `Origin` header (native clients) or from the core's own origin. Without this check, any web page you visit could drive your computer.
-- Your OpenAI key stays in the core. The overlay gets a short-lived key with the voice's instructions and tools baked in.
+- The voice's API key stays in the core. The overlay gets a short-lived grant: with OpenAI, a key with the voice's instructions and tools baked in.
 
 There are no tokens or accounts beyond that.
 

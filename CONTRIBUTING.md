@@ -73,18 +73,18 @@ Match the code around you. In short:
 - **Tests are plain scripts** that print `PASS` / `FAIL` lines and exit non-zero on a failure. Add checks to the closest existing script.
 - **User-facing text is English.** Anything spoken follows the user's language.
 
-## The protocol and the executor contract
+## The protocol and the plug-in contracts
 
-[docs/protocol.md](docs/protocol.md) is the contract between the core, the app, the overlay and the executor: the WebSockets, the hands pipeline and the [executor contract](docs/protocol.md#executor-contract). If you change how the pieces talk, update it in the same pull request. [docs/how-it-works.md](docs/how-it-works.md) explains the design behind it.
+[docs/protocol.md](docs/protocol.md) is the contract between the core, the app, the overlay and the two plug-ins: the WebSockets, the hands pipeline, the [executor contract](docs/protocol.md#executor-contract) and the [voice provider contract](docs/protocol.md#voice-provider-contract). If you change how the pieces talk, update it in the same pull request. [docs/how-it-works.md](docs/how-it-works.md) explains the design behind it.
 
-## Add an executor adapter
+## Add an agent or a voice
 
-1. Create `executors/<name>/manifest.mjs`: a title, your settings and your checks, as `executors/codex/manifest.mjs` has them. A setting's name is derived (`LOOKMA_<NAME>_<KEY>`), and `lookma --help` and `lookma doctor` list it; the loader, `core/plugins.mjs`, validates the manifest and the values.
-2. Create `executors/<name>/index.mjs` exporting `create(ctx)` and returning `{ start({ dirs }), prompt(text), interrupt(), close() }`, each a promise kept exactly as the [executor contract](docs/protocol.md#executor-contract) says. `ctx.options` are your settings, typed and checked; `ctx.sessionDir` is your folder; give child processes `ctx.env`.
-3. Give the agent `say` and the hands by having it spawn the tools bridge from `ctx.tools.mcp()`. Never touch the screen any other way: the pipeline is what makes every step visible and granted.
-4. Emit `turnStart` / `turnEnd`, `step` (titles from `core/executor/steps.mjs`), `task` and `down`, and ask the user with `ctx.ask`.
-5. Write `executors/<name>/dev/fake-agent.mjs`, a script that speaks your agent's protocol and plays the commands listed at the top of `core/dev/check-executors.mjs`; that check then runs the conformance scenarios over your adapter. Put checks of your adapter's own parts in `executors/<name>/dev/check.mjs`, which `npm test` runs.
-6. Run it with `LOOKMA_EXECUTOR=<name>` or `--agent <name>`, and give it a section in docs/protocol.md like the Codex one.
+Each is one folder, and the core never names it. The guides walk through every step:
+
+- **An agent:** [docs/writing-an-executor.md](docs/writing-an-executor.md). `executors/<name>/` with a `manifest.mjs`, an `index.mjs` on the executor contract, and a `dev/fake-agent.mjs` that `core/dev/check-executors.mjs` runs the conformance scenarios against. Try it with `--agent <name> --voice off`.
+- **A voice:** [docs/writing-a-voice.md](docs/writing-a-voice.md) (provisional until a second voice exists). `voices/<name>/` with a `manifest.mjs`, a `mint.mjs` for the core, a `page.js` for the overlay, and a `dev/fake.mjs` that `overlay/dev/check-voices.mjs` runs the voice against.
+
+Either way: settings are named for you (`LOOKMA_<NAME>_<KEY>`) and listed by `lookma --help` and `lookma doctor`; put them in the README's Configuration table, and give your plug-in a section in docs/protocol.md like the existing ones.
 
 ## Commits and pull requests
 
