@@ -2,9 +2,10 @@
 // A fake app for tests: connects to /ws/app, reports attention and answers the ops of
 // docs/protocol.md with plausible rects and a placeholder PNG. Nothing on the real screen moves.
 //   node core/dev/fake-app.mjs [--port 8791] [--idle 10] [--front Finder]
-// As a module: startFakeApp({ port, idle, front }) → { ops, notices, setIdle, send, front, elementIds, ready, close }
+// As a module: startFakeApp({ port, idle, front }) → { ops, notices, setIdle, send, front, elementIds, failSee, ready, close }
 //   notices: what the core sent besides requests ({ type: 'paused' }, { type: 'quit' })
 //   send(msg): what the menu bar and hotkey send ({ type: 'pause' | 'resume' | 'quit' })
+//   failSee(error): see throws that error from now on; null makes it work again
 import zlib from 'node:zlib'
 import WebSocket from 'ws'
 
@@ -48,8 +49,9 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
   let idleNow = idle
   let frontApp = front
   let nextId = 0
-  let elements = new Map() // id -> { id, role, text, states, rect, app } from the last see
-  let shot = null // { w, h, rect } of the last screenshot
+  let elements = new Map() // id -> { id, role, text, states, rect, app } from the latest see
+  let shot = null // { w, h, rect, app } of the last screenshot
+  let seeError = null
   const scrolledTo = {} // app -> vertical scroll position, 0 to 1
 
   function resolve(args) {
@@ -74,21 +76,26 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
     return { app, rect, point: center(rect), frontmost: app === frontApp, pressable: false }
   }
 
-  // A screenshot only when asked for; every control here is actionable, so one with no text counts as unlabeled.
+  // A screenshot only when asked for, and the last one of this app whenever there is one. An element
+  // listed in the previous see (same app, role and text) keeps its id, as the app's AX match does.
+  // Every control here is actionable, so one with no text counts as unlabeled.
   function see(args) {
+    if (seeError) throw new Error(seeError)
     const app = args.app || frontApp
     const { window, controls } = APPS[app]
     const r = window.rect
+    const before = [...elements.values()]
     elements = new Map()
     controls.forEach(([role, text, states = []], i) => {
-      const id = `e${++nextId}`
+      const id = before.find(e => e.app === app && e.role === role && e.text === text)?.id ?? `e${++nextId}`
       elements.set(id, { id, role, text, states, rect: { x: r.x + 20, y: r.y + 40 + i * 40, w: 200, h: 28 }, app })
     })
     const list = [...elements.values()].map(({ id, role, text, states, rect }) => ({ id, role, text, states, rect }))
-    const res = { app, window, elements: list, cut: null, unlabeled: list.filter(e => !e.text).length }
-    if (!args.screenshot) return res
-    shot = { w: 640, h: 400, rect: r }
-    return { ...res, image: IMAGE, shot }
+    const res = { app, frontmost: frontApp, window, elements: list, cut: null, unlabeled: list.filter(e => !e.text).length }
+    if (args.screenshot) shot = { w: 640, h: 400, rect: r, app }
+    if (shot?.app !== app) return res
+    const held = { ...res, shot: { w: shot.w, h: shot.h, rect: shot.rect } }
+    return args.screenshot ? { ...held, image: IMAGE } : held
   }
 
   const handlers = {
@@ -180,6 +187,9 @@ export function startFakeApp({ port = 8791, idle = 10, front = 'Finder', log = (
       return frontApp
     },
     elementIds: () => [...elements.keys()],
+    failSee(error) {
+      seeError = error
+    },
     close() {
       closed = true
       clearInterval(timer)

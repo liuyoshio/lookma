@@ -58,13 +58,13 @@ Say “find three ramen places near the ferry and put them in a new note”:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/hands-pipeline-dark.svg">
-  <img src="images/hands-pipeline.svg" width="100%" alt="Every hands call (see, click, type, key, scroll, open) runs five steps: resolve, grant, attention, mark and act. If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead.">
+  <img src="images/hands-pipeline.svg" width="100%" alt="Every hands call (see, click, type, key, scroll, open) runs six steps: resolve, grant, attention, mark, act and observe. If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead. Every step returns the app's elements; a screenshot only when asked.">
 </picture>
 
 The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each call carries a `label`, a few words in your language (“Search for ramen”), which the overlay shows at the target. Every call goes through the same steps, in `core/hands.mjs`:
 
 1. **Resolve** the target to an app, a rect and a point:
-   - an element id from the last `see`. Ids stay valid until the next `see`; a stale id is an error.
+   - an element id from the latest list. An id stays valid while its element is listed, so two calls sent from one list both work; an id of an element that is gone is an error.
    - a point in the last screenshot's pixels. The app maps it back to screen points, and refuses it once that window has moved.
    - a Dock icon: opening an app means pressing its Dock icon, as a person would.
    - the app itself, for `see`, `type`, `key`, and `scroll` with no element or point.
@@ -79,8 +79,9 @@ The agent's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Ea
    | `type`, `key`, `scroll`, `open`, and `click` at a point or on an element without an AX press | Waits until you pause for 3 s, or until you say “go ahead”. The tab says it is waiting. |
 
 4. **Mark.** The core sets the focus. The overlay moves the coral ring to the target, hangs the label off it and flies the ghost cursor to the point. Before an action, the core waits about 350 ms so the marks arrive before anything happens. `see` only looks, so it does not wait.
-5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason.
-6. **Return** to the agent. `see` returns a text list of elements (id, role, text, and states such as selected or disabled), headed by the facts that tell the agent whether the list is enough: whether it was cut short, and how many elements have no label. It adds a screenshot only when the call asks for one (`screenshot: true`): for a canvas, a map or unlabeled icons. Every other tool returns one line: what happened and which app is frontmost now.
+5. **Act** through the app. Input that needs the front is posted only when it will land in the target: the point must be on the target's window, and the target must have keyboard focus. Otherwise the step fails with a reason. The app returns once the effect has had time to show (200 ms after the last event for a click, a key or text).
+6. **Observe.** The core lists the app the step resolved and granted. So the agent does not need a `see` after every action: act, read the list, act again. If listing fails after an action, the action is still reported as done. `open` with a URL or a file lists nothing, since the app it opened in has not been granted yet; the agent's next `see` asks.
+7. **Return** to the agent: a line saying what was done, then a text list of elements (id, role, text, and states such as selected or disabled), headed by the facts that tell the agent whether the list is enough: whether it was cut short, how many elements have no label, and whether the last screenshot is older than this action. A screenshot comes only when the call asks for one (`screenshot: true`, on any tool): for a canvas, a map or unlabeled icons.
 
 Screenshots contain only the target app's windows, its menus and popups included. The overlay and anything covering the app are left out. The long edge is at most 1280 px.
 

@@ -1,6 +1,7 @@
 // The hands: the ops of docs/protocol.md ("App ⇄ core"). The core resolves a target before every
 // step; that target is the only app the step may touch. Input that needs the front (click,
 // type, key, scroll) is posted only when it will land in the target. Ops run one at a time.
+// An act op returns once its effect has had time to show, since the core lists the app right after.
 import AppKit
 import ApplicationServices
 
@@ -42,10 +43,10 @@ func runOp(_ op: String, _ args: [String: Any]) async throws -> [String: Any] {
         return try await see(text(args, "app"), screenshot: shot)
     case "resolve": return try resolve(args)
     case "front": return try await front(text(args, "app"))
-    case "press": return try press(args)
+    case "press": return try await press(args)
     case "click": return try await click(point(args["point"]))
-    case "type": return try typeInTarget(args)
-    case "key": return try keyInTarget(args)
+    case "type": return try await typeInTarget(args)
+    case "key": return try await keyInTarget(args)
     case "scroll": return try await scroll(args)
     case "open": return try await open(args)
     default: throw HandsError("Unknown op \(op).")
@@ -121,11 +122,20 @@ private func front(_ name: String?) async throws -> [String: Any] {
 
 // MARK: - acting
 
-private func press(_ args: [String: Any]) throws -> [String: Any] {
+// How long an op waits after its last event before its effect is read (by the core's list, or by
+// scroll's own position read). The same for every op, so no wait stacks on another.
+private let settleNs: UInt64 = 200_000_000
+
+private func settled() async throws -> [String: Any] {
+    try await Task.sleep(nanoseconds: settleNs)
+    return [:]
+}
+
+private func press(_ args: [String: Any]) async throws -> [String: Any] {
     let e = try element(args["element"])
     let err = AXUIElementPerformAction(e.ax, "AXPress" as CFString)
     guard err == .success else { throw HandsError("Pressing \(e.id) failed (AX error \(err.rawValue)); call see again.") }
-    return [:]
+    return try await settled()
 }
 
 /// What is under a point, as the window server routes a click (click-through windows skipped).
@@ -149,7 +159,7 @@ private func click(_ p: CGPoint) async throws -> [String: Any] {
     if let item = dockItems().first(where: { axFrame($0)?.contains(p) ?? false }) { return try await pressDockIcon(item) }
     try checkPointer(p, "click")
     mouseClick(p)
-    return [:]
+    return try await settled()
 }
 
 /// Opening an app is pressing its Dock icon. Done when the app is in front with a window on screen.
@@ -172,22 +182,19 @@ private func checkKeyboard(_ verb: String) throws {
     guard f == pid else { throw HandsError("Did not \(verb): \(appName(f)) has keyboard focus, not \(t.name).") }
 }
 
-private func typeInTarget(_ args: [String: Any]) throws -> [String: Any] {
+private func typeInTarget(_ args: [String: Any]) async throws -> [String: Any] {
     guard let s = args["text"] as? String else { throw HandsError("type needs text.") }
     try checkKeyboard("type")
     typeText(s)
-    return [:]
+    return try await settled()
 }
 
-private func keyInTarget(_ args: [String: Any]) throws -> [String: Any] {
+private func keyInTarget(_ args: [String: Any]) async throws -> [String: Any] {
     guard let combo = text(args, "combo") else { throw HandsError("key needs a combo, e.g. \"cmd+t\".") }
     try checkKeyboard("press \(combo)")
     try pressKey(combo)
-    return [:]
+    return try await settled()
 }
-
-// How long an op waits after its last event before it reads the effect.
-private let settleNs: UInt64 = 200_000_000
 
 // The wheel's signs per direction: positive scrolls toward the top (dy) or the left (dx).
 private let wheel: [String: (dx: Int, dy: Int)] = ["up": (0, 1), "down": (0, -1), "left": (1, 0), "right": (-1, 0)]

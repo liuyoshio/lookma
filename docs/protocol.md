@@ -181,7 +181,7 @@ Core → app requests, and the app's replies:
 
 | op | args | result |
 |---|---|---|
-| `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, window: { title, rect }, elements: [{ id, role, text, states, rect }], cut, unlabeled, image?, shot? }` |
+| `see` | `{ app, screenshot }` (`app` null: frontmost) | `{ app, frontmost, window: { title, rect }, elements: [{ id, role, text, states, rect }], cut, unlabeled, shot?, image? }` |
 | `resolve` | `{ element } \| { point:[x,y] } \| { dock: appName } \| { app }` | `{ app, rect, point, frontmost, pressable }` |
 | `front` | `{ app }` | `{}` (best effort: the ops that post input check the front themselves) |
 | `press` | `{ element }` | AX press: `{}` |
@@ -191,9 +191,11 @@ Core → app requests, and the app's replies:
 | `scroll` | `{ point, direction, pages }` | `{ pixels, position, moved }` |
 | `open` | `{ url } \| { path }` | `{ app }` |
 
-Element ids come from the last `see` and stay valid until the next one. A stale id is an error: "call see again".
+An act op (`press`, `click`, `type`, `key`, `scroll`, `open`) returns once its effect has had time to show, because the core lists the app right after it: `press`, `click`, `type` and `key` 200 ms after their last event, `scroll` once it has read its scroll bar again, `open` and a Dock `click` once the app has a window in front. The core adds no wait of its own.
 
-`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. `states` holds only what is set, from `disabled`, `selected` and `focused`. `cut` says why the walk stopped early (`'elements'` at 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) and `shot: { w, h, rect }` come only with `screenshot: true`. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
+**An id names the same element for as long as that element is listed.** Each `see` keeps the id of every element it finds again (the same AX element, matched with `CFEqual`), gives the others new ids, and drops the ones it did not find. So two calls sent from one list both work, and an id of an element that is no longer listed is an error: "call see again".
+
+`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. `frontmost` names the app with keyboard focus. `states` holds only what is set, from `disabled`, `selected` and `focused`. `cut` says why the walk stopped early (`'elements'` at 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) comes only with `screenshot: true`. `shot: { w, h, rect }` describes the last screenshot of this app, whenever there is one: with no `image`, it is older than this list. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
 
 A `point` is in the pixels of the last screenshot taken, which a `see` without one does not replace. `resolve { point }` refuses it when there is none, or when the window it was taken of has moved or closed since.
 
@@ -201,7 +203,7 @@ A `point` is in the pixels of the last screenshot taken, which a `see` without o
 
 ## The hands pipeline (core, one function, one step at a time)
 
-The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language. Every call runs the same steps:
+The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`. Each takes a `label`, a short description of the step in the user's language, and `screenshot` (default false), which asks for a screenshot with the step's list. Every call runs the same steps:
 
 1. **Resolve** the target to `{ app, rect, point }`: an element, a screenshot point, a Dock item (`open` an app = press its Dock icon), or the app itself (`see`, `type`, `key`).
 2. **Grant.** If the hands have never touched this app, raise a `core` card ("Allow controlling Maps?") and wait. A no ends the step with an error the executor can read. Answers persist in `~/.lookma/apps.json`.
@@ -209,11 +211,16 @@ The executor's GUI tools are `see`, `click`, `type`, `key`, `scroll` and `open`.
    - steps that can act in the background (AX `press`, `see`) proceed with `background: true` and an edge hint;
    - steps that need the front (`type`, `key`, a coordinate `click`, `scroll`, opening an app) wait with `focus.phase = 'waiting'` until the user is idle ≥ 3 s or says go ahead (`control` `go_ahead`).
 4. **Mark.** Set `focus` (label, rect, point). Before an act, wait about 350 ms so the ring and ghost cursor arrive before anything happens. `see` acts on nothing, so it does not wait.
-5. **Act** through the app, then set `focus.phase` to `done` or `failed`.
-6. **Observe** (`see` only): the `see` op, with `screenshot` when the call asks for it.
-7. **Return** to the executor:
-   - `see` → the element list as text, after the facts that say whether it is enough: a screenshot or "No screenshot", a list cut short, how many elements have no label. The image comes only when asked for;
-   - every other tool → one line saying what happened and what is frontmost now. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put.
+5. **Act** through the app, then set `focus.phase` to `done` or `failed`. `see` has no act. The op returns once its effect shows (see the op table).
+6. **Observe**: the `see` op of the app this step resolved and granted, with `screenshot` when the call asks for it. This is the only place the core asks for `see`. Two rules:
+   - **An action that happened is never reported as failed.** If the list fails after the act, for any reason, the result is the action line followed by "Could not list <app>: <error>", and `focus.phase` stays `done`. A failed `see` step is a failed step.
+   - **Only the resolved, granted app is listed.** `open` with a `url` or a `path` resolves nothing, so it lists nothing: its result names the app that opened it ("Call see to list it"), and the agent's `see` of that app takes the grant path.
+7. **Return** to the executor, as text:
+   - the action line, when the step acted: what happened. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put;
+   - the facts that say whether the list is enough: the app, its window and the frontmost app; a screenshot or "No screenshot"; "The last screenshot is from before this action" when there is an older one; a list cut short; how many elements have no label;
+   - the elements, one per line: id, role, text and states.
+
+   The image comes only when the call asked for it.
 
 ## Plug-ins
 
@@ -293,7 +300,7 @@ GUI steps are not in the contract. They arrive as hands tool calls through the t
 - bridge → host: `{ type: 'call', id, tool, args }`;
 - host → bridge: `{ type: 'res', id, ok, result | error }`: `{ text, image? }` (a `say` is `{ text: 'said' }`), or the error the agent reads.
 
-The bridge returns `see`'s screenshot, when it took one, as an MCP image, and an error as a tool error.
+The bridge returns a step's screenshot, when it took one, as an MCP image, and an error as a tool error.
 
 **Conformance.** `core/dev/check-executors.mjs` runs one list of scenarios over every executor with a `dev/fake-agent.mjs`, a script that speaks the agent's protocol in place of its binary: ready, prompts, tools through the bridge, cards allowed, declined and withdrawn, steering, a stop and its stragglers, a correction told just before a stop, a stop that never resolves, the agent dying, and `close`.
 

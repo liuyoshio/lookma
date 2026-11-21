@@ -1,6 +1,7 @@
 // The hands pipeline. Every GUI tool call from the executor runs the same steps, one call at a time:
-//   resolve → grant → attention → mark (~350 ms) → act → return
-// see acts on nothing, so it has no mark wait and only looks:
+//   resolve → grant → attention → mark (~350 ms) → act → observe → return
+// Observe lists the elements of the app the step resolved and granted, so every result carries the
+// list the agent acts on next. see is the step that acts on nothing, so it has no mark wait:
 //   resolve → grant → attention → observe → return
 // See docs/protocol.md, "The hands pipeline". What differs per tool is in the table below; step()
 // runs it and knows no tool by name.
@@ -15,26 +16,24 @@ function need(cond, msg) {
   if (!cond) throw new Error(msg)
 }
 
-// The result of an action: one line saying what was done, and which app is in front after it,
-// since an action can change that.
-const line = done => async (a, r, res, frontmost) => ({ text: `${done(a, r, res)} Frontmost: ${await frontmost()}.` })
-
-// The result of see: the facts the agent needs to judge whether the list is enough (a screenshot or
-// not, a list cut short, elements with no label), then the elements as lines it can pick ids from.
-// Whether to ask for a screenshot is the agent's call; nothing here guesses it.
-function seen(res) {
+// What every step returns: the action line, when it acted, then the facts that say whether the list
+// is enough (a screenshot or not, a list cut short, elements with no label, a screenshot older than
+// this action), then the elements as lines the agent picks ids from. Whether to ask for a screenshot
+// is the agent's call; nothing here guesses it.
+function listing(did, res) {
   const win = res.window.title ? ` — window "${clip(res.window.title, 80)}"` : ''
-  const lines = [
-    `App: ${res.app}${win}.`,
-    res.image ? `Screenshot: ${res.shot.w}x${res.shot.h} px. A point you click is in these pixels.` : 'No screenshot; call see with screenshot: true if what you need is not in this list.',
-  ]
+  const lines = did ? [did] : []
+  lines.push(`App: ${res.app}${win}. Frontmost: ${res.frontmost}.`)
+  if (res.image) lines.push(`Screenshot: ${res.shot.w}x${res.shot.h} px. A point you click is in these pixels.`)
+  else lines.push('No screenshot; add screenshot: true to a call if what you need is not in this list.')
+  if (did && res.shot && !res.image) lines.push('The last screenshot is from before this action.')
   if (res.cut) {
     const why = res.cut === 'elements' ? `List cut at ${res.elements.length} elements` : "List cut: the app's tree is too large to read fully"
-    lines.push(`${why}. Scroll for the rest${res.image ? '' : ', or call see with screenshot: true'}.`)
+    lines.push(`${why}. Scroll for the rest${res.image ? '' : ', or add screenshot: true'}.`)
   }
   if (res.unlabeled) lines.push(`${res.unlabeled} element${res.unlabeled === 1 ? ' has' : 's have'} no label.`)
   lines.push(
-    'Elements (ids are valid until the next see):',
+    'Elements (an id stays valid while its element is listed):',
     ...res.elements.map(e => `${e.id} ${e.role}${e.text ? ` "${clip(e.text, 80)}"` : ''}${e.states.map(s => ` (${s})`).join('')}`),
   )
   return { text: lines.join('\n'), image: res.image }
@@ -59,16 +58,12 @@ function scrolled(a, r, res) {
 //   front(args, r)         whether acting needs the front, so it waits while the user is busy
 //   raise                  false when acting brings the app forward itself (default true)
 //   act(args, r)           the app op and its args; none for see
-//   observe                true when the step returns the app's elements (see), with a screenshot
-//                          when the call says screenshot: true
-//   result(args, r, res, frontmost)  what the executor gets back
+//   did(args, r, res)      the line saying what the act did, from the op's result
 // A tool whose args decide which of two specs runs (open) is a function from the args to the spec.
 const TOOLS = {
   see: {
     target: a => ({ app: a.app || null }),
     front: () => false,
-    observe: true,
-    result: (a, r, res) => seen(res),
   },
   click: {
     target: a => {
@@ -77,7 +72,7 @@ const TOOLS = {
     },
     front: (a, r) => !(has(a.element) && r.pressable),
     act: (a, r) => (has(a.element) && r.pressable ? ['press', { element: a.element }] : ['click', { point: r.point }]),
-    result: line((a, r) => `Clicked ${has(a.element) ? a.element : `at ${a.point.join(',')}`} in ${r.app}.`),
+    did: (a, r) => `Clicked ${has(a.element) ? a.element : `at ${a.point.join(',')}`} in ${r.app}.`,
   },
   type: {
     target: (a, current) => {
@@ -86,7 +81,7 @@ const TOOLS = {
     },
     front: () => true,
     act: a => ['type', { text: a.text }],
-    result: line((a, r) => `Typed ${a.text.length} characters in ${r.app}.`),
+    did: (a, r) => `Typed ${a.text.length} characters in ${r.app}.`,
   },
   key: {
     target: (a, current) => {
@@ -95,7 +90,7 @@ const TOOLS = {
     },
     front: () => true,
     act: a => ['key', { combo: a.combo }],
-    result: line((a, r) => `Pressed ${a.combo} in ${r.app}.`),
+    did: (a, r) => `Pressed ${a.combo} in ${r.app}.`,
   },
   scroll: {
     target: (a, current) => {
@@ -107,7 +102,7 @@ const TOOLS = {
     },
     front: () => true,
     act: (a, r) => ['scroll', { point: r.point, direction: a.direction, pages: a.pages ?? 1 }],
-    result: line(scrolled),
+    did: scrolled,
   },
   open: a => {
     need(has(a.app) || has(a.url) || has(a.path), 'open needs an app, a url or a path.')
@@ -121,13 +116,15 @@ const OPEN_APP = {
   front: () => true,
   raise: false, // pressing the Dock icon brings the app forward
   act: (a, r) => ['click', { point: r.point }],
-  result: line(a => `Opened ${a.app}.`),
+  did: a => `Opened ${a.app}.`,
 }
 const OPEN_ITEM = {
-  target: () => null, // a url or a path: the system opens it in the app it picks
+  // A url or a path: the system opens it in the app it picks. Nothing was resolved or granted, so
+  // nothing is listed; the agent's see of that app takes the grant path.
+  target: () => null,
   front: () => true,
   act: a => ['open', has(a.url) ? { url: a.url } : { path: a.path }],
-  result: line((a, r, res) => `Opened ${a.url || a.path} in ${res.app || 'its app'}.`),
+  did: (a, r, res) => `Opened ${a.url || a.path} in ${res.app}. Call see to list it.`,
 }
 
 // The tools this pipeline runs; core/tools.mjs describes them to the agent.
@@ -151,14 +148,6 @@ export function createHands({ store, app, grants, ask, log }) {
     grants.set(name, allow)
     log('grant', name, allow)
     need(allow, `The user did not allow controlling ${name}.`)
-  }
-
-  async function frontmost() {
-    try {
-      return (await app.request('resolve', { app: null })).app
-    } catch {
-      return 'unknown'
-    }
   }
 
   async function step(tool, args, signal) {
@@ -197,20 +186,28 @@ export function createHands({ store, app, grants, ask, log }) {
 
       // 4. Mark, so the ring and ghost arrive before something happens to the app, and 5. act.
       // A step with no act has nothing to wait for; its ring is drawn all the same.
-      let res
+      let did = null
       if (spec.act) {
         await sleep(MARK_MS, signal)
         setFocus({ phase: 'acting' })
         const [op, opArgs] = spec.act(args, r)
-        res = await app.request(op, opArgs)
+        did = spec.did(args, r, await app.request(op, opArgs)) // the op returns once its effect shows
       }
       setFocus({ phase: 'done' })
 
-      // 6. Observe: the one place the core asks for the see op.
-      if (spec.observe) res = await app.request('see', { app: r.app, screenshot: args.screenshot === true })
-
-      // 7. Return.
-      return await spec.result(args, r, res, frontmost)
+      // 6. Observe, the one place the core asks for the see op, and only of the app this step
+      // resolved and granted. 7. Return.
+      if (!r) return { text: did }
+      const observe = () => app.request('see', { app: r.app, screenshot: args.screenshot === true })
+      if (!did) return listing(null, await observe())
+      // An action that happened is never reported as failed, or the agent would do it again.
+      let res
+      try {
+        res = await observe()
+      } catch (err) {
+        return { text: `${did}\nCould not list ${r.app}: ${err.message}` }
+      }
+      return listing(did, res)
     } catch (err) {
       setFocus({ phase: 'failed' })
       throw err

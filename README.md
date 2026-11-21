@@ -185,7 +185,7 @@ And one agent:
   <img src="docs/images/architecture.svg" width="100%" alt="You talk to the overlay in Lookma.app, which streams your microphone to OpenAI Realtime while it listens. The overlay passes your words to the core on 127.0.0.1. The core prompts Claude Code, the swappable executor, which calls back with hands steps. The core runs each step through the app's hands in your real apps.">
 </picture>
 
-The voice does no work: it passes your exact words to the core, which hands them to the agent, Claude Code or Codex. The agent touches the screen only through six *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act**. Files, shell commands and web searches use the agent's own tools and show up as status lines.
+The voice does no work: it passes your exact words to the core, which hands them to the agent, Claude Code or Codex. The agent touches the screen only through six *hands* tools, so every on-screen step goes through the core: **resolve → grant → attention → mark → act → observe**, and returns the app's elements to the agent. Files, shell commands and web searches use the agent's own tools and show up as status lines.
 
 ### A yes means yes
 

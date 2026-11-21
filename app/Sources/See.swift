@@ -2,8 +2,11 @@
 // screenshot only when the call asks for one. Only elements inside the visible window and inside
 // their scroll area are listed. The result says why the list stopped early (`cut`) and how many
 // actionable elements have no label, so the agent can tell when the list is not enough.
-// Element ids count up across sees, so an id from an older see is caught as stale. The last see's
-// elements, and the last screenshot taken, stay here for the ops that act on them (resolve, press).
+// An id names the same element for as long as it is listed: each see keeps the id of every element
+// it finds again (the same AX element), gives a new one to the rest, and drops what it did not find,
+// so an id of an element that is gone is caught as stale. The core lists after every action, and an
+// agent may send two calls from one list. The latest list's elements, and the last screenshot
+// taken, stay here for the ops that act on them (resolve, press).
 import AppKit
 import ApplicationServices
 
@@ -29,11 +32,16 @@ struct Shot {
     let frame: CGRect
 }
 
-// What the last see found, and the id counter. Owned by the op queue (Link.serve), which runs one
+// What the latest see found, and the id counter. Owned by the op queue (Link.serve), which runs one
 // op at a time, so they need no lock; never touch them from the main thread.
 private var elements: [String: Element] = [:]
 private(set) var lastShot: Shot? = nil
 private var nextId = 0
+
+private func newId() -> String {
+    nextId += 1
+    return "e\(nextId)"
+}
 
 func element(_ raw: Any?) throws -> Element {
     var id = (raw as? String) ?? (raw as? NSNumber)?.stringValue ?? ""
@@ -124,16 +132,16 @@ private func walk(_ e: AXUIElement, depth: Int, clip: CGRect, inside: String?, _
 func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
     guard let app = findApp(name) else { throw notRunning(name) }
     let pid = app.processIdentifier
-    let appName = app.localizedName ?? "app"
+    let appTitle = app.localizedName ?? "app"
     let appEl = AXUIElementCreateApplication(pid)
     // With no screenshot to fall back on, the first list of a web-based app must not be the empty
     // tree it has before it builds one. Once per app per run.
     if enableAX(app) {
         let start = now()
         let built = await until(3.0, { frontWindow(appEl).map(webTreeBuilt) ?? false })
-        log("see \(appName): web tree \(built ? "built" : "still empty") after \(Int((now() - start) * 1000)) ms")
+        log("see \(appTitle): web tree \(built ? "built" : "still empty") after \(Int((now() - start) * 1000)) ms")
     }
-    guard let win = frontWindow(appEl), let focused = axFrame(win) else { throw HandsError("\(appName) has no open window.") }
+    guard let win = frontWindow(appEl), let focused = axFrame(win) else { throw HandsError("\(appTitle) has no open window.") }
 
     // Some apps split one visual window into several (Chrome in full screen puts its toolbar in
     // its own window). Take every window of the app that touches the focused one.
@@ -149,7 +157,7 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
         others.remove(at: i)
     }
     let visible = area.intersection(mainBounds())
-    guard !visible.isNull, visible.width >= 1, visible.height >= 1 else { throw HandsError("\(appName)'s window is not on the main display.") }
+    guard !visible.isNull, visible.width >= 1, visible.height >= 1 else { throw HandsError("\(appTitle)'s window is not on the main display.") }
 
     func walkAll() -> Walk {
         var w = Walk(deadline: now() + walkBudget)
@@ -166,25 +174,31 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
         w = walkAll()
     }
 
-    elements = [:]
+    // The previous list by CFHash, so each element found again is matched with CFEqual cheaply.
+    var before: [CFHashCode: [Element]] = [:]
+    for e in elements.values { before[CFHash(e.ax), default: []].append(e) }
+    var table: [String: Element] = [:]
     var list: [[String: Any]] = []
     for f in w.out {
-        nextId += 1
-        let e = Element(id: "e\(nextId)", ax: f.ax, axRole: f.axRole, role: f.role, text: f.text, rect: f.rect, pid: pid, app: appName)
-        elements[e.id] = e
-        list.append(["id": e.id, "role": e.role, "text": e.text, "states": f.states, "rect": rectJSON(e.rect)])
+        let id = before[CFHash(f.ax)]?.first(where: { table[$0.id] == nil && CFEqual($0.ax, f.ax) })?.id ?? newId()
+        let e = Element(id: id, ax: f.ax, axRole: f.axRole, role: f.role, text: f.text, rect: f.rect, pid: pid, app: appTitle)
+        table[id] = e
+        list.append(["id": id, "role": e.role, "text": e.text, "states": f.states, "rect": rectJSON(e.rect)])
     }
+    elements = table
     var result: [String: Any] = [
-        "app": appName,
+        "app": appTitle,
+        "frontmost": appName(frontPid()),
         "window": ["title": axString(win, "AXTitle") ?? "", "rect": rectJSON(visible)],
         "elements": list,
         "cut": w.cut ?? NSNull(),
         "unlabeled": w.unlabeled,
     ]
     if let (img, rect) = picture {
-        lastShot = Shot(w: img.width, h: img.height, rect: rect, pid: pid, app: appName, window: win, frame: focused)
+        lastShot = Shot(w: img.width, h: img.height, rect: rect, pid: pid, app: appTitle, window: win, frame: focused)
         result["image"] = png(img).base64EncodedString()
-        result["shot"] = ["w": img.width, "h": img.height, "rect": rectJSON(rect)]
     }
+    // The screenshot a point refers to, also when this see did not replace it: then it is older.
+    if let s = lastShot, s.pid == pid { result["shot"] = ["w": s.w, "h": s.h, "rect": rectJSON(s.rect)] }
     return result
 }

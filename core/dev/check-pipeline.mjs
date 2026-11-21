@@ -3,8 +3,9 @@
 // bridge on /ws/executor: server rules, snapshot coalescing, routing (with the outbox's say and
 // report entries, and the executor's cards), the overlay's requests and their acks, unknown
 // messages, the hands pipeline (grant, see with and without a screenshot, busy vs idle, the mark
-// wait only before an act, waiting plus go ahead, stale element, bad args, scroll, open, stop, one
-// step at a time), pause and resume, and quit.
+// wait only before an act, the list after every act and a failed list after a done act, ids kept
+// across lists, two queued clicks from one list, waiting plus go ahead, stale element, bad args,
+// scroll, open, stop, one step at a time), pause and resume, and quit.
 //   node core/dev/check-pipeline.mjs [port]      (default 8792; a scratch data dir is used)
 import fs from 'node:fs'
 import os from 'node:os'
@@ -240,8 +241,8 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const m = app.ops.length
   const c = await settle(hands('click', { label: 'Press New Note', element: id }))
   const at = op => app.ops.slice(m).find(o => o.op === op)?.at
-  check('click on a pressable element uses AX press', c.ok && app.ops.at(-2)?.op === 'press' && /Frontmost: Notes/.test(c.v.text), c.v?.text || c.e?.message)
-  check('idle: ~350 ms between resolve and an act', at('press') - at('resolve') >= 340, `${at('press') - at('resolve')} ms`)
+  check('click on a pressable element uses AX press, then lists the app', c.ok && JSON.stringify(opsSince(m)) === '["resolve","press","see"]' && /^Clicked e\d+ in Notes\.\nApp: Notes — window "Notes"\. Frontmost: Notes\./.test(c.v.text) && c.v.text.includes(`${id} button "New Note"`), c.v?.text || c.e?.message)
+  check('idle: ~350 ms between resolve and an act, and no wait before the list', at('press') - at('resolve') >= 340 && at('see') - at('press') < 100, `${at('press') - at('resolve')} ms, ${at('see') - at('press')} ms`)
 }
 
 {
@@ -277,14 +278,42 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
 }
 
 {
-  // Stale element.
+  // Ids last while their element is listed; an id of an element no longer listed is stale.
   app.setIdle(10)
   await until(() => !last().attention.busy)
   await hands('see', { label: 'Look', app: 'Finder' })
   const old = app.elementIds()[0]
-  await hands('see', { label: 'Look again', app: 'Finder' })
+  const again = await hands('see', { label: 'Look again', app: 'Finder' })
+  check('a list of an unchanged window keeps the ids', again.text.includes(`${old} button "Back"`), again.text)
+  await hands('see', { label: 'Look at Notes', app: 'Notes' })
+  await hands('see', { label: 'Back to Finder', app: 'Finder' })
   const r = await settle(hands('click', { label: 'Press Back', element: old }))
   check('stale element: a readable error that says to call see again', !r.ok && /call see again/.test(r.e.message), r.e?.message)
+}
+
+{
+  // Observe after an act: two clicks sent from one list both land, each followed by its list.
+  await hands('see', { label: 'Look', app: 'Finder' })
+  const [back, , row] = app.elementIds() // a button and a row, both pressable
+  const n = app.ops.length
+  const [a, b] = await Promise.all([settle(hands('click', { label: 'Back', element: back })), settle(hands('click', { label: 'Row', element: row }))])
+  const seq = opsSince(n).join(',')
+  check('two clicks queued from one list both act, with a list after each', a.ok && b.ok && seq === 'resolve,press,see,resolve,press,see' && b.v.text.startsWith(`Clicked ${row} in Finder.`), seq + (a.e?.message || b.e?.message || ''))
+
+  // screenshot: true on an acting tool reaches the list; without it, the list says the screenshot is older.
+  const m = app.ops.length
+  const shot = await settle(hands('click', { label: 'Back', element: back, screenshot: true }))
+  check('screenshot: true on an action returns the list with the image', shot.ok && app.ops.slice(m).find(o => o.op === 'see')?.args.screenshot === true && shot.v.image?.length > 100 && /Screenshot: 640x400 px/.test(shot.v.text), shot.v?.text || shot.e?.message)
+  const plain = await settle(hands('key', { label: 'Escape', combo: 'escape' }))
+  check('an action without screenshot: no image, and the old screenshot is called older', plain.ok && !plain.v.image && /^Pressed escape in Finder\.\n/.test(plain.v.text) && /The last screenshot is from before this action/.test(plain.v.text), plain.v?.text || plain.e?.message)
+
+  // A list that fails after a done act: the action is reported done, never as failed.
+  app.failSee('Finder has no open window.')
+  const done = await settle(hands('click', { label: 'Back', element: back }))
+  check('a failed list after an act: the action line plus "Could not list", not an error', done.ok && done.v.text === `Clicked ${back} in Finder.\nCould not list Finder: Finder has no open window.` && !!(await until(() => last().focus?.phase === 'done' && last().focus.label === 'Back')), done.v?.text || done.e?.message)
+  const looked = await settle(hands('see', { label: 'Look', app: 'Finder' }))
+  check('a failed see is a failed step', !looked.ok && /no open window/.test(looked.e.message), looked.v?.text)
+  app.failSee(null)
 }
 
 {
@@ -313,6 +342,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
     ['scroll', { direction: 'down', pages: 11 }, /scroll pages must be/],
     ['scroll', { direction: 'down', pages: '2' }, /scroll pages must be/],
     ['see', { screenshot: 'yes' }, /screenshot must be true or false/],
+    ['click', { element: 'e1', screenshot: 1 }, /screenshot must be true or false/],
     ['type', {}, /type needs text/],
     ['key', {}, /key needs a combo/],
     ['open', {}, /open needs an app, a url or a path/],
@@ -342,14 +372,18 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const top = await scrolled({ direction: 'up' })
   check('scroll that cannot move: says so', top.r.ok && /Did not move: already at the top in Finder/.test(top.r.v.text), top.r.v?.text || top.r.e?.message)
   const cur = await scrolled({ direction: 'left' })
-  check('scroll with no target: in the app of the last step; no scroll bar, just the pixels', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left' && /Scrolled left 1 page \(810 px\) in Finder\. Frontmost/.test(cur.r.v.text), cur.r.v?.text || JSON.stringify(cur.resolve))
+  check('scroll with no target: in the app of the last step; no scroll bar, just the pixels', cur.r.ok && cur.resolve?.app === 'Finder' && cur.scroll?.direction === 'left' && /^Scrolled left 1 page \(810 px\) in Finder\.\nApp: Finder/.test(cur.r.v.text), cur.r.v?.text || JSON.stringify(cur.resolve))
 }
 
 {
-  // Open a url or a path: nothing to resolve; the system opens it in its app.
+  // Open a url or a path: nothing to resolve; the system opens it in its app, which is not listed
+  // (nor granted) by this step.
+  fs.writeFileSync(config.appsFile, JSON.stringify({ Finder: true, Notes: true }))
   const n = app.ops.length
+  const cards = states.length
   const u = await settle(hands('open', { label: 'Open the site', url: 'https://example.com' }))
-  check('open url: no resolve, the system opens it', u.ok && app.ops[n]?.op === 'open' && app.ops[n].args.url === 'https://example.com' && /Opened https:\/\/example.com in Google Chrome/.test(u.v.text), u.v?.text || u.e?.message)
+  check('open url: no resolve, the system opens it', u.ok && app.ops[n]?.op === 'open' && app.ops[n].args.url === 'https://example.com' && u.v.text === 'Opened https://example.com in Google Chrome. Call see to list it.', u.v?.text || u.e?.message)
+  check('open url: no list and no grant card for the app it opened in', !opsSince(n).includes('see') && !states.slice(cards).some(st => st.cards.length), opsSince(n).join(','))
   const m = app.ops.length
   const p = await settle(hands('open', { label: 'Open the folder', path: '/tmp' }))
   check('open path: the system opens it', p.ok && app.ops[m]?.op === 'open' && app.ops[m].args.path === '/tmp' && /Opened \/tmp in Finder/.test(p.v.text), p.v?.text || p.e?.message)
