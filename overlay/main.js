@@ -30,7 +30,7 @@ const ui = {
   voiceAvailable: voiceOn,
   user: null,      // { text, at, prev }   the user's last line (voice transcript or typed)
   said: null,      // { display, kind, at } the work's last line (the newest outbox entry that is not a card or report)
-  notice: null,    // { display, at }       a request that did not go through, or one the voice lost (shown like a said line)
+  notice: null,    // { display, at }       a request that did not go through, one the voice lost, or no microphone (shown like a said line)
   reports: {},     // taskId -> { display, at }, from the outbox's report entries
   heard: null,     // { cardId, text }      an utterance that did not count as an answer
   answered: {},    // cardId -> { allow, via, at }
@@ -149,7 +149,7 @@ const voice = createVoice({
   onLine(line) {
     if (line.kind === 'user') return heardUser(line.text)
     if (line.kind === 'unheard') ui.heard = { cardId: line.cardId, text: line.text }
-    else ui.notice = { display: NOTICES.missed, at: Date.now() }
+    else ui.notice = { display: NOTICES[line.kind], at: Date.now() }
     schedule()
   },
   log: msg => { console.info(`[lookma] ${msg}`); link.send({ type: 'log', text: msg }) },
@@ -175,9 +175,10 @@ function toggleTyping(show = typed.hidden) {
   postToApp()
 }
 // The on-screen wording of a failed request's error code (other errors are already sentences),
-// and of a request the voice lost.
+// of a request the voice lost, and of a microphone that would not open.
 const NOTICES = {
   missed: 'Sorry, I lost that. Please say it again.',
+  nomic: 'Lookma has no microphone access',
   nothing_running: 'Nothing is running.',
   not_waiting: 'Nothing is waiting for you.',
   'not connected': 'Not connected to the core.',

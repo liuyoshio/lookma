@@ -6,9 +6,10 @@
 // plays voice events in (turns, the replies the page asked for, their audio), as the service
 // would send them, and reads the effects the page sends back. getUserMedia takes 100 ms, as a
 // real one might. Chrome runs muted. Checks:
-//   - at startup one session is connected with the microphone attached; the page sends nothing
-//     but the four effects (turn detection is the provider's); the talk and wake APIs are gone;
-//     the capsule stays hidden while idle
+//   - at startup one session is connected, hearing nothing until the turn source's listen puts
+//     the microphone on it; the page sends no service message but the reply effects (turn
+//     detection is the provider's); the talk and wake APIs are gone; the capsule stays hidden
+//     while idle
 //   - every committed turn gets a reply at once, with tools allowed, transcript or not; its
 //     caption shows when the reply's first item that is not a pass arrives. A pass, or a reply
 //     with nothing in it, drops the turn and the call: no caption, no further reply
@@ -29,11 +30,14 @@
 //     through the butler's control call, once, and its output is the ack; paused closes the
 //     session and stops the microphone; resume reopens both, and the new session is told what
 //     was said earlier
-//   - a dropped session reconnects in the background, with the same microphone, and an
-//     announcement in flight at the drop is told and asked for again on the new session
+//   - a dropped session reconnects in the background; the microphone is closed while no session
+//     is live and a new one is put on the new session; an announcement in flight at the drop is
+//     told and asked for again on the new session
 //   - talking over an announcement: told again after a declined interrupter, settled as cut
 //     after an addressed one
 //   - a receipt lost with the core link is sent again from the reconnect's snapshot
+//   - a microphone that cannot open: the session stays up with nothing on it, and the capsule
+//     says Lookma has no microphone access
 //   - voice off (the core has no voice): no session and no microphone, and what is owed is
 //     settled as shown; a ?voice=0 page: no session, no microphone and no receipts
 // The provider's own checks (what it asks its service for) are its dev/check.mjs.
@@ -64,6 +68,7 @@ async function scenario(name, fake) {
     window.__posts = []
     window.webkit = { messageHandlers: { lookma: { postMessage: m => window.__posts.push(m) } } } // the app
     const grantOff = location.search.includes('fakeGrantOff=1') // a core with no voice
+    const noMic = location.search.includes('fakeNoMic=1') // microphone permission refused
     const fetchBefore = window.fetch.bind(window)
     window.fetch = (url, opts) => {
       if (!String(url).endsWith('/api/voice/grant')) return fetchBefore(url, opts)
@@ -74,6 +79,7 @@ async function scenario(name, fake) {
     navigator.mediaDevices.getUserMedia = async () => {
       window.__voice.gums++
       await new Promise(r => setTimeout(r, 100)) // a real microphone takes a moment to start
+      if (noMic) throw new DOMException('Permission denied', 'NotAllowedError')
       const stream = new AudioContext().createMediaStreamDestination().stream
       window.__voice.mics.push(stream)
       return stream
@@ -209,14 +215,14 @@ async function scenario(name, fake) {
     return { ...out, saidAfter: said?.kind === 'speak' }
   }
 
-  // 1. Startup: one session, connected with the microphone attached.
+  // 1. Startup: one session, connected, then the microphone put on it.
   await page.goto(`${mock.base}?backdrop=1`)
-  await until(() => logged('voice: connected, listening'))
+  await until(() => logged('voice: connected ('))
   await sleep(300)
   let c0 = await lastConnection()
   let m = await mics()
   check((await connections()).length === 1 && c0.tracks.length === 1 && (await voice('gums')) === 1 && m[0]?.id === c0.tracks[0] && m[0]?.state === 'live',
-    `startup: one session, connected with the microphone attached ${JSON.stringify(c0)}`)
+    `startup: one session, connected, the microphone then put on its sender ${JSON.stringify(c0)}`)
   check((await sent()).length === 0, 'startup: nothing sent (nothing owed, nothing to tell a first session)')
   check((await glyph('vg off')) === 'vg off' && (await capHidden()), 'startup: the glyph still and the capsule hidden while idle')
   check((await posted('voice')) === true && (await posted('listening')) === undefined, 'startup: the app is told voice is on (its menu bar icon)')
@@ -233,7 +239,7 @@ async function scenario(name, fake) {
   await emit({ type: 'turn.stopped', id: turn }, { type: 'turn.committed', id: turn })
   let create = await nextCreate(500)
   check(create?.kind === 'turn' && (await glyph('vg thinking')) === 'vg thinking', `a turn: a reply is asked for on commit, before any transcript, tools allowed ${JSON.stringify(create)}`)
-  check(!(await sent()).slice(from).some(e => e.type === 'other'), 'the page sends nothing but the four effects: turn detection is the provider\'s')
+  check(!(await sent()).slice(from).some(e => e.type === 'other'), 'the page sends no service message but the reply effects: turn detection is the provider\'s')
   await transcript(turn, 'Abre Mapas')
   await sleep(300)
   check((await capUser()) !== '“Abre Mapas”', 'a turn: no caption before the reply takes it')
@@ -418,8 +424,9 @@ async function scenario(name, fake) {
   check(tells(seeded).some(e => /^\[Update from your work, from earlier; the user did not say this\] Your report is saved/.test(told(e))) && !seeded.some(isCreate),
     `resumed: the new session is told what was said earlier, with no reply: ${JSON.stringify(seeded.map(told))}`)
 
-  // 9. A dropped session reconnects in the background, with the same microphone; an announcement
-  // in flight at the drop is told and asked for again on the new session.
+  // 9. A dropped session reconnects in the background, with a new microphone (none is open while
+  // no session is live); an announcement in flight at the drop is told and asked for again on
+  // the new session.
   await sleep(800)
   await mock.say({ speech: 'The upload finished.', display: 'Upload finished' })
   await nextCreate()
@@ -432,8 +439,11 @@ async function scenario(name, fake) {
   await until(async () => (await connections()).length === before + 1 && tells((await sent()).slice(from)).length > 0, 5000)
   c0 = await lastConnection()
   seeded = (await sent()).slice(from)
-  check(logged('; reconnecting', since) && !c0.closed && c0.tracks[0] === micBefore && (await voice('gums')) === gumsBefore,
-    `after a drop: reconnected in the background in ${Date.now() - t0} ms, with the same microphone`)
+  await until(async () => (await voice('gums')) === gumsBefore + 1 && (await lastConnection()).tracks.length === 1)
+  c0 = await lastConnection()
+  m = await mics()
+  check(logged('; reconnecting', since) && !c0.closed && c0.tracks[0] === m.at(-1).id && m.at(-1).id !== micBefore && m.every((x, i) => x.state === (i === m.length - 1 ? 'live' : 'ended')),
+    `after a drop: reconnected in the background in ${Date.now() - t0} ms; the old microphone stopped, a new one on the new session`)
   check(tells(seeded).some(e => /from earlier/.test(told(e))) && !seeded.some(isCreate), 'after a drop: the new session is told what was said earlier')
   create = await nextCreate()
   text = await toldBefore(create)
@@ -501,7 +511,17 @@ async function scenario(name, fake) {
   const lostThen = !receipted(id, 'spoken')
   check(lostThen && (await until(() => receipted(id, 'spoken'))) && (await noCreate(300)), `a receipt lost with the link is sent again after the reconnect (${id}), with no new announcement`)
 
-  // 13. Voice off: no session and no microphone, and what is owed is settled as shown.
+  // 13. A microphone that cannot open: the session stays up, nothing on its sender, and a notice.
+  since = page.logs.length
+  await page.goto(`${mock.base}?backdrop=1&fakeNoMic=1`)
+  await until(() => logged('voice: the microphone did not open', since))
+  await sleep(200)
+  c0 = await lastConnection()
+  const saidLine = await page.evaluate(`document.getElementById('cap').textContent`)
+  check(!c0.closed && c0.tracks.length === 0 && (await voice('gums')) === 1 && saidLine.includes('Lookma has no microphone access'),
+    `no microphone: the session stays up with no track, and the capsule says so ${JSON.stringify(c0)}`)
+
+  // 14. Voice off: no session and no microphone, and what is owed is settled as shown.
   await mock.restart({ from: 'idle', hold: true })
   await mock.until('idle')
   since = page.logs.length

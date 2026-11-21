@@ -587,7 +587,7 @@ function plugIns(c) {
     text(968, 496, 'tools bridge: the agent calls say and the hands, which the core runs', { size: 12.5, anchor: 'end', fill: c.coralText }),
   ].join('\n')
   return svg(c, 1000, 528, 'The two plug-ins: a voice and an agent',
-    'Lookma in the middle, the same whatever is plugged in: the overlay, whose floor decides who speaks, and the core, which hosts the plug-ins. On the left, the voice plug-in in voices/<name>/, chosen with LOOKMA_VOICE: page.js in the overlay connects to the voice service, emits voice events and carries out the floor\'s four effects, and mint.mjs in the core mints a short-lived grant, so the real key stays in the core. On the right, the agent plug-in in executors/<name>/, chosen with LOOKMA_EXECUTOR: index.mjs in the core drives the agent with start, prompt, interrupt and close, and reports turnStart, turnEnd, step, task and down. The agent calls say and the hands through the tools bridge, which the core runs.',
+    'Lookma in the middle, the same whatever is plugged in: the overlay, whose floor decides who speaks, and the core, which hosts the plug-ins. On the left, the voice plug-in in voices/<name>/, chosen with LOOKMA_VOICE: page.js in the overlay connects to the voice service, emits voice events and carries out the effects the floor and the turn source ask for, and mint.mjs in the core mints a short-lived grant, so the real key stays in the core. On the right, the agent plug-in in executors/<name>/, chosen with LOOKMA_EXECUTOR: index.mjs in the core drives the agent with start, prompt, interrupt and close, and reports turnStart, turnEnd, step, task and down. The agent calls say and the hands through the tools bridge, which the core runs.',
     body)
 }
 

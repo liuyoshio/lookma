@@ -3,12 +3,12 @@
 // clock. The state handed to step is deep-frozen, so a reducer that mutates its input throws.
 // The cases follow the design's sequences: a normal task, silent and failing tool calls,
 // declines, room and headset interruptions, a dropped session, tools in flight, a rejected create,
-// quiet, receipts, the view, budgets, stacked declines, the token limit, barge-in twice, and
-// deadlines.
+// quiet, receipts, the view, budgets, stacked declines, the token limit, barge-in twice,
+// deadlines, and the turn source's inputs: a dropped turn, the key held, and the key's cut.
 //
 //   node overlay/dev/floor-check.mjs
 
-import { initial, step, view, isIdle, wakeAt, QUIET_MS, MAX_FAILURES, IDLE_MS, SLOT_MS } from '../voice/floor.js'
+import { initial, step, view, isIdle, wakeAt, audible, quietSince, QUIET_MS, MAX_FAILURES, IDLE_MS, SLOT_MS } from '../voice/floor.js'
 
 let failed = 0
 function check(ok, what, detail) {
@@ -479,6 +479,111 @@ for (const [name, output] of [['status', { work: 'ready' }], ['answer', { error:
   k.wait(SLOT_MS)
   fx = k('tick')
   check(!k.state().hearing && types(fx).join() === 'log,tell,create', '19. a stopped turn never committed -> the floor is free again at its bound', fx)
+}
+
+// 20. A dropped turn: begun, never committed, nothing owed
+{
+  const f = floor()
+  f('session.up')
+  f('outbox', { entries: [entry('m1')] })
+  f('turn.started', { id: 'H1' })
+  check(!creates(announce(f)).length, '20. no announcement while the user is heard')
+  f('turn.dropped', { id: 'H1' })
+  const fx = announce(f)
+  check(!f.state().hearing && !owedTurns(f).length && types(fx).join() === 'tell,create', '20. turn.dropped -> hearing cleared, nothing owed, the announcement then starts', fx)
+}
+
+// 21. The key held: no reply starts under the user's finger, also when the cut reply ends first
+{
+  const f = floor()
+  f('session.up')
+  turn(f, 'T1')
+  f('response.started', { response: 'R1' })
+  f('response.item', { response: 'R1', kind: 'message' })
+  f('audio.started', { response: 'R1' })
+  f('user.cut')
+  f('user.hold', { on: true })
+  let fx = [...f('audio.cleared', { response: 'R1' }), ...f('response.done', { response: 'R1', status: 'cancelled', items: [MSG] })]
+  check(!creates(fx).length && owedTurns(f).join() === 'T1' && f.state().turns[0].failures === 1, '21. the cut reply ends while held -> T1 still owed (one failure), no reply starts', fx)
+  f.wait(QUIET_MS * 3)
+  check(!creates(f('tick')).length && wakeAt(f.state()) === null && !isIdle(f.state(), f.at() + IDLE_MS) && quietSince(f.state()) === null, '21. still nothing while held: no wake, not idle, not quiet')
+  f('turn.started', { id: 'H1' })
+  f('user.hold', { on: false })
+  f('turn.stopped', { id: 'H1' })
+  fx = f('turn.committed', { id: 'H1' })
+  check(creates(fx)[0]?.kind === 'turn' && f.state().slot.turns.join() === 'T1,H1', '21. the held turn commits -> one reply covering T1 and H1', fx)
+}
+
+// 22. Tap during an announcement: one cut receipt, never re-announced
+{
+  const f = floor()
+  f('session.up')
+  f('outbox', { entries: [entry('m1')] })
+  announce(f)
+  f('response.started', { response: 'R1' })
+  f('response.item', { response: 'R1', kind: 'message' })
+  f('audio.started', { response: 'R1' })
+  check(audible(f.state()), '22. audible while the announcement plays')
+  f('user.cut')
+  check(!audible(f.state()) && f.state().slot.audio, '22. audible is false once keyed, though its audio has not stopped yet')
+  let fx = [...f('response.done', { response: 'R1', status: 'cancelled', items: [MSG] }), ...f('audio.cleared', { response: 'R1' })]
+  check(receipts(fx).join() === 'cut:m1' && !f.state().slot, '22. cancelled -> delivered m1 cut at once', fx)
+  fx = [...announce(f), ...announce(f), ...f('outbox', { entries: [entry('m1')] }), ...announce(f)]
+  check(!creates(fx).length && receipts(fx).join() === 'cut:m1', '22. never announced again (the receipt is only re-sent while the snapshot lags)', fx)
+
+  const g = floor()
+  g('session.up')
+  g('outbox', { entries: [entry('m1')] })
+  announce(g)
+  reply(g, 'R1', [MSG])
+  g('user.cut')
+  fx = g('audio.cleared', { response: 'R1' })
+  check(receipts(fx).join() === 'cut:m1' && !creates(announce(g)).length, '22. cut while draining -> m1 cut, not repeated', fx)
+}
+
+// 23. Tap during a turn reply before tools: the request is kept, bounded by R6
+{
+  const f = floor()
+  f('session.up')
+  turn(f, 'T1')
+  f('response.started', { response: 'R1' })
+  f('response.item', { response: 'R1', kind: 'message' })
+  f('audio.started', { response: 'R1' })
+  f('user.cut')
+  let fx = f('response.done', { response: 'R1', status: 'cancelled', items: [MSG] })
+  check(owedTurns(f).join() === 'T1' && f.state().turns[0].failures === 1 && creates(fx)[0]?.kind === 'turn', '23. cancelled before acting -> T1 owed with one failure, replied again', fx)
+  f('response.started', { response: 'R2' })
+  f('user.cut')
+  fx = f('response.done', { response: 'R2', status: 'cancelled', items: [] })
+  check(!owedTurns(f).length && lines(fx).some(l => l.kind === 'missed') && !creates(fx).length, '23. a second cut -> "say that again", nothing owed', fx)
+}
+
+// 24. Key cut while draining
+{
+  const f = floor()
+  f('session.up')
+  turn(f, 'T1')
+  reply(f, 'R1', [MSG])
+  f('user.cut')
+  let fx = f('audio.cleared', { response: 'R1' })
+  check(!owedTurns(f).length && !f.state().slot && !creates(fx).length, '24. a heard answer cut while draining -> T1 no longer owed', fx)
+
+  const g = floor()
+  g('session.up')
+  const { eventId } = creates(turn(g, 'T1'))[0]
+  reply(g, 'R1', [MSG, CALL('i1')])
+  g('tools.done', { eventId, results: [result('i1', { ok: false, error: 'boom' })] })
+  g('user.cut')
+  fx = g('audio.cleared', { response: 'R1' })
+  check(owedTurns(g).join() === 'T1' && g.state().turns[0].failures === 0 && creates(fx)[0]?.kind === 'speak', '24. a tool result still unsaid -> T1 owed, no failure, said next', fx)
+
+  const h = floor()
+  h('session.up')
+  turn(h, 'T1')
+  h('response.started', { response: 'R1' })
+  h('audio.started', { response: 'R1' })
+  fx = [...h('audio.cleared', { response: 'R1' }), ...h('response.done', { response: 'R1', status: 'cancelled', items: [MSG] })]
+  check(h.state().slot?.cut.turns.join() === 'T1' && h.state().turns[0].failures === 0, '24. a voice cut (no user.cut) is still judged by the next reply', fx)
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall floor checks passed')

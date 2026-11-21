@@ -16,7 +16,7 @@ const tasksEl = $('tasks')
 
 export function capsuleModel(ui, now, wake) {
   const { state, voice, user } = ui
-  // A notice (a typed request that did not go through, or one the voice lost) shows on the said line, when it is the newer.
+  // A notice (a typed request that did not go through, one the voice lost, or no microphone) shows on the said line, when it is the newer.
   const said = ui.notice && ui.notice.at > (ui.said?.at || 0) ? ui.notice : ui.said
   // Paused: one calm line and how to resume. Not by voice: the mic is off.
   if (state.paused && ui.link !== 'closed') {

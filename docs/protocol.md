@@ -81,15 +81,16 @@ The answer to an overlay request (see Overlay → core) goes to the requesting s
 { type: 'ack', id, ok: true, ... } | { type: 'ack', id, ok: false, error }
 ```
 
-**Voice session** (`overlay/voice.js`, `overlay/voice/`). Always listening, full duplex: while voice is on and not paused, one warm session is connected with the microphone attached.
+**Voice session** (`overlay/voice.js`, `overlay/voice/`). Always listening, full duplex: while voice is on and not paused, one warm session is connected and the microphone is open on it.
 
-- **Warm session.** One connection of the selected voice provider (see Voice provider contract), with the microphone. macOS shows its mic indicator. The voice speaks on the same session, and it keeps the conversation across turns.
-- **Turns** come from the provider, which owns turn detection; the service never replies by itself. The audio setup (`LOOKMA_AUDIO`) sets the rest: in a `room` (the default) speech over the voice does not cut it off; with a `headset` it does (barge-in).
-- **The floor** (`overlay/voice/floor.js`) decides who speaks: one reply at a time, and only once the user's turn is committed. What the voice owes is user turns (a reply) and outbox entries (an announcement). Every committed turn gets a `create` at once; the voice itself decides whether it was meant for it, and a reply that is a `pass` call, or has nothing in it, drops that turn from the conversation. A turn is shown as heard when the reply's first output that is not a `pass` arrives.
+- **Warm session.** One connection of the selected voice provider (see Voice provider contract). It comes up hearing nothing; the turn source then gives it the microphone, and macOS shows its mic indicator. The voice speaks on the same session, and it keeps the conversation across turns.
+- **The turn source** (`overlay/voice/source.js`) decides whether the microphone is open and who ends the turn, one of three: `off` (closed), `auto` (open, the provider finds the turns) or `hold` (open, the key holds the turn). It says so with one level, `listen`, sent to the provider whenever it changes; nothing else opens or closes the microphone. While no session is live it is `off`. The talk mode is `always`: `auto` whenever a session is live.
+- **Turns** come from the provider in `auto`; the service never replies by itself. The audio setup (`LOOKMA_AUDIO`) sets the rest: in a `room` (the default) speech over the voice does not cut it off; with a `headset` it does (barge-in).
+- **The floor** (`overlay/voice/floor.js`) decides who speaks: one reply at a time, and only once the user's turn is committed and nobody holds the key. A reply the key cut is settled at once: its announcements get `cut`, a turn it answered is no longer owed. What the voice owes is user turns (a reply) and outbox entries (an announcement). Every committed turn gets a `create` at once; the voice itself decides whether it was meant for it, and a reply that is a `pass` call, or has nothing in it, drops that turn from the conversation. A turn is shown as heard when the reply's first output that is not a `pass` arrives.
 - **Replies.** A reply to new turns (`create` of kind `turn`) may call tools; every other reply (`speak`: an announcement, or a tool result to say) only speaks. A tool result the user has not heard (an error, `status`, or any result after a reply that said nothing) gets a `speak` reply.
 - **Announcements.** What the outbox owes is announced once nobody has talked for 0.7 s, after any user turn, all of it in one reply, in outbox order, as items marked as updates (`tell`). When its audio has played, the entries get `spoken`. Talked over by a user who then gets an answer (the reply to their turn is not a `pass`), they get `cut`. A reply that fails (cancelled by noise, rejected, cut off by a dropped session, or with no news for 30 s) is tried again; a reply the user's voice cancelled counts as failed only once the reply to their turn turns out not to be an answer, so a request spoken in pieces is never lost. After two failures an entry gets `shown`, and a request the voice never acted on shows "say that again". A receipt is sent again while a snapshot still shows the entry owed, so one lost with the core link heals itself.
 - **Turn records.** Each turn is recorded when its speech starts: its id, `startedAt` (when the event arrived) and `overButler` (whether the voice's audio was playing then). Its transcript is matched by that id when it arrives.
-- **Health.** The session reconnects in the background when it closes or fails, with backoff. While idle (nothing heard, said or owed for 10 s), it is renewed after the grant's `renewAfter`, with its grant minted ahead.
+- **Health.** The session reconnects in the background when it closes or fails, with backoff; the microphone is closed until the new session is live. While idle (nothing heard, said, held or owed for 10 s, and no hands-free conversation open), it is renewed after the grant's `renewAfter`, with its grant minted ahead. A microphone that cannot open (permission refused, no device) leaves the session up, hearing nothing, and the capsule says "Lookma has no microphone access"; the next `listen` tries again.
 - **Context.** Every new session is first told the outbox entries that already have a receipt (the last 5 minutes, and the card on screen), marked "from earlier", with no reply. So "yes, I approve" still answers a card announced on the old session, also after a page reload.
 - **Paused:** no session at all, and no microphone; what is owed stays in the outbox and is announced after resume. **Voice off** (`LOOKMA_VOICE=off`, or a required setting such as `OPENAI_API_KEY` unset): no session, captions only, and everything owed gets `shown`. A page opened with `?voice=0` is a spectator: no session, captions only, and no receipts, so it never settles what the app's voice still owes.
 
@@ -343,7 +344,7 @@ The bridge returns `see`'s screenshot as an MCP image, and an error as a tool er
 
 ## Voice provider contract
 
-**Provisional until a second provider exists.** A voice provider is one conversational voice service in the floor's own terms: it turns the microphone and the speaker into voice events and carries out the floor's four effects. The floor (`overlay/voice/floor.js`) decides who speaks; the provider decides nothing. The session's lifecycle (the grant, the microphone, the connect deadline, reconnecting, renewal, pause) is `overlay/voice/session.js`, the same for every provider. `overlay/voice/contract.js` has the exact shapes and is the only code a provider shares with the overlay. [Writing a voice](writing-a-voice.md) walks through it.
+**Provisional until a second provider exists.** A voice provider is one conversational voice service in the floor's own terms: it turns the microphone and the speaker into voice events and carries out six effects, four from the floor and two from the turn source. The floor (`overlay/voice/floor.js`) decides who speaks and the turn source (`overlay/voice/source.js`) when the microphone is open; the provider decides nothing. The session's lifecycle (the grant, the microphone, the connect deadline, reconnecting, renewal, pause) is `overlay/voice/session.js`, the same for every provider. `overlay/voice/contract.js` has the exact shapes and is the only code a provider shares with the overlay. [Writing a voice](writing-a-voice.md) walks through it.
 
 ```js
 // voices/<name>/mint.mjs, in the core, under the voice host (core/voice/host.mjs)
@@ -351,7 +352,7 @@ export async function mint({ options, instructions, tools, audio, language, log 
   → { credential?, startBy?, renewAfter, label, session? }
 
 // voices/<name>/page.js, a browser module, served at /voices/<name>/page.js (and page/*)
-export function connect(grant, { signal, openMic, onEvent, onClose, log }) → Promise<{ send(effect) }>
+export function connect(grant, { signal, onEvent, onClose, log }) → Promise<{ send(effect) }>
 ```
 
 **The grant.** `POST /api/voice/grant` answers `{ provider, ...mint's result }`.
@@ -360,18 +361,18 @@ export function connect(grant, { signal, openMic, onEvent, onClose, log }) → P
 - `credential` is what the page connects with, never the real key, which stays in the core. `startBy` (epoch ms) is the last moment a connection may start with the grant. `renewAfter` (ms) is when the session is swapped at the next idle moment. `label` is for the log. `session` is the provider's own data for its `page.js`, opaque to everyone else.
 - A `mint` that throws is a 502 (try again later). No voice at all is a 503.
 
-**The connection.** `connect` resolves once the connection is live and rejects in words.
+**The connection.** `connect` resolves once the connection is live, hearing nothing, and rejects in words. No turn begins before the first `listen`.
 
 - `signal` aborts when the session ends the connection, live or still coming up: release everything. From then on the session ignores it.
-- `openMic()` resolves with the session's microphone, kept open across reconnects. A provider whose audio is captured elsewhere never calls it.
 - `onClose(why)`: the connection ended by itself. The session reconnects with backoff.
 - `send(effect)` is called only while the connection is live.
 
-**Events** (provider → floor). The provider owns turn detection.
+**Events** (provider → floor). In `auto` the provider finds the turns; in `hold` the key does.
 
 | Event | Obligation |
 |---|---|
 | `turn.started { id }`, `turn.stopped { id }`, `turn.committed { id }` | One id per user turn, the service's or minted. `started` as soon as the user is audibly speaking |
+| `turn.dropped { id }` | A turn that began and will never be committed: a `listen` ended it first (`off`, or `drop`). A begun turn always ends, committed or dropped |
 | `turn.transcript { id, text \| null }` | Once per committed turn; `null` when there is none |
 | `response.started { response }` | Once per reply begun for a `create`, before its other events |
 | `response.item { response, kind }` | As soon as the reply's first output is known to be a `message`, a `call` or a `pass` |
@@ -380,7 +381,7 @@ export function connect(grant, { signal, openMic, onEvent, onClose, log }) → P
 | `audio.started`, `audio.stopped`, `audio.cleared { response }` | The truth about playback at the speaker: started, played to the end, cut off |
 | `error { eventId, message }` | `eventId` of a rejected `create` when the service can tell, else `null` |
 
-**Effects** (floor → provider), and nothing else:
+**Effects** (floor or turn source → provider), and nothing else:
 
 | Effect | Meaning | When the service lacks it |
 |---|---|---|
@@ -389,6 +390,12 @@ export function connect(grant, { signal, openMic, onEvent, onClose, log }) → P
 | `tell { texts }` | Add texts the butler was told; no reply | Required |
 | `drop { items }` | These items are void: remove them; a call among them still waiting for its result is resolved silently | Resolve the calls only |
 | `output { results: [{ callId, output }] }` | The results of calls; no reply | Required |
+| `listen { how: 'off' }` | Send no audio and begin no turn; from then on the microphone is not yours (the session closes it). A turn begun and not committed ends: `turn.committed`, or `turn.dropped` | Required: not sending audio is always possible |
+| `listen { how: 'auto', mic }` | Hear `mic` and find the turns | Required |
+| `listen { how: 'hold', mic }` | Hear `mic`; the user holds the turn by hand, so do not end it yourself. The next `listen` ends it: committed, or with `drop: true` on that `listen` discarded (`turn.dropped`) | Hear `mic` as `auto`: the service's detector ends the turn |
+| `cut` | The user stopped the butler by hand. Two independent parts: a reply still being made is cancelled (`response.done` `cancelled`); the butler at the speaker is silenced now (`audio.cleared`). Neither applies: nothing | Silencing is required (mute your own player if the service cannot clear). Cancelling: let the reply finish unheard |
+
+`listen` is a level, not an edge: it is sent on every change and once after each connect, so a repeat of the current one changes nothing and a new connection never needs history.
 
 A service that cannot report playback truthfully, or cannot hold its reply until `create`, cannot be a Lookma voice. Per-reply parameters are the provider's own: `mint` puts them in `grant.session`, and `page.js` reads them.
 
@@ -400,7 +407,7 @@ A service that cannot report playback truthfully, or cannot hold its reply until
 
 - **Settings.** `OPENAI_API_KEY` (secret, required), `LOOKMA_OPENAI_MODEL` (default `gpt-realtime-2.1`), `LOOKMA_OPENAI_VOICE` (`marin`), `LOOKMA_OPENAI_TRANSCRIBE_MODEL` (`gpt-4o-transcribe`), `LOOKMA_OPENAI_MAX_TOKENS` (200).
 - **Mint.** `POST /v1/realtime/client_secrets` with the whole session: the butler's instructions and tools (`do`, `status`, `answer`, `control`, `pass`), `tool_choice: 'auto'`, `max_output_tokens`, transcription (with `language` when set, and no prompt: it makes the transcriber drop the question marks the approval check relies on), the voice, and turn detection: `semantic_vad` with `eagerness: 'medium'` and `create_response: false`. `room` sets `interrupt_response: false` and `far_field` noise reduction; `headset` `interrupt_response: true` and `near_field`. The grant: `credential` is the ephemeral key, `startBy` its expiry, `renewAfter` 50 minutes (the session limit is 60), `label` the model, and `session.responses` the parameters of each kind of reply: `turn` none, `speak` `tool_choice: 'none'`.
-- **Connect.** One WebRTC call: the microphone track `sendrecv`, an SDP offer posted to `/v1/realtime/calls` with the key, the butler's voice on an `<audio>` element, and the events on the `oai-events` data channel. It resolves when the channel opens; `onClose` on the channel closing or the connection failing.
+- **Connect.** One WebRTC call: a `sendrecv` audio transceiver with no track, an SDP offer posted to `/v1/realtime/calls` with the key, the butler's voice on an `<audio>` element, and the events on the `oai-events` data channel. It resolves when the channel opens; `onClose` on the channel closing or the connection failing.
 - **Events.** `input_audio_buffer.speech_started`, `speech_stopped`, `committed` → `turn.*` by `item_id`; `conversation.item.input_audio_transcription.completed` (or `.failed`, as `null`) → `turn.transcript`; `response.created` → `response.started`; `response.output_item.added` → `response.item`; `response.output_audio_transcript.delta` and `.done` → `butler.said`; `response.done` → `response.done`; `output_audio_buffer.started`, `stopped`, `cleared` → `audio.*`; `error` → `error`.
-- **Effects.** `create` → `response.create` with `event_id` and that kind's parameters, never instructions; `tell` → a user message `conversation.item.create` per text; `drop` → `conversation.item.delete` per item; `output` → a `function_call_output` `conversation.item.create` per result.
-- **Limits.** None.
+- **Effects.** `create` → `response.create` with `event_id` and that kind's parameters, never instructions; `tell` → a user message `conversation.item.create` per text; `drop` → `conversation.item.delete` per item; `output` → a `function_call_output` `conversation.item.create` per result. `listen` puts the microphone's track on the transceiver's sender, or takes it off for `off` (`replaceTrack`, no renegotiation), so with the microphone closed no audio reaches OpenAI; `off` with a VAD turn begun and not committed sends `input_audio_buffer.clear` and emits `turn.dropped`. `cut` → `response.cancel` while a reply is being made (`response.created` to `response.done`) and `output_audio_buffer.clear` while its audio plays (`output_audio_buffer.started` to `stopped` or `cleared`), each independently.
+- **Limits.** No manual turns yet: `listen hold` is heard as `auto`, so the server's VAD ends the turn.

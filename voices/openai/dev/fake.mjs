@@ -4,7 +4,9 @@
 //   grant         a grant as mint.mjs returns it, minus startBy (the check adds one)
 //   page          a script (a block) run in the page before it loads: it replaces WebRTC and the call's SDP
 //                 POST with a fake peer connection and data channel, and defines window.__fake:
-//                   connections  [{ tracks: [track id], closed }], one per connection the page made
+//                   connections  [{ tracks: [track id | null], closed }], one per connection the page
+//                                made; tracks: every track its audio sender was given, in order
+//                                (replaceTrack; null: taken off). Its sender starts with none
 //                   sent         [{ connection, event }], every client event, in order
 //                   emit(events) plays server events in, on the newest connection
 //                   drop()       the service goes away: the newest connection closes by itself
@@ -30,7 +32,11 @@ export const page = `{
       this.rec = { tracks: [], closed: false }
       window.__fake.connections.push(this.rec)
     }
-    addTrack(track) { this.rec.tracks.push(track.id) }
+    addTransceiver(kind) {
+      const rec = this.rec
+      if (kind !== 'audio') throw new Error('fake: the audio transceiver starts with no track')
+      return { sender: { replaceTrack: async track => { rec.tracks.push(track ? track.id : null) } } }
+    }
     createDataChannel() {
       const i = this.i, rec = this.rec
       const ch = {

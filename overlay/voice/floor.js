@@ -6,21 +6,28 @@
 // asks for a reply (the create effect). The rules:
 //   R1  an obligation is settled only when the user heard a true result: a reply covering it
 //       spoke, its audio finished, and no tool result is still unsaid
-//   R2  a reply starts only while live, with the slot free and the user not speaking (from the
-//       start of a turn until it is committed, at most SLOT_MS after its sound stopped); an
-//       announcement also waits for QUIET_MS of quiet. Turns first, then the outbox
+//   R2  a reply starts only while live, with the slot free and the user neither speaking (from
+//       the start of a turn until it is committed or dropped, at most SLOT_MS after its sound
+//       stopped) nor holding the key; an announcement also waits for QUIET_MS of quiet. Turns
+//       first, then the outbox
 //   R3  a reply covers everything of its kind that is owed
 //   R4  only a reply to turns not yet acted on may use tools (kind 'turn'); every other reply is
 //       speak-only. A turn reply that completes with no speech and no real call declines: its
 //       newest turn was not meant for the butler and leaves the conversation
 //   R5  what the user's voice cut is judged by the next reply. Addressed (a turn reply whose
 //       first output is not a pass): entries get a 'cut' receipt, turns stop being owed. Cut
-//       too: all of it passes on to the reply after. Any other end: one failure (R6)
+//       too: all of it passes on to the reply after. Any other end: one failure (R6). A reply
+//       the key cut (user.cut) is addressed by the key, at once (keyCut below): no user turn
+//       need follow a tap
 //   R6  a failed reply counts against all it covered (a cut only once R5 judged it); after
 //       MAX_FAILURES the obligation is settled on screen ('shown', or a "say that again" line).
 //       Every slot has a deadline
 //   R8  every entry gets exactly one receipt; a receipt is re-sent while a snapshot still shows
 //       the entry pending, so a lost one heals itself
+//
+// Besides the provider's voice events (voice/contract.js) it takes two from the turn source
+// (voice/source.js): user.hold { on }, the key is held, and user.cut, the key cut the butler,
+// sent just before the provider is told to cut.
 //
 // step(state, event) never mutates its input. Events carry `at`; wakeAt(state) says when the
 // reducer next needs a tick, so time is just another event.
@@ -37,6 +44,7 @@ export function initial() {
     voice: 'down',      // 'down' | 'live' | 'off' (off: for good, the core has no voice)
     hearing: null,      // the turn the user is speaking, until it is committed: { id, until }, or null.
                         // until: SLOT_MS after its sound stopped, should the commit never come
+    held: false,        // the user holds the key: the microphone may not be live yet, but the floor is theirs
     quietAt: 0,         // when sound last stopped (user or butler) or the slot was last freed
     seq: 0,             // response.create event ids: lookma_<seq>
     slot: null,         // the one reply (start() below), or null
@@ -69,15 +77,25 @@ export function view(s) {
   return { glyph, hearing: !!s.hearing }
 }
 
-/** Nothing said, heard or owed for IDLE_MS: the session may be swapped now. */
+/** Nothing said, heard, held or owed for IDLE_MS: the session may be swapped now. */
 export function isIdle(s, at) {
-  return s.voice === 'live' && !s.slot && !s.hearing && !s.turns.length && !owed(s).length && at - s.quietAt >= IDLE_MS
+  return s.voice === 'live' && !s.slot && !s.hearing && !s.held && !s.turns.length && !owed(s).length && at - s.quietAt >= IDLE_MS
+}
+
+/** The butler holds the speaker. A reply the key cut is on its way out: every provider silences it. */
+export function audible(s) {
+  return !!s.slot?.audio && !s.slot.keyed
+}
+
+/** Since when nothing has been said, heard, held or owed; null while anything is. */
+export function quietSince(s) {
+  return s.slot || s.hearing || s.held || s.turns.length || owed(s).length ? null : s.quietAt
 }
 
 /** When the reducer next needs a tick: a deadline (the slot's, the hearing's), or the end of the quiet an announcement waits for. */
 export function wakeAt(s) {
   const times = [s.slot?.until, s.hearing?.until]
-  if (s.voice === 'live' && !s.slot && !s.hearing && owed(s).length) times.push(s.quietAt + QUIET_MS)
+  if (s.voice === 'live' && !s.slot && !s.hearing && !s.held && owed(s).length) times.push(s.quietAt + QUIET_MS)
   const due = times.filter(t => t != null)
   return due.length ? Math.min(...due) : null
 }
@@ -129,6 +147,16 @@ function apply(s, ev, fx) {
       s.turns.push({ id: ev.id, failures: 0, acted: false, shown: false })
       s.quietAt = at
       break
+    case 'turn.dropped': // begun, and will never be committed: nothing is owed
+      if (s.hearing?.id === ev.id) s.hearing = null
+      s.quietAt = at
+      break
+    case 'user.hold':
+      s.held = ev.on
+      break
+    case 'user.cut':
+      if (sl) sl.keyed = true
+      break
     case 'response.started':
       if (sl?.phase === 'replying' && !sl.response) sl.response = ev.response
       break
@@ -176,6 +204,7 @@ function down(s, lost, at, fx) {
   if (lost) lose(s, s.turns, fx)
   s.voice = 'down'
   s.hearing = null
+  s.held = false
   s.turns = []
   s.interrupted = NONE
 }
@@ -249,12 +278,14 @@ function settle(s, at, fx) {
 
 /**
  * Everything else (R6). All it covered, with what it was offered as cut, is judged once: by the
- * next reply if the user's voice did it (cut, R5), else as one failure now.
+ * key at once if it cut the reply, by the next reply if the user's voice did (cut, R5), else as
+ * one failure now.
  */
 function fail(s, cut, why, at, fx) {
   const sl = s.slot
   const covered = { turns: union(sl.turns, sl.cut.turns), entries: union(sl.entries, sl.cut.entries) }
-  if (cut) s.interrupted = covered
+  if (cut && sl.keyed) keyCut(s, covered, fx)
+  else if (cut) s.interrupted = covered
   else charge(s, covered)
   sl.cut = NONE
   fx.push({ type: 'log', text: `voice: reply ${sl.eventId} failed (${why})` })
@@ -266,6 +297,25 @@ function free(s, at) {
   charge(s, s.slot.cut)
   s.slot = null
   s.quietAt = at
+}
+
+/**
+ * R5, the key's clause: the user stopped this reply by hand, so it is judged now. Its entries get
+ * the 'cut' receipt. Its turns: if the response was cancelled (replying), a turn already acted on
+ * is answered, and one not yet acted on stays owed with one failure (the cancel may have killed
+ * its tool call, and a request must not be lost; two such cuts end as "say that again", R6). If
+ * only its audio was cut (draining), a heard answer was stopped by its listener and is settled,
+ * and a tool result still unsaid stays owed with no failure, as an uncut release would.
+ */
+function keyCut(s, { turns, entries }, fx) {
+  const sl = s.slot
+  const ids = entries.filter(id => isOwed(s, id))
+  for (const id of ids) s.settled[id] = 'cut'
+  if (ids.length) fx.push({ type: 'delivered', ids, how: 'cut' })
+  const cancelled = sl.phase === 'replying'
+  const stays = t => cancelled ? !t.acted : !sl.heard
+  for (const t of s.turns) if (cancelled && turns.includes(t.id) && stays(t)) t.failures += 1
+  s.turns = s.turns.filter(t => !turns.includes(t.id) || stays(t))
 }
 
 /** One failure for each of these turns and entries that is still owed. */
@@ -294,7 +344,7 @@ function retire(s, fx) {
 
 /** R2, R3, R4: the only place a reply starts. */
 function schedule(s, at, fx) {
-  if (s.voice !== 'live' || s.slot || s.hearing) return
+  if (s.voice !== 'live' || s.slot || s.hearing || s.held) return
   if (s.turns.length) return start(s, s.turns.some(t => !t.acted) ? 'turn' : 'speak', s.turns.map(t => t.id), [], at, fx)
   const due = owed(s)
   if (!due.length || at - s.quietAt < QUIET_MS) return // wakeAt covers the wait
@@ -316,7 +366,8 @@ function start(s, kind, turns, entries, at, fx) {
     addressed: false,
     spoke: false,
     heard: false,
-    audio: false,       // its audio is playing: the butler is audible
+    audio: false,       // its audio is playing
+    keyed: false,       // the key cut it (user.cut): judged by the key once it ends (R5)
   }
   s.interrupted = NONE
   fx.push({ type: 'create', kind, eventId })

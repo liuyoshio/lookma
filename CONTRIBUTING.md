@@ -52,7 +52,7 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | Command | Checks | Needs |
 |---|---|---|
 | `npm run check` | `node --check` on every script | Node |
-| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, voice consent on recorded runs, which turns get a reply | No network, no models, no Chrome |
+| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, voice consent on recorded runs, which turns get a reply, when the microphone is open | No network, no models, no Chrome |
 | `node overlay/dev/check-voices.mjs` | the voice client with each voice provider, against its fake service (`voices/<name>/dev/fake.mjs`) | Google Chrome in `/Applications` (runs headless) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:e2e` | a real Claude Code session with the fake app: it gets ready, says hello, and leaves nothing running | A logged-in Claude Code; one short Sonnet turn on your Claude plan |

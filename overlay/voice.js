@@ -1,11 +1,13 @@
 // The realtime voice client: the "butler". This file only assembles it:
 //   voice/session.js  - the session: grant, microphone, the provider's connection, reconnects, renewal, pause
 //   voice/contract.js - what a voice provider (voices/<name>/page.js) emits and is sent: voice events, effects
+//   voice/source.js   - the turn source: whether the microphone is open, and who ends the turn (a pure reducer)
 //   voice/floor.js    - who speaks and what is still owed (a pure reducer; its rules are there)
 //   voice/turns.js    - what is known about each user turn, for approvals and captions
 //   voice/butler.js   - the butler's tools (do, status, answer, control) and the wording of what it is told
 //
-// Always listening, full duplex, on one warm session. The provider finds each turn and never
+// Full duplex, on one warm session. The talk mode is always: the turn source opens the
+// microphone whenever a session is live, and the provider finds each turn and never
 // replies by itself; every committed turn goes to the floor, which asks for a reply at once, and
 // the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
 // work wants said is the core's outbox: every snapshot hands it to the floor, which announces
@@ -13,12 +15,15 @@
 // use the session's own instructions, never an override, so the approval policy always applies.
 //
 // Here: dispatch(event) runs the floor's step, executes its effects through one table, keeps
-// the one wake timer and pushes the view to the page.
+// the one wake timer and pushes the view to the page; talk(event) does the same for the turn
+// source, whose quiet it computes from both: nobody speaking, nothing owed, no turn working and no
+// card waiting (background tasks do not count: they can run for an hour).
 
 import { createSession } from './voice/session.js'
 import { createTurns } from './voice/turns.js'
 import { createButler, marked } from './voice/butler.js'
-import { initial, step, view, isIdle, wakeAt } from './voice/floor.js'
+import * as floor from './voice/floor.js'
+import * as source from './voice/source.js'
 
 /**
  * @param {object} o
@@ -36,15 +41,21 @@ import { initial, step, view, isIdle, wakeAt } from './voice/floor.js'
  *        { kind: 'user', text }            a user turn the butler took, as heard
  *        { kind: 'unheard', text, cardId } an utterance that did not count as an answer
  *        { kind: 'missed' }                a request the voice gave up on ("say that again")
+ *        { kind: 'nomic' }                 the microphone could not open
  * @param {(msg: string) => void} o.log
  * @returns {{ update(snapshot: object): void }}
  */
 export function createVoice(o) {
-  let state = initial()
+  let state = floor.initial()
   let timer = 0
+  let talking = source.initial('always')
+  let talkTimer = 0
+  let busy = false, calmAt = 0 // the snapshot's work: running or waiting on a card; when it last stopped
+  let quiet = null             // the quiet last given to the turn source
 
   const turns = createTurns({ log: o.log })
-  const session = createSession({ enabled: o.enabled, onEvent, onChange, isIdle: () => isIdle(state, Date.now()), log: o.log })
+  const idle = () => floor.isIdle(state, Date.now()) && !source.view(talking).open
+  const session = createSession({ enabled: o.enabled, onEvent, onChange, isIdle: idle, log: o.log })
   const butler = createButler({
     getState: o.getState, request: o.request, answerCard: o.answerCard, cardShownAt: o.cardShownAt,
     evidence: turns.evidence, onLine: o.onLine, log: o.log,
@@ -73,13 +84,48 @@ export function createVoice(o) {
   }
 
   function dispatch(event) {
-    const r = step(state, { ...event, at: Date.now() })
+    const r = floor.step(state, { ...event, at: Date.now() })
     state = r.state
     for (const e of r.effects) EFFECTS[e.type](e)
     clearTimeout(timer)
-    const t = wakeAt(state)
+    const t = floor.wakeAt(state)
     if (t != null) timer = setTimeout(() => dispatch({ type: 'tick' }), Math.max(0, t - Date.now()))
-    o.onVoice({ ...view(state), available: available() })
+    o.onVoice({ ...floor.view(state), available: available() })
+    calm()
+  }
+
+  // The turn source's effects. The floor hears of a cut and a hold before the provider acts.
+  const TALK = {
+    cut() {
+      dispatch({ type: 'user.cut' })
+      session.send({ type: 'cut' })
+    },
+    listen(e) {
+      dispatch({ type: 'user.hold', on: e.how === 'hold' })
+      session.listen(e).catch(err => {
+        o.log(`voice: the microphone did not open (${err.message})`)
+        o.onLine({ kind: 'nomic' })
+        talk({ type: 'mic.failed' })
+      })
+    },
+  }
+
+  function talk(event) {
+    const r = source.step(talking, { ...event, at: Date.now() })
+    talking = r.state
+    for (const e of r.effects) TALK[e.type](e)
+    clearTimeout(talkTimer)
+    const t = source.wakeAt(talking)
+    if (t != null) talkTimer = setTimeout(() => talk({ type: 'tick' }), Math.max(0, t - Date.now()))
+  }
+
+  /** The quiet a hands-free conversation closes on, given to the turn source when it changes. */
+  function calm() {
+    const since = floor.quietSince(state)
+    const next = busy || since == null ? null : Math.max(since, calmAt)
+    if (next === quiet) return
+    quiet = next
+    talk({ type: 'quiet', since: next })
   }
 
   // The turn gate: the single decision point for which committed turns reach the floor. Every
@@ -88,7 +134,7 @@ export function createVoice(o) {
   const admit = ev => dispatch(ev)
 
   function onEvent(ev) {
-    turns.note(ev, Date.now(), !!state.slot?.audio)
+    turns.note(ev, Date.now(), floor.audible(state))
     if (ev.type === 'error') o.log(`voice: ${ev.message}`)
     if (ev.type === 'turn.committed') admit(ev)
     else dispatch(ev)
@@ -96,15 +142,22 @@ export function createVoice(o) {
 
   // off: the core has no voice, for good; what is owed is then settled as shown.
   function onChange(status, { lost }) {
-    if (status === 'live') return dispatch({ type: 'session.up' })
+    if (status === 'live') {
+      dispatch({ type: 'session.up' })
+      return talk({ type: 'session.up' })
+    }
     turns.reset() // that session's turns are gone with it
     dispatch(status === 'off' ? { type: 'voice.off' } : { type: 'session.down', lost })
+    talk({ type: 'session.down' })
   }
 
   return {
     /** Every core snapshot: paused closes the session and the microphone; the outbox is what is owed. */
     update(snapshot) {
       session.run(!snapshot.paused)
+      const working = snapshot.turn?.phase === 'working' || snapshot.cards.length > 0
+      if (busy && !working) calmAt = Date.now()
+      busy = working
       dispatch({ type: 'outbox', entries: snapshot.outbox })
     },
   }

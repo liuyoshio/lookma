@@ -2,19 +2,23 @@
 // the provider the core names in its grant (POST /api/voice/grant); this module imports that
 // provider's page half, /voices/<provider>/page.js, and knows nothing else about it
 // (voice/contract.js is the contract). What is the same for every provider is here:
-//   - run(true): one connection at a time, with the microphone the provider asks for (macOS shows
-//     its mic indicator). A connection that closes or fails by itself is reconnected with
-//     backoff; the microphone stays open across reconnects and renewals.
+//   - run(true): one connection at a time. A connection that closes or fails by itself is
+//     reconnected with backoff. It comes up hearing nothing.
+//   - listen({ how, drop }): the microphone, and the only switch for it. hold and auto open the
+//     device (macOS shows its mic indicator) and hand it to the provider; off tells the provider
+//     and closes it. The session knows `how`, never the talk mode: the turn source
+//     (voice/source.js) decides, and sends off whenever no session is live, so the microphone is
+//     open only while a live connection hears it.
 //   - Renewed while idle (isIdle) once the grant's renewAfter has passed, the next grant minted
 //     ahead and used only while it may still start a connection (startBy).
-//   - run(false), paused: no connection and no microphone. Off for good (?voice=0, or the core has
-//     no voice): neither, ever.
+//   - run(false), paused: no connection. Off for good (?voice=0, or the core has no voice): no
+//     connection, ever.
 // One stale-session guard: guard() returns live(), true while the session current at the call
 // is still the session. connect() takes it once and checks it after every await and in every
 // callback the provider makes; the caller uses the same guard for anything it started on a session.
 
 const MIC = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
-const CONNECT_MS = 15000       // a connection not up this long is given up and tried again (not counting the microphone permission dialog)
+const CONNECT_MS = 15000       // a connection not up this long is given up and tried again
 const RENEW_IDLE_MS = 10000    // once renewal is due, how often to look for an idle moment
 const GRANT_AHEAD_MS = 60000   // the renewal's grant is minted this long before it
 const GRANT_MARGIN_MS = 15000  // a grant minted ahead is used only if it may start a connection this long from now
@@ -31,8 +35,9 @@ const STABLE_MS = 60000        // a session that lasted this long resets the bac
  * @param {(msg: string) => void} o.log
  */
 export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
-  let s = null           // the session: { abort, conn, ready, openedAt, timer, mic }
-  let mic = null         // the microphone (a promise of its stream), open while wanted
+  let s = null           // the session: { abort, conn, ready, openedAt, timer }
+  let mic = null         // the microphone (a promise of its stream), open while a listen wants it
+  let listens = 0        // listens so far: one still waiting for the microphone is sent only if it is the latest
   let off = !enabled     // for good: ?voice=0, or the core has no voice (LOOKMA_VOICE=off, no key)
   let wanted = false     // until the core's first snapshot says otherwise
   let failing = false    // the last connect failed; another is coming
@@ -53,7 +58,7 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
     return () => me !== null && me === s
   }
 
-  /** Paused (false) closes everything: no session, no microphone. */
+  /** Paused (false) closes the session; the turn source then closes the microphone. */
   function run(next) {
     if (next === wanted) return
     wanted = next
@@ -65,7 +70,6 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
       nextGrant = null
       if (s) log('voice: paused; session closed, microphone off')
       close()
-      closeMic()
     }
     changed()
   }
@@ -75,31 +79,36 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
     if (s?.ready) s.conn.send(effect)
   }
 
+  /**
+   * The microphone's level (voice/contract.js, How). Latest wins: one that arrives while the
+   * microphone is still opening replaces the one waiting, so a hold released before the
+   * microphone opened is never sent. Rejects, sending nothing, when the microphone cannot open
+   * (permission refused, no device); the next listen tries again.
+   */
+  async function listen({ how, drop }) {
+    const me = ++listens
+    if (how === 'off') {
+      send({ type: 'listen', how, ...(drop && { drop }) })
+      closeMic()
+      return
+    }
+    const stream = await openMic().catch(err => { if (me === listens) throw err })
+    if (me === listens) send({ type: 'listen', how, mic: stream })
+  }
+
   async function connect(why = '') {
     if (s || off || !wanted) return
     clearTimeout(retryTimer)
-    const me = s = { abort: new AbortController(), conn: null, ready: false, openedAt: 0, timer: 0, mic: null }
+    const me = s = { abort: new AbortController(), conn: null, ready: false, openedAt: 0, timer: 0 }
     const live = guard()
-    const deadline = () => {
-      clearTimeout(me.timer)
-      me.timer = setTimeout(() => lost('not up in time'), CONNECT_MS)
-    }
     try {
-      const grant = await takeGrant() // first: a core with no voice must not open the microphone
+      const grant = await takeGrant()
       if (!live()) return
       const provider = await import(`/voices/${grant.provider}/page.js`)
       if (!live()) return
-      deadline()
+      me.timer = setTimeout(() => lost('not up in time'), CONNECT_MS)
       const io = {
         signal: me.abort.signal,
-        // The deadline waits while the microphone permission dialog does.
-        async openMic() {
-          clearTimeout(me.timer)
-          const stream = await (me.mic = openMic())
-          if (!live()) throw new Error('the session ended')
-          deadline()
-          return stream
-        },
         onEvent: ev => { if (live()) onEvent(ev) },
         onClose: why => { if (live()) lost(why) },
         log,
@@ -112,14 +121,13 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
       me.openedAt = Date.now()
       failing = false
       me.timer = setTimeout(mintAhead, grant.renewAfter - GRANT_AHEAD_MS)
-      log(`voice: connected, listening (${grant.label}${why ? `, ${why}` : ''})`)
+      log(`voice: connected (${grant.label}${why ? `, ${why}` : ''})`)
       changed()
     } catch (err) {
       if (!live()) return
       close()
       if (err.voiceOff) {
         off = true
-        closeMic()
         log(`voice off, captions only: ${err.message}`)
       } else {
         failing = true
@@ -165,7 +173,7 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
     changed()
   }
 
-  /** No session: its timer, and the connection, live or still coming up. The microphone is kept for the next one. */
+  /** No session: its timer, and the connection, live or still coming up. */
   function close() {
     const me = s
     s = null // first: ending the connection must not read as losing it
@@ -180,9 +188,10 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
       if (!navigator.mediaDevices?.getUserMedia) return Promise.reject(new Error('this page has no microphone access'))
       const asked = mic = navigator.mediaDevices.getUserMedia(MIC)
       asked.then(stream => {
-        stream.getAudioTracks()[0].onended = () => { // unplugged: the next connection opens another
-          if (mic === asked) mic = null
-          if (s?.mic === asked) lost('the microphone stopped')
+        stream.getAudioTracks()[0].onended = () => { // unplugged: the reconnect's listen opens another
+          if (mic !== asked) return
+          mic = null
+          if (s?.ready) lost('the microphone stopped')
         }
       }, () => { if (mic === asked) mic = null })
     }
@@ -213,6 +222,7 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
   return {
     run,
     send,
+    listen,
     guard,
     get status() { return status },
   }
