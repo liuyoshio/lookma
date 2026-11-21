@@ -197,13 +197,13 @@ An act op (`press`, `click`, `drag`, `type`, `key`, `scroll`, `open`) returns on
 
 **An id names the same element for as long as that element is listed.** Each `see` keeps the id of every element it finds again (the same AX element, matched with `CFEqual`), gives the others new ids, and drops the ones it did not find. So two calls sent from one list both work, and an id of an element that is no longer listed is an error: "call see again".
 
-`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. `frontmost` names the app with keyboard focus. `states` holds only what is set, from `disabled`, `selected` and `focused`. An open menu of the app (a context menu, a pop-up button's list, a menu-bar menu and its submenus) is listed first: `menu` counts those leading elements (0 when none is open), and the visible area, and a screenshot, grow to take the menu in. An element reached from both a menu and the window is listed once. `cut` says why the walk stopped early (`'elements'` at 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) comes only with `screenshot: true`. `shot: { w, h, rect }` describes the last screenshot of this app, whenever there is one: with no `image`, it is older than this list. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
+`see` lists the elements a person could act on or read in the app's window: actionable roles, text, headings and images that have a label. An element's `text` is one line, cut at 400 characters for text, headings and text areas, so a paragraph can be read from the list, and at 120 for the rest. `frontmost` names the app with keyboard focus. `states` holds only what is set, from `disabled`, `selected` and `focused`. An open menu of the app (a context menu, a pop-up button's list, a menu-bar menu and its open submenus) is listed first: `menu` counts those leading elements (0 when none is open), and the visible area, and a screenshot, grow to take the menu in. A submenu is listed only when it is open; an element reached from both a menu and the window is listed once. `cut` says why the walk stopped early (`'elements'` when there was more to list than 300, `'visits'`, `'time'`) or is null; `unlabeled` counts the listed actionable elements with no text. `image` (PNG base64) comes only with `screenshot: true`. `shot: { w, h, rect }` describes the last screenshot of this app, whenever there is one: with no `image`, it is older than this list. The first `see` of a Chromium or Electron app waits, up to 3 s, until its web tree is built, so the first list is not the empty one it has before.
 
 A `point` is in the pixels of the last screenshot taken, which a `see` without one does not replace. `resolve { point }` refuses it when there is none, or when the window it was taken of has moved or closed since.
 
-`drag` is a left-button drag: both points must be on the target's window, as for a click. It moves the pointer to `from`, presses, holds 300 ms (apps start a drag only after a hold), moves to `to` in 20 eased steps over 500 ms, waits there 200 ms so the drop target can take it, and lets go. The button is let go on every path once it is down. About 1.3 s in all, settle included.
+`drag` is a left-button drag: both points must be on the target's window, as for a click, and must differ. It moves the pointer to `from`, presses, holds about 300 ms (apps start a drag only after a hold; the exact value is still to be set on a text view), moves to `to` in 20 eased steps over 500 ms, waits there 200 ms so the drop target can take it, and lets go. The button is let go on every path once it is down. About 1.3 s in all, settle included.
 
-`scroll` moves `pages` (above 0) of the visible area at the point: the nearest scroll area or web area there, cut to its window, or else the window. A page is 90% of that length, so the last line stays in view, sent as pixel wheel events of at most 100 px. The op returns once it has read the area's scroll bar on that axis again, 200 ms after the last event: `position` is where it is now, from 0 (top or left) to 1, and `moved` says whether it changed. Both are null when the area has no scroll bar to read (typical for Chromium content).
+`scroll` moves `pages` (above 0) of the visible area at the point: the nearest scroll area or web area there, cut to its window, or else the window. A page is 90% of that length, so the last line stays in view, sent as pixel wheel events of at most 100 px. The op returns once it has read the area's scroll bar on that axis again, 200 ms after the last event: `position` is where it is now, from 0 (top or left) to 1, and `moved` says whether it changed. The bar is the one of the nearest scroll area there, which in a WebKit view is the web area's parent. Both are null when there is no scroll bar to read (typical for Chromium content).
 
 ## The hands pipeline (core, one function, one step at a time)
 
@@ -218,13 +218,33 @@ The executor's GUI tools are `see`, `click` (left, or `button: 'right'` for a co
 5. **Act** through the app, then set `focus.phase` to `done` or `failed`. `see` has no act. The op returns once its effect shows (see the op table).
 6. **Observe**: the `see` op of the app this step resolved and granted, with `screenshot` when the call asks for it. This is the only place the core asks for `see`. Two rules:
    - **An action that happened is never reported as failed.** If the list fails after the act, for any reason, the result is the action line followed by "Could not list <app>: <error>", and `focus.phase` stays `done`. A failed `see` step is a failed step.
-   - **Only the resolved, granted app is listed.** `open` with a `url` or a `path` resolves nothing, so it lists nothing: its result names the app that opened it ("Call see to list it"), and the agent's `see` of that app takes the grant path.
+   - **Only the resolved, granted app is listed.** `open` with a `url` or a `path` resolves nothing, so it lists nothing and takes no screenshot, even when asked: its result names the app that opened it ("Call see to list it", or "No screenshot: call see with screenshot: true"), and the agent's `see` of that app takes the grant path.
 7. **Return** to the executor, as text:
    - the action line, when the step acted: what happened. A scroll says how far it went and where it is now ("now at 40%"), or "Did not move" when the scroll bar stayed put;
-   - the facts that say whether the list is enough: the app, its window and the frontmost app; a screenshot or "No screenshot"; "The last screenshot is from before this action" when there is an older one; a list cut short; how many elements have no label;
+   - the facts that say whether the list is enough: the app, its window and the frontmost app; a screenshot or "No screenshot"; "The last screenshot is older than this list" when there is an older one, which a `point` still refers to; a list cut short; how many elements have no label;
    - the elements, one per line: id, role, text and states. When a menu is open, its items come first, under "Menu open:", and the window's after them, under "Window:".
 
    The image comes only when the call asked for it.
+
+**Timing.** Every step writes one line to the core's log when it returns, failed or not, so a slow task shows where its time went:
+
+```
+12:04:31.220 core step click Maps gap=2140 queue=0 resolve=6 grant=0 wait=0 front=0 mark=351 act=348 observe=212 total=917 elements=143 chars=3120 image=0
+12:04:43.100 core step scroll Maps gap=540 queue=0 resolve=4 grant=0 wait=0 front=0 mark=351 act=62 observe=0 total=423 elements=0 chars=0 image=0 failed="Did not scroll: Finder is in front, not Maps."
+```
+
+- The tool and the app it resolved (`-` when none). All values are ms except `elements` (lines listed), `chars` (length of the text returned) and `image` (base64 length, 0 when none).
+- `gap`: from the previous step's return to this call reaching the core, which is the agent's thinking plus the hops. `-` for the first step of a turn, so time between turns never counts; 0 for a call sent while another was still running.
+- `queue`: time spent behind earlier steps. `resolve` (both ends of a drag), `grant` (the card, 0 when already granted), `wait` (for the user to go idle), `front`, `mark`, `act` (the op, its settle included) and `observe` (the list) are the stages; a stage the step skips is 0. `total` runs from the step's start to its return.
+- A failed step stops at the stage it failed in and adds `failed="<error>"`. A list that fails after an act is not a failed step: it shows as `elements=0` and a short `chars`.
+
+The app logs one line per `see` op beside it:
+
+```
+12:04:33.895 app see parts ax-wait=0 walk=188 visited=1840 elements=143 cut=- share=96 capture=71 png=52 bytes=309291
+```
+
+`ax-wait` is the first-contact wait for a web-based app's tree (3000 means it gave up), `walk` the walk of the tree (alongside the capture when there is one), `visited` the elements it read, `cut` as in the result (`-` for none), `share` the wait for the app's window in the shareable content, `capture` the picture itself, `png` its encoding and `bytes` the PNG's size. The last four are 0 without a screenshot.
 
 ## Plug-ins
 

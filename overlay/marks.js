@@ -12,9 +12,11 @@ const STALE = 10000 // a finished step older than this no longer marks anything
 const GRACE = 1600  // marks stay this long after the turn ends
 const GLIDE = 340   // ghost flight; fits inside the core's ~350 ms pause before acting
 // A drag as the app's mouseDrag (Input.swift) posts it: the move to the start and the hold
-// (60 + 300 ms), then the glide to the drop end (20 events 25 ms apart).
+// (60 + 300 ms), the glide to the drop end (20 events 25 ms apart), and the dwell there before
+// the button goes up.
 const DRAG_HOLD = 360
 const DRAG_MS = 500
+const DRAG_DWELL = 200
 const SPRING = 'cubic-bezier(.32,.72,0,1)'
 
 const ring = $('ring'), drop = $('drop'), path = $('path'), flabel = $('flabel'), ghost = $('ghost'), ripple = $('ripple'), edge = $('edge'), stack = $('stack')
@@ -142,15 +144,17 @@ function pulse(p) {
 }
 
 // Press at a, hold while the app does, glide to b with the real pointer (the same ease as
-// dragPath in Input.swift), and let go there. The ripple waits for the step to be done.
+// dragPath in Input.swift), wait there as it does, and let go with it. The ripple waits for the
+// step to be done.
 function drag(a, b) {
-  const from = ghostAt(a), to = ghostAt(b), total = DRAG_HOLD + DRAG_MS + 120
+  const from = ghostAt(a), to = ghostAt(b), up = DRAG_HOLD + DRAG_MS + DRAG_DWELL, total = up + 120
   ghost.style.transform = to
   g.flight = ghost.animate([
     { transform: from, offset: 0 },
     { transform: `${from} scale(.84)`, offset: 120 / total },
     { transform: `${from} scale(.84)`, offset: DRAG_HOLD / total, easing: 'cubic-bezier(.65,0,.35,1)' },
     { transform: `${to} scale(.84)`, offset: (DRAG_HOLD + DRAG_MS) / total },
+    { transform: `${to} scale(.84)`, offset: up / total },
     { transform: to, offset: 1 },
   ], { duration: total })
   g.flight.finished.then(() => { g.flight = null }, () => {})

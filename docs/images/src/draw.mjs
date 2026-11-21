@@ -451,33 +451,36 @@ function handsPipeline(c) {
     ['Resolve', ['element id, point,', 'Dock icon, or app']],
     ['Grant', ['first time in this', 'app? one card']],
     ['Attention', ['keys or mouse used', 'in the last 3 s?']],
-    ['Mark', ['ring, label, ghost', 'cursor, ~350 ms early']],
+    ['Mark', ['ring, label, ghost,', '~350 ms early']],
     ['Act', ['AX press, or input', 'that lands on target']],
+    ['Observe', ['list the app’s', 'elements']],
   ]
-  const W = 172, G = 21, X = 20, Y = 92
+  // Six boxes across the 960 px row.
+  const X = 20, Y = 92, W = 147, G = (960 - steps.length * W) / (steps.length - 1)
   const st = steps.map(([title, lines], i) => {
     const x = X + i * (W + G)
     const hot = i === 3
     return box(c, x, Y, W, 112, { shadow: true, stroke: hot ? c.coral : c.line, sw: hot ? 2 : 1.2 }) +
-      circle(x + 26, Y + 28, 12, { fill: hot ? c.coral : c.wash }) +
-      text(x + 26, Y + 32.5, String(i + 1), { size: 12.5, weight: 700, anchor: 'middle', fill: hot ? '#fff' : c.coralText }) +
-      text(x + 46, Y + 33.5, title, { size: 16.5, weight: 700, fill: c.ink }) +
-      lines.map((l, j) => text(x + 16, Y + 66 + j * 21, l, { size: 14, fill: c.ink2 })).join('') +
-      (i < steps.length - 1 ? arrow(c, x + W + 3, Y + 56, x + W + G - 3, Y + 56) : '')
+      circle(x + 24, Y + 28, 12, { fill: hot ? c.coral : c.wash }) +
+      text(x + 24, Y + 32.5, String(i + 1), { size: 12.5, weight: 700, anchor: 'middle', fill: hot ? '#fff' : c.coralText }) +
+      text(x + 44, Y + 33.5, title, { size: 16.5, weight: 700, fill: c.ink }) +
+      lines.map((l, j) => text(x + 14, Y + 66 + j * 21, l, { size: 13, fill: c.ink2 })).join('') +
+      (i < steps.length - 1 ? arrow(c, x + W + 2, Y + 56, x + W + G - 2.5, Y + 56) : '')
   }).join('')
-  const ax = X + 2 * (W + G), mid = ax + W / 2
+  // The attention box forks into its two outcomes, which sit centred under the row.
+  const fork = X + 2 * (W + G) + W / 2, mid = X + 480
   const tool = (x, s) => chip(c, x, 40, s, { w: Math.round(s.length * 7.4 + 22), ink: c.ink, fill: c.surface })
-  const tools = ['see', 'click', 'type', 'key', 'scroll', 'open']
+  const tools = ['see', 'click', 'drag', 'type', 'key', 'scroll', 'open']
   let tx = 168
   const toolChips = tools.map(s => { const w = Math.round(s.length * 7.4 + 22); const out = tool(tx, s); tx += w + 8; return out }).join('')
   const body = [
     text(20, 57, 'Every hands call', { size: 15, weight: 700, fill: c.ink }),
     toolChips,
-    text(tx + 6, 57, 'runs the same five steps, one at a time.', { size: 15, fill: c.ink2 }),
+    text(tx + 6, 57, 'runs the same six steps, one at a time.', { size: 15, fill: c.ink2 }),
     st,
     // attention: the two outcomes
-    curve(c, `M${mid - 30} ${Y + 116}C${mid - 30} 250 ${mid - 150} 236 ${mid - 150} 262`),
-    curve(c, `M${mid + 30} ${Y + 116}C${mid + 30} 250 ${mid + 150} 236 ${mid + 150} 262`),
+    curve(c, `M${fork - 20} ${Y + 116}C${fork - 20} 250 ${mid - 150} 236 ${mid - 150} 262`),
+    curve(c, `M${fork + 20} ${Y + 116}C${fork + 20} 250 ${mid + 150} 236 ${mid + 150} 262`),
     box(c, mid - 330, 266, 300, 80, { fill: c.sunk }),
     text(mid - 314, 292, 'You’re idle', { size: 15.5, weight: 700, fill: c.ink }),
     text(mid - 314, 315, 'The target comes to the front,', { size: 14, fill: c.ink2 }),
@@ -488,10 +491,10 @@ function handsPipeline(c) {
     text(mid + 46, 315, 'Nothing takes the front. Safe steps', { size: 14, fill: c.ink2 }),
     text(mid + 46, 333, 'run behind you; the rest wait.', { size: 14, fill: c.ink2 }),
     // what comes back
-    text(980, 384, [['Back to the agent: ', { fill: c.muted }], ['see', { fontWeight: 700, fill: c.ink }], [' returns a screenshot and the elements; the rest, one line.', { fill: c.ink2 }]], { size: 14, anchor: 'end' }),
+    text(980, 384, [['Back to the agent: ', { fill: c.muted }], ['what was done, then the app’s elements; a screenshot only when asked.', { fill: c.ink2 }]], { size: 14, anchor: 'end' }),
   ].join('\n')
   return svg(c, 1000, 410, 'The hands pipeline',
-    'Every hands call (see, click, type, key, scroll, open) runs five steps: resolve the target, grant (a card the first time in an app), attention (did you use the keyboard or mouse in the last 3 seconds), mark (ring, label and ghost cursor, about 350 ms early), and act. If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead.',
+    'Every hands call (see, click, drag, type, key, scroll, open) runs six steps: resolve the target, grant (a card the first time in an app), attention (did you use the keyboard or mouse in the last 3 seconds), mark (ring, label and ghost cursor, about 350 ms early), act, and observe (list the app\'s elements). If you are idle, the target comes to the front. If you are busy, nothing takes the front: safe steps run in the background and the rest wait for go ahead. Every step returns the app\'s elements to the agent, with a screenshot only when asked.',
     body)
 }
 

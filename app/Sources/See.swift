@@ -2,12 +2,16 @@
 // screenshot only when the call asks for one. Only elements inside the visible window and inside
 // their scroll area are listed. An open menu (context, pop-up or menu bar) is listed first, and the
 // visible area grows to take it in. The result says why the list stopped early (`cut`) and how many
-// actionable elements have no label, so the agent can tell when the list is not enough.
+// actionable elements have no label, so the agent can tell when the list is not enough. Text is one
+// line, cut longer for what is there to be read (text, headings, text areas) than for labels.
+// A menu item's submenu is listed only when it is open, as a menu of its own: a closed one can still
+// report frames, and its items would look clickable.
 // An id names the same element for as long as it is listed: each see keeps the id of every element
 // it finds again (the same AX element), gives a new one to the rest, and drops what it did not find,
 // so an id of an element that is gone is caught as stale. The core lists after every action, and an
 // agent may send two calls from one list. The latest list's elements, and the last screenshot
-// taken, stay here for the ops that act on them (resolve, press).
+// taken, stay here for the ops that act on them (resolve, press). Each see logs a `see parts` line
+// with where its time went (docs/protocol.md).
 import AppKit
 import ApplicationServices
 
@@ -60,6 +64,10 @@ private let textRoles: Set<String> = ["AXStaticText", "AXHeading", "AXImage"]
 private let walkAttrs = ["AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXValue", "AXPlaceholderValue",
                          "AXPosition", "AXSize", "AXChildren", "AXEnabled", "AXSelected", "AXFocused"] as CFArray
 private let maxElements = 300, maxVisit = 6000, maxDepth = 60, walkBudget = 1.1
+// How much of an element's text is listed: enough of a paragraph to read it without a screenshot,
+// and a short line for everything else.
+private let readRoles: Set<String> = ["AXStaticText", "AXHeading", "AXTextArea"]
+private let readLength = 400, labelLength = 120
 
 private struct Found { let ax: AXUIElement; let axRole: String; let role: String; let text: String; let states: [String]; let rect: CGRect }
 
@@ -71,11 +79,10 @@ private struct Walk {
     var listed: [CFHashCode: [AXUIElement]] = [:] // so an element reached twice (an open menu) is listed once
     var cut: String? = nil // the limit that stopped the walk: "elements", "visits" or "time"
 
-    /// True once a limit is reached; the first one reached is kept in `cut`.
+    /// True once a limit is reached; the first one reached is kept in `cut`. "elements" is set where
+    /// an element would be listed past the limit, so a list that is exactly full is not called cut.
     mutating func full() -> Bool {
-        if cut == nil {
-            cut = out.count >= maxElements ? "elements" : visited > maxVisit ? "visits" : now() > deadline ? "time" : nil
-        }
+        if cut == nil { cut = visited > maxVisit ? "visits" : now() > deadline ? "time" : nil }
         return cut != nil
     }
 }
@@ -89,11 +96,13 @@ private func attrs(_ e: AXUIElement) -> [Any?]? {
 
 // `clip` is the visible part: the window, narrowed by every scroll area on the way down.
 // `inside` is the label of the nearest actionable ancestor, so its own text is not listed twice.
-private func walk(_ e: AXUIElement, depth: Int, clip: CGRect, inside: String?, _ w: inout Walk) {
+// `inItem` is set under a menu item, whose AXMenu child is its submenu.
+private func walk(_ e: AXUIElement, depth: Int, clip: CGRect, inside: String?, inItem: Bool = false, _ w: inout Walk) {
     if w.full() { return }
     w.visited += 1
     guard let v = attrs(e) else { return }
     let role = v[0] as? String ?? ""
+    if inItem && role == "AXMenu" { return } // open submenus come from openMenus
     let subrole = v[1] as? String ?? ""
     var frame: CGRect? = nil
     if let p = v[6] as? CGPoint, let s = v[7] as? CGSize { frame = CGRect(origin: p, size: s) }
@@ -107,15 +116,20 @@ private func walk(_ e: AXUIElement, depth: Int, clip: CGRect, inside: String?, _
     let isText = textRoles.contains(role)
     let isScroll = scrollRoles.contains(role)
     if isAction || isText || isScroll, let f = frame, f.width > 1, f.height > 1, f.intersects(clip) {
+        let limit = readRoles.contains(role) ? readLength : labelLength
         var parts: [String] = []
-        func add(_ s: String?) { if let s = clean(s), !parts.contains(s) { parts.append(s) } }
+        func add(_ s: String?) { if let s = clean(s, limit), !parts.contains(s) { parts.append(s) } }
         add(v[2] as? String)
         add(v[3] as? String)
         if let s = v[4] as? String { add(s) } else if let n = v[4] as? NSNumber, isAction { add(n.stringValue) }
         if let p = clean(v[5] as? String) { parts.append("placeholder: \(p)") }
-        let text = clean(parts.joined(separator: " | "), 120) ?? ""
+        let text = clean(parts.joined(separator: " | "), limit) ?? ""
         let redundant = isText && (text.isEmpty || (inside?.contains(text) ?? false))
         if !redundant && !(isScroll && text.isEmpty && role != "AXWebArea") && !w.listed[CFHash(e), default: []].contains(where: { CFEqual($0, e) }) {
+            if w.out.count == maxElements {
+                w.cut = "elements"
+                return
+            }
             w.listed[CFHash(e), default: []].append(e)
             let r = subrole == "AXSearchField" ? "searchfield" : String(role.dropFirst(2)).lowercased()
             // Only what is set: most elements have no AXSelected, and text has no AXEnabled.
@@ -129,7 +143,7 @@ private func walk(_ e: AXUIElement, depth: Int, clip: CGRect, inside: String?, _
         if isAction { inside2 = text }
     }
     guard depth < maxDepth, let kids = v[8] as? [AXUIElement] else { return }
-    for k in kids { walk(k, depth: depth + 1, clip: clip2, inside: inside2, &w) }
+    for k in kids { walk(k, depth: depth + 1, clip: clip2, inside: inside2, inItem: role == "AXMenuItem", &w) }
 }
 
 func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
@@ -137,12 +151,14 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
     let pid = app.processIdentifier
     let appTitle = app.localizedName ?? "app"
     let appEl = AXUIElementCreateApplication(pid)
+    let ms = { (t: Double) in Int((t * 1000).rounded()) }
     // With no screenshot to fall back on, the first list of a web-based app must not be the empty
-    // tree it has before it builds one. Once per app per run.
+    // tree it has before it builds one. Once per app per run; 3000 in the log means it gave up.
+    var axWait = 0.0
     if enableAX(app) {
         let start = now()
-        let built = await until(3.0, { frontWindow(appEl).map(webTreeBuilt) ?? false })
-        log("see \(appTitle): web tree \(built ? "built" : "still empty") after \(Int((now() - start) * 1000)) ms")
+        _ = await until(3.0, { frontWindow(appEl).map(webTreeBuilt) ?? false })
+        axWait = now() - start
     }
     guard let win = frontWindow(appEl), let focused = axFrame(win) else { throw HandsError("\(appTitle) has no open window.") }
 
@@ -174,7 +190,8 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
         return (w, inMenu)
     }
     let (w, inMenu): (Walk, Int)
-    var picture: (CGImage, CGRect)? = nil
+    var picture: Capture? = nil
+    let walkStart = now()
     if screenshot {
         async let shot = capture(visible, pid: pid) // runs while the walk does
         (w, inMenu) = walkAll()
@@ -182,6 +199,7 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
     } else {
         (w, inMenu) = walkAll()
     }
+    let walkTime = now() - walkStart // with a screenshot, the walk runs alongside the capture
 
     // The previous list by CFHash, so each element found again is matched with CFEqual cheaply.
     var before: [CFHashCode: [Element]] = [:]
@@ -204,10 +222,17 @@ func see(_ name: String?, screenshot: Bool) async throws -> [String: Any] {
         "cut": w.cut ?? NSNull(),
         "unlabeled": w.unlabeled,
     ]
-    if let (img, rect) = picture {
-        lastShot = Shot(w: img.width, h: img.height, rect: rect, pid: pid, app: appTitle, window: win, frame: focused)
-        result["image"] = png(img).base64EncodedString()
+    var encode = 0.0, bytes = 0
+    if let c = picture {
+        lastShot = Shot(w: c.image.width, h: c.image.height, rect: c.rect, pid: pid, app: appTitle, window: win, frame: focused)
+        let start = now()
+        let data = png(c.image)
+        encode = now() - start
+        bytes = data.count
+        result["image"] = data.base64EncodedString()
     }
+    log("see parts ax-wait=\(ms(axWait)) walk=\(ms(walkTime)) visited=\(w.visited) elements=\(list.count) cut=\(w.cut ?? "-") "
+        + "share=\(ms(picture?.share ?? 0)) capture=\(ms(picture?.grab ?? 0)) png=\(ms(encode)) bytes=\(bytes)")
     // The screenshot a point refers to, also when this see did not replace it: then it is older.
     if let s = lastShot, s.pid == pid { result["shot"] = ["w": s.w, "h": s.h, "rect": rectJSON(s.rect)] }
     return result

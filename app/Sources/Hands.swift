@@ -92,7 +92,11 @@ private func resolve(_ args: [String: Any]) throws -> [String: Any] {
         }
         let title = axString(item, "AXTitle") ?? name
         let running = dockItemApp(item)
-        target = Target(pid: running?.processIdentifier, name: running?.localizedName ?? title, dockTitle: title)
+        // An app that is not running yet is named as it will be once it runs (its Dock title can
+        // differ: "Visual Studio Code" runs as "Code"), so the grant, the list after the press and
+        // the next steps all name the same app.
+        let appName = running?.localizedName ?? dockItemURL(item).flatMap(bundleAppName) ?? title
+        target = Target(pid: running?.processIdentifier, name: appName, dockTitle: title)
         return ["app": target!.name, "rect": rectJSON(r), "point": center(r), "frontmost": isFront(running?.processIdentifier), "pressable": true]
     }
     let name = text(args, "app")
@@ -180,9 +184,10 @@ private func click(_ p: CGPoint, button: CGMouseButton) async throws -> [String:
     return ["menu": await until(menuWait, { !openMenus(pid).isEmpty })]
 }
 
-/// A left-button drag inside the target app: both ends must be on its window, as for a click.
-/// Returns when settled after the drop.
+/// A left-button drag inside the target app: both ends must be on its window, as for a click, and
+/// apart. Returns when settled after the drop.
 private func drag(from: CGPoint, to: CGPoint) async throws -> [String: Any] {
+    guard from != to else { throw HandsError("Did not drag: it starts and ends at the same point.") }
     try checkPointer(from, "drag")
     try checkPointer(to, "drag")
     mouseDrag(from: from, to: to)
@@ -227,13 +232,14 @@ private func keyInTarget(_ args: [String: Any]) async throws -> [String: Any] {
 private let wheel: [String: (dx: Int, dy: Int)] = ["up": (0, 1), "down": (0, -1), "left": (1, 0), "right": (-1, 0)]
 
 /// One scroll in pixels: `pages` of the visible length, less a tenth so the last line stays in view.
-private func pagePixels(_ visible: CGFloat, _ pages: Double) -> Int { max(1, Int((visible * 0.9 * pages).rounded())) }
+private func pagePixels(_ visible: CGFloat, _ pages: Double) -> Int { Int((visible * 0.9 * pages).rounded()) }
 
 private func barValue(_ bar: AXUIElement) -> Double? { (axGet(bar, "AXValue") as? NSNumber)?.doubleValue }
 
 /// Scrolls `pages` of what is visible at the point: the nearest scroll area or web area there, cut
-/// to the window, else the window. Done when the scroll bar has been read again after settling;
-/// `position` and `moved` are null when the area has no scroll bar (typical for Chromium content).
+/// to the window, else the window. Done when the scroll bar has been read again after settling.
+/// The bar belongs to the nearest scroll area, which is the web area's parent in a WebKit view;
+/// `position` and `moved` are null when there is none to read (typical for Chromium content).
 private func scroll(_ args: [String: Any]) async throws -> [String: Any] {
     let p = try point(args["point"])
     guard let dir = args["direction"] as? String, let sign = wheel[dir] else { throw HandsError("scroll needs a direction: up, down, left or right.") }
@@ -251,7 +257,8 @@ private func scroll(_ args: [String: Any]) async throws -> [String: Any] {
 
     let vertical = sign.dy != 0
     let px = pagePixels(vertical ? v.height : v.width, Double(pages))
-    let bar = area.flatMap { axElement(axGet($0, vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar")) }
+    let bar = area.flatMap { axAncestor($0, ["AXScrollArea"]) }
+        .flatMap { axElement(axGet($0, vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar")) }
     let before = bar.flatMap(barValue)
     scrollWheel(at: p, dx: sign.dx * px, dy: sign.dy * px)
     try await Task.sleep(nanoseconds: settleNs)

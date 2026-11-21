@@ -5,7 +5,7 @@
 //   resolve → grant → attention → observe → return
 // drag is the step with two targets: resolve finds both, in one app, and the mark shows both.
 // See docs/protocol.md, "The hands pipeline". What differs per tool is in the table below; step()
-// runs it and knows no tool by name.
+// runs it and knows no tool by name. Every step logs one `step` line with where its time went.
 import { cancelled, clip, sleep } from './util.mjs'
 import { waitUntil } from './state.mjs'
 
@@ -24,21 +24,23 @@ const placeText = x => (has(x.element) ? x.element : `point ${x.point.join(',')}
 
 // What every step returns: the action line, when it acted, then the facts that say whether the list
 // is enough (a screenshot or not, a list cut short, elements with no label, a screenshot older than
-// this action), then the elements as lines the agent picks ids from, an open menu's items first.
-// Whether to ask for a screenshot is the agent's call; nothing here guesses it.
+// this list), then the elements as lines the agent picks ids from, an open menu's items first. The
+// app owns how long an element's text may be. Whether to ask for a screenshot is the agent's call;
+// nothing here guesses it.
 function listing(did, res) {
   const win = res.window.title ? ` — window "${clip(res.window.title, 80)}"` : ''
   const lines = did ? [did] : []
   lines.push(`App: ${res.app}${win}. Frontmost: ${res.frontmost}.`)
   if (res.image) lines.push(`Screenshot: ${res.shot.w}x${res.shot.h} px. A point you click is in these pixels.`)
   else lines.push('No screenshot; add screenshot: true to a call if what you need is not in this list.')
-  if (did && res.shot && !res.image) lines.push('The last screenshot is from before this action.')
+  // A point still maps into that older picture, so say so whether or not this step acted.
+  if (res.shot && !res.image) lines.push('The last screenshot is older than this list.')
   if (res.cut) {
     const why = res.cut === 'elements' ? `List cut at ${res.elements.length} elements` : "List cut: the app's tree is too large to read fully"
     lines.push(`${why}. Scroll for the rest${res.image ? '' : ', or add screenshot: true'}.`)
   }
   if (res.unlabeled) lines.push(`${res.unlabeled} element${res.unlabeled === 1 ? ' has' : 's have'} no label.`)
-  const items = res.elements.map(e => `${e.id} ${e.role}${e.text ? ` "${clip(e.text, 80)}"` : ''}${e.states.map(s => ` (${s})`).join('')}`)
+  const items = res.elements.map(e => `${e.id} ${e.role}${e.text ? ` "${e.text}"` : ''}${e.states.map(s => ` (${s})`).join('')}`)
   lines.push('Elements (an id stays valid while its element is listed):')
   if (res.menu) lines.push('Menu open:', ...items.slice(0, res.menu), 'Window:', ...items.slice(res.menu))
   else lines.push(...items)
@@ -148,11 +150,39 @@ const OPEN_APP = {
 }
 const OPEN_ITEM = {
   // A url or a path: the system opens it in the app it picks. Nothing was resolved or granted, so
-  // nothing is listed; the agent's see of that app takes the grant path.
+  // nothing is listed, and no screenshot is taken even when asked; the agent's see of that app takes
+  // the grant path.
   target: () => null,
   front: () => true,
   act: a => ['open', has(a.url) ? { url: a.url } : { path: a.path }],
-  did: (a, r, res) => `Opened ${a.url || a.path} in ${res.app}. Call see to list it.`,
+  did: (a, r, res) => `Opened ${a.url || a.path} in ${res.app}. ${a.screenshot ? 'No screenshot: call see with screenshot: true.' : 'Call see to list it.'}`,
+}
+
+// The step's timing, for its `step` log line: ms spent in each stage, from entering it to entering
+// the next or stopping, so a failed step's time lands in the stage it failed in. A stage a step
+// skips stays 0. The fields are in docs/protocol.md.
+const STAGES = ['resolve', 'grant', 'wait', 'front', 'mark', 'act', 'observe']
+function stopwatch() {
+  const start = Date.now()
+  const ms = Object.fromEntries(STAGES.map(s => [s, 0]))
+  let stage = null // none until the step starts
+  let t = start
+  const stop = () => {
+    const n = Date.now()
+    if (stage) ms[stage] += n - t
+    t = n
+  }
+  return {
+    start,
+    ms,
+    app: '-',
+    elements: 0,
+    enter(next) {
+      stop()
+      stage = next
+    },
+    stop,
+  }
 }
 
 // The tools this pipeline runs; core/tools.mjs describes them to the agent.
@@ -164,6 +194,8 @@ export function createHands({ store, app, grants, ask, log }) {
   let ctl = new AbortController()
   let resumed = false
   let seq = 0
+  let queued = 0 // steps entered and not yet returned
+  let last = null // { turn, at } of the latest step's return, for the next step's gap
 
   const busy = () => store.data.attention.busy
   const setFocus = fields => store.update(s => (s.focus = { ...s.focus, ...fields }))
@@ -178,16 +210,19 @@ export function createHands({ store, app, grants, ask, log }) {
     need(allow, `The user did not allow controlling ${name}.`)
   }
 
-  async function step(tool, args, signal) {
+  async function step(tool, args, signal, w) {
     need(args.screenshot === undefined || typeof args.screenshot === 'boolean', 'screenshot must be true or false.')
     const spec = typeof TOOLS[tool] === 'function' ? TOOLS[tool](args) : TOOLS[tool]
     const target = spec.target(args, store.data.focus?.app ?? null)
 
     // 1. Resolve, and a drag's drop end, in the same app: a step has one app to grant and to act in.
+    w.enter('resolve')
     const r = target ? await app.request('resolve', target) : null
     const to = spec.to ? await app.request('resolve', spec.to(args)) : null
+    if (r) w.app = r.app
     if (to && to.app !== r.app) throw new Error(`A drag stays inside one app: it starts in ${r.app} but ends in ${to.app}.`)
     // 2. Grant.
+    w.enter('grant')
     if (r?.app) await grant(r.app, signal)
 
     const id = ++seq
@@ -199,6 +234,7 @@ export function createHands({ store, app, grants, ask, log }) {
 
     try {
       // 3. Attention.
+      w.enter('wait')
       let background = false
       if (busy()) {
         if (spec.front(args, r)) {
@@ -212,6 +248,7 @@ export function createHands({ store, app, grants, ask, log }) {
           setFocus({ background: true })
         }
       }
+      w.enter('front')
       if (!background && r && !r.frontmost && spec.raise !== false) await app.request('front', { app: r.app })
 
       // 4. Mark, so the ring and ghost (both ends of a drag) arrive before something happens to the
@@ -219,7 +256,9 @@ export function createHands({ store, app, grants, ask, log }) {
       // A step with no act has nothing to wait for; its ring is drawn all the same.
       let did = null
       if (spec.act) {
+        w.enter('mark')
         await sleep(MARK_MS, signal)
+        w.enter('act')
         setFocus({ phase: 'acting' })
         const [op, opArgs] = spec.act(args, r, to)
         did = spec.did(args, r, await app.request(op, opArgs)) // the op returns once its effect shows
@@ -229,7 +268,12 @@ export function createHands({ store, app, grants, ask, log }) {
       // 6. Observe, the one place the core asks for the see op, and only of the app this step
       // resolved and granted. 7. Return.
       if (!r) return { text: did }
-      const observe = () => app.request('see', { app: r.app, screenshot: args.screenshot === true })
+      const observe = async () => {
+        w.enter('observe')
+        const res = await app.request('see', { app: r.app, screenshot: args.screenshot === true })
+        w.elements = res.elements.length
+        return res
+      }
       if (!did) return listing(null, await observe())
       // An action that happened is never reported as failed, or the agent would do it again.
       let res
@@ -245,14 +289,39 @@ export function createHands({ store, app, grants, ask, log }) {
     }
   }
 
-  // Queue a call; steps run strictly one after another.
+  // Queue a call; steps run strictly one after another. Each logs one line when it returns:
+  //   step <tool> <app> gap queue resolve grant wait front mark act observe total elements chars image [failed]
+  // `gap` is the time since the previous step returned (the agent's thinking and the hops to here):
+  // 0 when this call came while another was still running, and "-" for the first step of a turn, so
+  // the user's own time between turns never counts. `queue` is the time spent behind earlier steps.
   function run(tool, args = {}) {
     if (!TOOLS[tool]) return Promise.reject(new Error(`Unknown hands tool: ${tool}`))
     const signal = ctl.signal
-    const p = chain.then(() => {
-      if (signal.aborted) throw cancelled()
-      if (store.data.paused) throw new Error('The user paused Lookma. Nothing can be done on screen until they resume.')
-      return step(tool, args, signal)
+    const entered = Date.now()
+    const turn = store.data.turn?.id ?? null
+    const gap = queued ? 0 : last?.turn === turn ? entered - last.at : '-'
+    queued++
+    const p = chain.then(async () => {
+      const w = stopwatch()
+      let out = null
+      let failed = null
+      try {
+        if (signal.aborted) throw cancelled()
+        if (store.data.paused) throw new Error('The user paused Lookma. Nothing can be done on screen until they resume.')
+        out = await step(tool, args, signal, w)
+        return out
+      } catch (err) {
+        failed = err
+        throw err
+      } finally {
+        w.stop()
+        queued--
+        last = { turn, at: Date.now() }
+        const fields = [`gap=${gap}`, `queue=${w.start - entered}`, ...STAGES.map(s => `${s}=${w.ms[s]}`), `total=${last.at - w.start}`,
+          `elements=${w.elements}`, `chars=${out ? out.text.length : 0}`, `image=${out?.image ? out.image.length : 0}`]
+        if (failed) fields.push(`failed=${JSON.stringify(failed.message)}`)
+        log(`step ${tool} ${w.app} ${fields.join(' ')}`)
+      }
     })
     chain = p.catch(() => {})
     return p

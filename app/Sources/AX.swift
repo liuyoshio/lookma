@@ -153,11 +153,24 @@ func dockItem(named name: String) -> AXUIElement? {
     return (items.first { $0.1 == n } ?? items.first { !$0.1.isEmpty && $0.1.contains(n) })?.0
 }
 
+/// The app bundle a Dock icon stands for.
+func dockItemURL(_ item: AXUIElement) -> URL? {
+    guard let v = axGet(item, "AXURL") else { return nil }
+    return (v as? URL) ?? URL(string: "\(v)")
+}
+
 /// The running app a Dock icon stands for, if it is running.
 func dockItemApp(_ item: AXUIElement) -> NSRunningApplication? {
-    guard let v = axGet(item, "AXURL") else { return nil }
-    guard let url = (v as? URL) ?? URL(string: "\(v)"), let id = Bundle(url: url)?.bundleIdentifier else { return nil }
+    guard let id = dockItemURL(item).flatMap(Bundle.init(url:))?.bundleIdentifier else { return nil }
     return NSRunningApplication.runningApplications(withBundleIdentifier: id).first
+}
+
+/// The name an app's localizedName will have once it runs, read from its bundle: the display name,
+/// else the bundle name, else the file's name (the order the running apps on a Mac were checked to follow).
+func bundleAppName(_ url: URL) -> String? {
+    guard let b = Bundle(url: url) else { return nil }
+    let key = { (k: String) in (b.localizedInfoDictionary?[k] ?? b.infoDictionary?[k]) as? String }
+    return key("CFBundleDisplayName") ?? key("CFBundleName") ?? FileManager.default.displayName(atPath: url.path)
 }
 
 // MARK: - attributes for web-based apps

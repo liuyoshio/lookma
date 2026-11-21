@@ -42,7 +42,7 @@ func mouseClick(_ p: CGPoint, button: CGMouseButton) {
     }
 }
 
-// A drag, timed as a hand would do it. Each value is matched by DRAG_HOLD and DRAG_MS in
+// A drag, timed as a hand would do it. Each value is matched by DRAG_HOLD, DRAG_MS and DRAG_DWELL in
 // overlay/marks.js, so the ghost cursor moves with the real pointer.
 // The hold before moving: apps start a drag session only after the button has been down a while,
 // and a text view waits longer before it treats a press on selected text as a drag rather than a
@@ -54,16 +54,31 @@ private let dragSamples = 20
 private let dragStepUs: useconds_t = 25_000
 private let dragDwellUs: useconds_t = 200_000
 
-/// `n` points from a to b on a straight line, eased in and out, the last one at b. The first is
-/// 5 points off a, past the few points apps wait for before a press becomes a drag.
+/// `n` points from a to b (apart) on a straight line, eased in and out, the last one at b. The first
+/// is 5 points off a, past the few points apps wait for before a press becomes a drag, or b when that
+/// is closer.
 func dragPath(from a: CGPoint, to b: CGPoint, samples n: Int) -> [CGPoint] {
-    let dx = b.x - a.x, dy = b.y - a.y, d = hypot(dx, dy)
-    let first = d > 0 ? CGPoint(x: a.x + dx / d * 5, y: a.y + dy / d * 5) : CGPoint(x: a.x + 5, y: a.y)
+    let dx = b.x - a.x, dy = b.y - a.y, d = hypot(dx, dy), lead = min(5, d)
+    let first = CGPoint(x: a.x + dx / d * lead, y: a.y + dy / d * lead)
     let ease = { (u: CGFloat) in u < 0.5 ? 4 * u * u * u : 1 - pow(-2 * u + 2, 3) / 2 }
     return [first] + (1..<n).map { i in
         let u = ease(CGFloat(i) / CGFloat(n - 1))
         return CGPoint(x: first.x + (b.x - first.x) * u, y: first.y + (b.y - first.y) * u)
     }
+}
+
+/// A left button event as hardware sends it: down and up carry click count 1 (some text and table
+/// views ignore a press without it), and a dragged event carries how far it moved (a canvas may
+/// pan by that delta rather than by the position).
+private func leftEvent(_ type: CGEventType, at p: CGPoint, from prev: CGPoint? = nil) -> CGEvent? {
+    let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+    if let prev {
+        e?.setIntegerValueField(.mouseEventDeltaX, value: Int64((p.x - prev.x).rounded()))
+        e?.setIntegerValueField(.mouseEventDeltaY, value: Int64((p.y - prev.y).rounded()))
+    } else {
+        e?.setIntegerValueField(.mouseEventClickState, value: 1)
+    }
+    return e
 }
 
 /// Presses the left button at `from`, holds, moves to `to` and lets go there. The button is let go
@@ -72,12 +87,12 @@ func mouseDrag(from: CGPoint, to: CGPoint) {
     posting {
         post(CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: from, mouseButton: .left))
         usleep(60_000) // the overlay re-checks the pointer at 30 Hz and turns click-through back on
-        post(CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left))
+        post(leftEvent(.leftMouseDown, at: from))
         var at = from
-        defer { post(CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: at, mouseButton: .left)) }
+        defer { post(leftEvent(.leftMouseUp, at: at)) }
         usleep(dragHoldUs)
         for p in dragPath(from: from, to: to, samples: dragSamples) {
-            post(CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left))
+            post(leftEvent(.leftMouseDragged, at: p, from: at))
             at = p
             usleep(dragStepUs)
         }

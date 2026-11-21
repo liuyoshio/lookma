@@ -306,7 +306,7 @@ check('the pipeline runs exactly the hands tools core/tools.mjs describes', TOOL
   const shot = await settle(hands('click', { label: 'Back', element: back, screenshot: true }))
   check('screenshot: true on an action returns the list with the image', shot.ok && app.ops.slice(m).find(o => o.op === 'see')?.args.screenshot === true && shot.v.image?.length > 100 && /Screenshot: 640x400 px/.test(shot.v.text), shot.v?.text || shot.e?.message)
   const plain = await settle(hands('key', { label: 'Escape', combo: 'escape' }))
-  check('an action without screenshot: no image, and the old screenshot is called older', plain.ok && !plain.v.image && /^Pressed escape in Finder\.\n/.test(plain.v.text) && /The last screenshot is from before this action/.test(plain.v.text), plain.v?.text || plain.e?.message)
+  check('an action without screenshot: no image, and the old screenshot is called older', plain.ok && !plain.v.image && /^Pressed escape in Finder\.\n/.test(plain.v.text) && /The last screenshot is older than this list/.test(plain.v.text), plain.v?.text || plain.e?.message)
 
   // A list that fails after a done act: the action is reported done, never as failed.
   app.failSee('Finder has no open window.')
