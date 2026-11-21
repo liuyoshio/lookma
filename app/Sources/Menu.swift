@@ -10,6 +10,7 @@
 //   Hand Gestures                             checked while on, for this run (LOOKMA_GESTURES is the
 //                                             setting); on, it says when the camera is refused
 //                                             (Allow Camera…, which opens System Settings) or missing
+//                                             (No Camera, which still turns them off)
 //   Pause or Resume (⌃⌥P), Type a Request…, Quit
 //
 // The icon is Hands the seal (brand/menubar*.png, copied to app/Resources): a ball above it while
@@ -92,7 +93,9 @@ final class StatusMenu: NSObject {
         let on = gestures == true
         gesturesItem.state = on ? .on : .off
         gesturesItem.title = !on ? "Hand Gestures" : camera == .denied ? "Hand Gestures: Allow Camera…" : camera == .unavailable ? "Hand Gestures: No Camera" : "Hand Gestures"
-        gesturesItem.isEnabled = connected && !(on && camera == .unavailable)
+        // Enabled with No Camera too, so gestures can be turned off before a camera (an iPhone in
+        // range) turns up and starts by itself.
+        gesturesItem.isEnabled = connected
         // ⌃⌥P is a global Carbon hot key, not a key equivalent, so it is drawn as part of the title.
         toggle.attributedTitle = shortcutTitle(paused == true ? "Resume" : "Pause", "⌃⌥P")
         toggle.isEnabled = connected

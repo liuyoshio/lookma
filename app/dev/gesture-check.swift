@@ -230,8 +230,18 @@ struct GestureCheck {
         r = Rig()
         r.pinchAt(0.3, 0.5)
         r.frames(17) { i in (8..<14).contains(i) ? [] : [hand(0.34 + 0.04 * Double(i), 0.5, .pinch(0.1))] }
-        check(r.names().hasPrefix("begin step+1 step+1") && !r.names().contains("end"),
-              "switch: a fast slide across a dropout keeps the same hand")
+        check(r.names() == "begin step+1", "switch: a fast slide across a dropout keeps the same hand, and is one step")
+
+        r = Rig()
+        r.pinchAt(0.5, 0.5)
+        r.move((0.5, 0.5), (0.75, 0.5), 8, .pinch(0.1))
+        r.hold(10, [hand(0.75, 0.5, .pinch(0.1))])
+        check(r.names() == "begin step+1", "switch: a flick that carries on past a detent is one step")
+
+        r = Rig()
+        r.move((0.2, 0.5), (0.3, 0.5), 6, .loose)
+        r.move((0.3, 0.5), (0.6, 0.5), 18, .pinch(0.1))
+        check(r.names().isEmpty, "switch: a pinch closed on a hand already moving sideways does nothing")
 
         r = fling()
         r.gap(12)
@@ -332,6 +342,11 @@ struct GestureCheck {
         check(r.names() == "down up", "talk: a hand leaving the frame lets it go")
 
         r = Rig()
+        r.hold(10, [hand(0.5, 0.3, .open)])
+        r.gap(10)
+        check(r.events.isEmpty, "talk: a palm still for 0.3 s, then gone, does nothing")
+
+        r = Rig()
         r.hold(3, [hand(0.4, 0.5, .loose), hand(0.8, 0.3, .open)])
         r.hold(3, [hand(0.4, 0.5, .pinch(0.1)), hand(0.8, 0.3, .open)])
         r.frames(30) { i in [hand(0.4, 0.5 + 0.2 * Double(i + 1) / 30, .pinch(0.1)), hand(0.8, 0.3, .open)] }
@@ -364,6 +379,14 @@ struct GestureCheck {
         r.hold(20, [hand(0.5, 0.4, .open)])
         push(&r, at: 0.4)
         check(r.names() == "down cancel stop", "stop: a push while talking cancels, then stops")
+
+        r = Rig()
+        r.hold(4, [hand(0.5, 0.7, .open)])
+        r.hold(1, [hand(0.5, 0.7, .open, s: 0.17)])
+        r.hold(4, [hand(0.5, 0.7, .open)])
+        r.hold(1, [hand(0.5, 0.7, .open, s: 0.09)])
+        r.hold(4, [hand(0.5, 0.7, .open)])
+        check(r.events.isEmpty, "stop: one frame's glitch in the palm's size, up or down, does not stop")
 
         r = Rig()
         r.move((0.5, 0.95), (0.5, 0.35), 9, .open)

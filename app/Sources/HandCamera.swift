@@ -52,6 +52,7 @@ final class HandCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     // The capture queue's.
     private var live = false
+    private var failing = false // Vision failed on the last frame
     private let request: VNDetectHumanHandPoseRequest = {
         let r = VNDetectHumanHandPoseRequest()
         r.maximumHandCount = 2
@@ -83,8 +84,13 @@ final class HandCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             guard let self, wanted, state == .unavailable else { return }
             run(true)
         }
-        center.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { note in
+        // The session died and sends no more frames. The engine's only clock is the frame, so it
+        // must be torn down now, or a held Command or talk key would stay down.
+        center.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { [weak self] note in
             log("camera error: \((note.userInfo?[AVCaptureSessionErrorKey] as? Error)?.localizedDescription ?? "unknown")")
+            guard let self else { return }
+            stop()
+            state = .unavailable
         }
     }
 
@@ -145,8 +151,9 @@ final class HandCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         state = .running
     }
 
-    /// Puts this camera in the session: 1280x720 where it has it, else 640x480 (probe P1 settles
-    /// which keeps the hand-to-event time), and at most 30 frames a second.
+    /// Puts this camera in the session: 1280x720 where it has it, else 640x480, and at most 30
+    /// frames a second. The higher resolution is for range: at 640x480 a palm at arm's length is
+    /// about 30 pixels, and the pinch thresholds come down to the joints' own noise.
     private func use(_ camera: AVCaptureDevice) throws {
         let input = try AVCaptureDeviceInput(device: camera)
         session.beginConfiguration()
@@ -167,13 +174,17 @@ final class HandCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard live, let pixels = CMSampleBufferGetImageBuffer(sample) else { return }
         let aspect = Double(CVPixelBufferGetWidth(pixels)) / Double(CVPixelBufferGetHeight(pixels))
+        // A frame Vision fails on still goes on, with no hand: the engine's only clock is the frame,
+        // so a held hand is let go after the grace. Logged when it starts failing, not every frame.
         let hands: [Hand]
         do {
             try VNImageRequestHandler(cvPixelBuffer: pixels).perform([request])
             hands = try (request.results ?? []).compactMap { try hand($0, aspect) }
+            failing = false
         } catch {
-            log("hand pose failed: \(error.localizedDescription)")
-            return
+            if !failing { log("hand pose failed: \(error.localizedDescription)") }
+            failing = true
+            hands = []
         }
         onFrame(HandFrame(t: CMSampleBufferGetPresentationTimeStamp(sample).seconds, hands: hands), aspect)
     }

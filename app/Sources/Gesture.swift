@@ -46,7 +46,8 @@ struct GestureOutputs { let events: [GestureEvent]; let dot: HandDot? }
 // MARK: - The engine
 
 struct GestureEngine {
-    /// Starting values from the prior art (the design's constants table); tuned on a real camera.
+    /// Starting values, from the projects credited above where they have prior art; tuned on a real
+    /// camera.
     enum Tuning {
         static let nearField = 0.05          // palm scale below which a hand is ignored (bystanders)
         static let pinchClose = 0.20         // gap, in palm scales, that closes a pinch
@@ -83,9 +84,12 @@ struct GestureEngine {
     /// One activity at a time; the first motion of a pinch locks its mode.
     enum Phase: Equatable {
         case idle
-        case armed(track: Int, anchor: CGPoint, rest: Double) // pinched, not moved yet
+        /// Pinched, not moved yet: anchored at `at`, last at rest there at `rest` (-inf: the hand
+        /// was moving when anchored).
+        case armed(track: Int, anchor: CGPoint, at: Double, rest: Double)
         case scroll(track: Int, y: Double)
-        case switching(track: Int, detent: Double)
+        /// Steps count from `detent` once the flick has settled; until then it follows the hand.
+        case switching(track: Int, detent: Double, settled: Bool)
         case zoom(Int, Int, ref: Double, last: Double)
         case talk(track: Int)
         case spent // a session ended or a stop fired: nothing starts until hands open or leave
@@ -126,9 +130,9 @@ struct GestureEngine {
     }
 
     /// Gives each hand to the nearest track within the radius (around its predicted point while
-    /// pinched: a fast fling is when Vision drops frames), else to a free track. Returns the ids
-    /// of tracks that confirmed a pinch in this frame.
-    private mutating func match(_ shapes: [Shape], at t: Double) -> [Int] {
+    /// pinched: a fast fling is when Vision drops frames), else to a free track. Returns the
+    /// tracks that confirmed a pinch in this frame.
+    private mutating func match(_ shapes: [Shape], at t: Double) -> [Track] {
         var pairs: [(d: Double, h: Int, k: Int)] = []
         for (h, s) in shapes.enumerated() {
             for (k, tr) in tracks.enumerated() {
@@ -142,9 +146,9 @@ struct GestureEngine {
             handOf[p.k] = p.h
             taken.insert(p.h)
         }
-        var confirmed: [Int] = []
+        var confirmed: [Track] = []
         for (k, h) in handOf.sorted(by: { $0.key < $1.key }) {
-            if tracks[k].see(shapes[h], at: t) { confirmed.append(tracks[k].id) }
+            if tracks[k].see(shapes[h], at: t) { confirmed.append(tracks[k]) }
         }
         // New hands left to right, so which one is first does not depend on Vision's order.
         let fresh = shapes.indices.filter { !taken.contains($0) }.sorted { shapes[$0].point.x < shapes[$1].point.x }
@@ -162,37 +166,45 @@ struct GestureEngine {
         phase = tracks.contains { $0.pinched } ? .spent : .idle
     }
 
-    private mutating func advance(_ t: Double, confirmed: [Int], _ out: inout [GestureEvent]) {
+    private mutating func advance(_ t: Double, confirmed: [Track], _ out: inout [GestureEvent]) {
         switch phase {
         case .idle:
-            if let id = confirmed.first, let tr = track(id) {
-                phase = .armed(track: id, anchor: tr.point, rest: t)
-                if let other = confirmed.dropFirst().first { startZoom(id, other) }
+            if let first = confirmed.first {
+                phase = .armed(track: first.id, anchor: first.point, at: t, rest: first.slow ? t : -.infinity)
+                if let second = confirmed.dropFirst().first { startZoom(first, second) }
             } else if tracks.contains(where: { $0.pushed }) {
                 out.append(.stop)
                 phase = .spent
-            } else if let tr = tracks.first(where: { $0.dwelled(at: t) }) {
+            } else if let tr = tracks.first(where: { $0.dwelled }) {
                 out.append(.talk(.down))
                 phase = .talk(track: tr.id)
             }
 
-        case .armed(let id, var anchor, var rest):
+        case .armed(let id, var anchor, var at, var rest):
             guard let tr = track(id), tr.pinched else { return end() }
-            if let other = confirmed.first(where: { $0 != id }) { return startZoom(id, other) }
+            if let other = confirmed.first(where: { $0.id != id }) { return startZoom(tr, other) }
             guard tr.seenNow else { return }
+            // A hand that was moving when it was anchored (fingers closing on a hand reaching for
+            // the mouse or a cup) has not rested, so it cannot fling: it is anchored again where it
+            // slows. Otherwise it rests while near the anchor.
+            if rest == -.infinity && tr.slow { anchor = tr.point; at = t; rest = t }
             let dx = tr.point.x - anchor.x, dy = tr.point.y - anchor.y
-            if hypot(dx, dy) <= Tuning.restRadius { rest = t }
+            if hypot(dx, dy) <= Tuning.restRadius && rest > -.infinity { rest = t }
             if abs(dx) >= Tuning.flingTravel && abs(dx) >= Tuning.flingRatio * abs(dy) && t - rest <= Tuning.flingWindow {
                 let step = dx > 0 ? 1 : -1
                 out += [.switchBegin, .switchStep(step)]
-                phase = .switching(track: id, detent: tr.point.x)
+                phase = .switching(track: id, detent: tr.point.x, settled: false)
             } else if abs(dy) >= Tuning.deadzone && abs(dy) > abs(dx) {
                 phase = .scroll(track: id, y: tr.point.y) // the travel through the deadzone is not replayed
             } else {
-                // Away from rest too long for a fling: a slow drag does nothing, and the next
-                // fling may start from here.
-                if t - rest > Tuning.flingWindow { anchor = tr.point; rest = t }
-                phase = .armed(track: id, anchor: anchor, rest: rest)
+                // Neither, for longer than a fling's window: a slow drag does nothing, and the next
+                // fling may start from here once the hand rests.
+                if t - max(at, rest) > Tuning.flingWindow {
+                    anchor = tr.point
+                    at = t
+                    rest = tr.slow ? t : -.infinity
+                }
+                phase = .armed(track: id, anchor: anchor, at: at, rest: rest)
             }
 
         case .scroll(let id, let y):
@@ -201,14 +213,22 @@ struct GestureEngine {
             if tr.point.y != y { out.append(.scroll(dy: tr.point.y - y)) }
             phase = .scroll(track: id, y: tr.point.y)
 
-        case .switching(let id, var detent):
+        case .switching(let id, var detent, var settled):
             guard let tr = track(id), tr.pinched else {
                 out.append(.switchEnd)
                 return end()
             }
-            while tr.point.x - detent >= Tuning.detent { out.append(.switchStep(1)); detent += Tuning.detent }
-            while tr.point.x - detent <= -Tuning.detent { out.append(.switchStep(-1)); detent -= Tuning.detent }
-            phase = .switching(track: id, detent: detent)
+            guard tr.seenNow else { return }
+            if settled {
+                while tr.point.x - detent >= Tuning.detent { out.append(.switchStep(1)); detent += Tuning.detent }
+                while tr.point.x - detent <= -Tuning.detent { out.append(.switchStep(-1)); detent -= Tuning.detent }
+            } else {
+                // The flick that opened the switcher carries on past the crossing: the detents
+                // count from where it slows, so one flick is one step.
+                detent = tr.point.x
+                settled = tr.slow
+            }
+            phase = .switching(track: id, detent: detent, settled: settled)
 
         case .zoom(let a, let b, let ref, let last):
             guard let ta = track(a), ta.pinched, let tb = track(b), tb.pinched else { return end() }
@@ -239,16 +259,15 @@ struct GestureEngine {
         }
     }
 
-    private mutating func startZoom(_ a: Int, _ b: Int) {
-        guard let ta = track(a), let tb = track(b) else { return }
-        phase = .zoom(a, b, ref: distance(ta.point, tb.point), last: -.infinity)
+    private mutating func startZoom(_ a: Track, _ b: Track) {
+        phase = .zoom(a.id, b.id, ref: distance(a.point, b.point), last: -.infinity)
     }
 
     /// The active track's hand (the one in a session, else the first), as the overlay draws it.
     private func dot() -> HandDot? {
         let active: Int?
         switch phase {
-        case .armed(let id, _, _), .scroll(let id, _), .switching(let id, _), .talk(let id), .zoom(let id, _, _, _): active = id
+        case .armed(let id, _, _, _), .scroll(let id, _), .switching(let id, _, _), .talk(let id), .zoom(let id, _, _, _): active = id
         case .idle, .spent: active = nil
         }
         guard let tr = active.flatMap({ track($0) }) ?? tracks.first else { return nil }
@@ -337,8 +356,7 @@ private struct Track {
         } else {
             palm = []
         }
-        let speed = hypot(filter.velocity.dx, filter.velocity.dy)
-        if s.openPalm && point.y < T.talkOn && speed < T.stillSpeed {
+        if s.openPalm && point.y < T.talkOn && slow {
             if still == nil || abs(s.scale / still!.scale - 1) > T.stillScale { still = (t, s.scale) }
         } else {
             still = nil
@@ -352,13 +370,24 @@ private struct Track {
         return CGPoint(x: point.x + filter.velocity.dx * (t - lastSeen), y: point.y + filter.velocity.dy * (t - lastSeen))
     }
 
-    /// The palm grew by the push factor within the window while staying roughly in place.
+    /// Slower than still speed, by the filter's velocity.
+    var slow: Bool { hypot(filter.velocity.dx, filter.velocity.dy) < T.stillSpeed }
+
+    /// The palm grew by the push factor within the window while staying roughly in place, debounced
+    /// like the pinch at both ends: each of the newest samples is that much bigger than each of
+    /// some run of older ones, so one frame's joint glitch (a spike now, a dip before) is not a push.
     var pushed: Bool {
-        guard let newest = palm.last else { return false }
-        return palm.dropLast().contains { newest.s >= T.pushGrowth * $0.s && distance(newest.p, $0.p) < T.pushTravel }
+        let n = T.debounce
+        guard palm.count >= 2 * n else { return false }
+        let newest = palm.suffix(n), older = Array(palm.dropLast(n))
+        return (0...older.count - n).contains { i in
+            older[i..<i + n].allSatisfy { o in newest.allSatisfy { $0.s >= T.pushGrowth * o.s && distance($0.p, o.p) < T.pushTravel } }
+        }
     }
 
-    func dwelled(at t: Double) -> Bool { still.map { t - $0.since >= T.talkDwell } ?? false }
+    /// Still for the dwell, counted to the last frame the hand was seen: a palm that drops out of
+    /// view does not finish its dwell inside the grace.
+    var dwelled: Bool { still.map { lastSeen - $0.since >= T.talkDwell } ?? false }
 }
 
 // MARK: - One Euro filter
