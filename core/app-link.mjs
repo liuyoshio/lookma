@@ -1,11 +1,12 @@
 // The link to the Swift app over /ws/app: requests and notices out; replies, attention and the
-// user's commands from the menu bar and hotkey (pause, resume, quit) in.
+// user's commands from the menu bar and hotkey (pause, resume, quit, and the talk mode) in.
 import { logUnknown } from './util.mjs'
+import { TALK } from './config.mjs'
 
 const TIMEOUT_MS = { see: 20000, default: 15000 }
 const COMMANDS = new Set(['pause', 'resume', 'quit'])
 
-export function createAppLink({ log, onAttention, onChange, onCommand }) {
+export function createAppLink({ log, onAttention, onChange, onCommand, onTalk }) {
   let ws = null
   let info = null // the app's hello
   let seq = 0
@@ -39,6 +40,9 @@ export function createAppLink({ log, onAttention, onChange, onCommand }) {
         onAttention(Number(msg.idle))
       } else if (COMMANDS.has(msg.type)) {
         onCommand?.(msg.type)
+      } else if (msg.type === 'talk') {
+        if (TALK.includes(msg.mode)) onTalk(msg.mode)
+        else log(`bad app message: talk mode ${JSON.stringify(msg.mode)}, ignored`)
       } else if (msg.type === 'res') {
         const p = pending.get(msg.id)
         if (!p) return

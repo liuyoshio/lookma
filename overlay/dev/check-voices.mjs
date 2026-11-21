@@ -41,6 +41,13 @@
 //   - voice off (the core has no voice): no session and no microphone, and what is owed is
 //     settled as shown; a ?voice=0 page: no session, no microphone and no receipts
 //   - always listening never switches the provider's detector off
+//   - key mode, with the key driven as the app drives it (window.lookma.key): at rest the
+//     microphone is closed and off the sender; a tap opens a hands-free conversation whose turns
+//     the detector finds, another tap closes it; a hold switches the detector off, discards what
+//     came before and begins the turn, and at release closes the microphone and commits it, which
+//     is replied to and captioned under the service's item id; a hold over an announcement
+//     cancels and silences it, which is settled as cut at once; back to always the microphone
+//     opens and the detector is restored
 //   - the provider on its own, driven with listen and cut as the turn source would: no track at
 //     connect; a hold from off switches the detector off and discards what came before, begins
 //     the turn under its own id, and at release takes the microphone off, stops the turn and
@@ -235,7 +242,7 @@ async function scenario(name, fake) {
   check((await sent()).length === 0, 'startup: nothing sent (nothing owed, nothing to tell a first session)')
   check((await glyph('vg off')) === 'vg off' && (await capHidden()), 'startup: the glyph still and the capsule hidden while idle')
   check((await posted('voice')) === true && (await posted('listening')) === undefined, 'startup: the app is told voice is on (its menu bar icon)')
-  check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping', 'the talk and wake APIs are gone (talkDown, talkUp, talkCancel, wakeTalk, wakeEnd)')
+  check((await page.evaluate('Object.keys(window.lookma).join()')) === 'toggleTyping,key', 'the app\'s page API is toggleTyping and key (the old talk and wake APIs are gone)')
 
   // 2. A turn: "Listening…" while the user talks; a reply asked for at once on commit; the
   // caption once the reply takes the turn.
@@ -521,6 +528,67 @@ async function scenario(name, fake) {
   check(lostThen && (await until(() => receipted(id, 'spoken'))) && (await noCreate(300)), `a receipt lost with the link is sent again after the reconnect (${id}), with no new announcement`)
 
   check(!(await sent()).some(e => e.type === 'listen'), 'always listening: the provider\'s detector was never switched off')
+
+  // 12a. Key mode, the key driven as the app drives it (window.lookma.key) on the live session.
+  const pressKey = edge => page.evaluate(`window.lookma.key(${JSON.stringify(edge)})`)
+  const onSender = async () => (await lastConnection()).tracks.at(-1)
+  const liveMics = async () => (await mics()).filter(x => x.state === 'live')
+  const stepsSince = async from => (await sent()).slice(from).filter(e => e.type === 'listen' || e.type === 'cut').map(e => e.step).join()
+  await sleep(800)
+  from = (await sent()).length
+  await mock.setTalk('key')
+  check((await until(async () => (await onSender()) === null && (await liveMics()).length === 0)) && (await stepsSince(from)) === '',
+    'key mode: at rest the microphone is closed and off the sender, with nothing sent')
+  let gums = await voice('gums')
+  await pressKey('down')
+  await pressKey('up')
+  check((await until(async () => (await liveMics()).length === 1)) && (await voice('gums')) === gums + 1 && (await onSender()) === (await liveMics())[0].id && (await stepsSince(from)) === '',
+    'key mode: a tap opens a hands-free conversation, a new microphone on the sender, the detector as it was')
+  await vadTurn('Open Maps')
+  check((await nextCreate())?.kind === 'turn', 'key mode: in the conversation the detector\'s turns are replied to')
+  await reply([{ say: 'Opening Maps.' }])
+  await pressKey('down')
+  await pressKey('up')
+  check((await until(async () => (await onSender()) === null && (await liveMics()).length === 0)) && (await stepsSince(from)) === '',
+    'key mode: another tap closes the conversation and the microphone')
+
+  from = (await sent()).length
+  gums = await voice('gums')
+  await pressKey('down')
+  await sleep(400) // armed at 150 ms; the microphone takes 100
+  check((await stepsSince(from)) === 'undetect,discard' && (await onSender()) === (await liveMics())[0]?.id && (await voice('gums')) === gums + 1 &&
+    (await glyph('vg listening')) === 'vg listening', 'key mode: a hold switches the detector off, discards what came before, opens the microphone and begins the turn')
+  await pressKey('up')
+  check(await until(async () => (await stepsSince(from)) === 'undetect,discard,commit' && (await onSender()) === null && (await liveMics()).length === 0),
+    'key mode: released, the microphone closes and the turn is committed')
+  await emit({ type: 'turn.committed', id: 'item_k1' })
+  create = await nextCreate(1000)
+  await transcript('item_k1', 'Open Calculator')
+  await reply([{ say: 'Opening Calculator.' }])
+  check(create?.kind === 'turn' && (await until(async () => (await capUser()) === '“Open Calculator”', 1000)),
+    'key mode: the held turn is replied to, its transcript shown under the service\'s item id')
+
+  // A hold over an announcement cuts it: settled as cut at once, not told again.
+  await sleep(800)
+  await mock.say({ speech: 'The sync finished.', display: 'Sync finished' })
+  await nextCreate()
+  said = await start([{ say: 'The sync finished.' }])
+  from = (await sent()).length
+  await pressKey('down')
+  await sleep(400)
+  check((await stepsSince(from)) === 'cancel,silence,discard', `key mode: a hold over the butler cancels its reply and silences it, then holds (${await stepsSince(from)})`)
+  await emit(...said.cut)
+  await pressKey('up')
+  await until(async () => (await stepsSince(from)).endsWith('commit'))
+  const keyCommit = (await sent()).slice(from).find(e => e.step === 'commit')
+  await emit({ type: 'error', eventId: keyCommit?.eventId, message: 'buffer too small' }) // nothing was said
+  id = await entryId('The sync finished.')
+  check((await until(() => receipted(id, 'cut'))) && (await noCreate(1500)), `key mode: the announcement the key cut is delivered ${id} cut, and the empty hold asks for nothing`)
+
+  from = (await sent()).length
+  await mock.setTalk('always')
+  check((await until(async () => (await liveMics()).length === 1 && (await onSender()) === (await liveMics())[0].id)) && (await stepsSince(from)) === 'detect',
+    'back to always: the microphone open again, the detector restored')
 
   // 13. A microphone that cannot open: the session stays up, nothing on its sender, and a notice.
   since = page.logs.length

@@ -60,6 +60,8 @@ export function startMock({ port, args = [] }) {
   }
   // What the app's menu bar and ⌃⌥P do: ask the core to pause or resume.
   m.setPaused = paused => fetch(`${m.base}dev/paused`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }) })
+  // What the app's Listen choice does: set the talk mode, 'always' or 'key'.
+  m.setTalk = mode => fetch(`${m.base}dev/talk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
   // One executor `say`, now: { speech, display?, kind? }.
   m.say = body => fetch(`${m.base}dev/say`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   return m

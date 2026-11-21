@@ -18,13 +18,18 @@ export const DEFAULTS = { executors: 'claude', voices: 'openai' }
 // The core's own settings. A plug-in declares its own in its manifest; lookma doctor warns about
 // any other LOOKMA_* that is set. LOOKMA_SIGN_IDENTITY is app/build.sh's, LOOKMA_LIVE_TESTS the
 // dev checks'.
-const CORE = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_VOICE_LANGUAGE', 'LOOKMA_PORT', 'LOOKMA_DATA', 'LOOKMA_NO_APP', 'LOOKMA_SIGN_IDENTITY', 'LOOKMA_LIVE_TESTS']
+const CORE = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK', 'LOOKMA_VOICE_LANGUAGE', 'LOOKMA_PORT', 'LOOKMA_DATA', 'LOOKMA_NO_APP', 'LOOKMA_SIGN_IDENTITY', 'LOOKMA_LIVE_TESTS']
+
+// How the user talks to the voice (LOOKMA_TALK), the default first: always listening, or the key
+// (hold fn to talk; a tap opens a hands-free conversation). The app's menu changes it for a run.
+export const TALK = ['always', 'key']
 
 // The named flags, each a shorthand for one setting. --set NAME=value sets any other.
 const FLAGS = {
   '--agent': name => ({ LOOKMA_EXECUTOR: name }),
   '--voice': name => ({ LOOKMA_VOICE: name }),
   '--audio': setup => ({ LOOKMA_AUDIO: setup }),
+  '--talk': mode => ({ LOOKMA_TALK: mode }),
   '--set': pair => {
     const m = pair.match(/^([A-Z][A-Z0-9_]*)=(.*)$/)
     if (!m) throw usage(`--set ${pair}: use --set NAME=value`)
@@ -131,6 +136,7 @@ export async function loadConfig(settings = {}) {
       off: !provider ? 'voice is off (LOOKMA_VOICE=off)' : provider.missing.length ? `${provider.missing[0]} is not set (see .env.example)` : null,
       language: env.LOOKMA_VOICE_LANGUAGE || '', // ISO 639-1, e.g. zh; unset, the transcriber detects it
       audio: oneOf('LOOKMA_AUDIO', ['room', 'headset']), // the provider's mint.mjs sets the service up for it
+      talk: oneOf('LOOKMA_TALK', TALK), // the overlay's turn source reads it from the snapshot; no provider sees it
     },
   }
 }

@@ -17,8 +17,9 @@
 // says goes into the outbox (the core's own core/outbox.mjs), with an entry for the card on screen,
 // and the page's receipts (delivered) are applied to it.
 // The scenario starts when the first overlay connects; POST /dev/restart {from?, hold?}
-// starts it again (the outbox lives on, as the core's would). POST /dev/paused {paused} stands in
-// for the app's menu bar and ⌃⌥P. POST /dev/say {speech, display?, kind?} posts one executor
+// starts it again (the outbox and the talk mode live on, as the core's would). POST /dev/paused
+// {paused} stands in for the app's menu bar and ⌃⌥P, POST /dev/talk {mode} for its Listen
+// choice. POST /dev/say {speech, display?, kind?} posts one executor
 // `say` now. POST /dev/drop closes the overlay sockets, as a dropped link would.
 // GET /api/state returns the current snapshot.
 
@@ -61,6 +62,7 @@ const state = {
   tasks: [],
   outbox: [],
   paused: false,
+  talk: 'always',
 }
 
 const clients = new Set()
@@ -328,6 +330,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/dev/paused') {
     setPaused(!!(await readJson(req)).paused)
+    return json(res, 200, { ok: true })
+  }
+  if (req.method === 'POST' && url.pathname === '/dev/talk') {
+    state.talk = (await readJson(req)).mode
+    changed()
     return json(res, 200, { ok: true })
   }
   if (req.method !== 'GET') return json(res, 404, { error: 'not found' })

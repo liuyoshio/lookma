@@ -37,19 +37,22 @@ Options (each overrides the environment and .env):
   --agent <name>       the agent: ${anyOf(choices(all, 'executors'))}
   --voice <name>       the voice: ${anyOf([...choices(all, 'voices'), 'off (type instead)'])}
   --audio <setup>      room (speakers, the default) or headset
+  --talk <mode>        always (listening, the default) or key (hold fn to talk)
   --set NAME=value     any setting below, e.g. --set LOOKMA_CLAUDE_MODEL=opus
 
 While it runs, the agent's steps, cards and messages are in the log of the terminal
 that started Lookma.
 Just talk. While Lookma runs and is not paused, it listens: the microphone streams
-to the voice, and macOS shows its microphone indicator. To approve a card, say
-"yes, I approve". Pause or resume it with ⌃⌥P, its menu bar icon, or by saying
+to the voice, and macOS shows its microphone indicator. With --talk key it listens
+only while you hold fn, or from a tap of fn until 20 s of quiet. To approve a card,
+say "yes, I approve". Pause or resume it with ⌃⌥P, its menu bar icon, or by saying
 "pause". Quit from the menu bar icon, or with Ctrl-C in the terminal that started it.
 
 Settings, from the environment or ${path.join(ROOT, '.env')}:
   LOOKMA_EXECUTOR        the agent, as --agent
   LOOKMA_VOICE           the voice, as --voice
   LOOKMA_AUDIO           room (speakers, the default) or headset (talking over the voice stops it)
+  LOOKMA_TALK            always (the default) or key, as --talk
   LOOKMA_VOICE_LANGUAGE  the language you speak, e.g. en or zh; unset, it is detected
 `
 
@@ -81,15 +84,16 @@ async function printHelp() {
   process.stdout.write(text + pluginHelp(config))
 }
 
-// The three switches, and every other setting that is set, with where it came from. Secrets are masked.
+// The four switches, and every other setting that is set, with where it came from. Secrets are masked.
 function settings(config) {
   const from = name => config.sources[name] || 'default'
   const rows = [
     ['agent', config.executor.name, from('LOOKMA_EXECUTOR')],
     ['voice', config.voice.provider?.name ?? 'off', from('LOOKMA_VOICE')],
     ['audio', config.voice.audio, from('LOOKMA_AUDIO')],
+    ['talk', config.voice.talk, from('LOOKMA_TALK')],
   ]
-  const shown = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO']
+  const shown = ['LOOKMA_EXECUTOR', 'LOOKMA_VOICE', 'LOOKMA_AUDIO', 'LOOKMA_TALK']
   for (const name of Object.keys(config.sources).filter(n => !shown.includes(n)).sort()) {
     rows.push([name, config.declared.get(name)?.secret ? '(set)' : process.env[name], from(name)])
   }
@@ -117,7 +121,7 @@ async function start(args) {
   const dirs = rest.map(d => path.resolve(d))
   for (const d of dirs) if (!fs.statSync(d, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`not a directory: ${d}`)
   const config = await loadConfig(flags)
-  log('settings', settings(config).slice(0, 3).map(([name, value, from]) => `${name} ${value} (${from})`).join(', '))
+  log('settings', settings(config).slice(0, 4).map(([name, value, from]) => `${name} ${value} (${from})`).join(', '))
 
   // Without the app (LOOKMA_NO_APP=1) its build is yours too, which also keeps a dev core from
   // replacing the bundle another Lookma is running.

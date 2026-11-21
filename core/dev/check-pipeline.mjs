@@ -430,6 +430,16 @@ let app2
   await until(() => last().paused === false)
   await sleep(50)
   check('pause and resume with no turn working: nothing is cancelled or told', calls.length === before, calls.slice(before).map(c => c.name).join(','))
+
+  // The talk mode: the app's menu sets it for this run; a mode the core does not know is ignored.
+  check('on connect the app is told the talk mode', JSON.stringify(app2.notices[1]) === '{"type":"talk","mode":"always"}', JSON.stringify(app2.notices[1]))
+  app2.send({ type: 'talk', mode: 'key' })
+  check('talk: the snapshot carries it and the app is told', !!(await until(() => last().talk === 'key')) && !!(await until(() => JSON.stringify(app2.notices.at(-1)) === '{"type":"talk","mode":"key"}')))
+  app2.send({ type: 'talk', mode: 'loud' })
+  await sleep(50)
+  check('talk: an unknown mode is ignored', last().talk === 'key' && !app2.notices.some(n => n.mode === 'loud'))
+  app2.send({ type: 'talk', mode: 'always' })
+  await until(() => last().talk === 'always')
 }
 
 // Voice grant: without a voice, a clear error with its HTTP status and no network call.

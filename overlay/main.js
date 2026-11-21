@@ -133,7 +133,7 @@ async function answerCard(cardId, allow, via) {
 
 // ------------------------------------------------------------ voice
 
-// One warm voice session, always listening while voice is on and not paused (voice.js).
+// One warm voice session while voice is on and not paused, listening as the talk mode says (voice.js).
 const voice = createVoice({
   enabled: voiceOn,
   getState: () => ui.state,
@@ -201,8 +201,14 @@ addEventListener('keydown', e => {
   else if (e.key === 'Escape' && !typed.hidden) toggleTyping(false)
 })
 
-// For the app (evaluateJavaScript): "Type a Request…" in its menu bar item. It returns nothing,
-// so evaluateJavaScript has no result to convert.
-window.lookma = { toggleTyping }
+// For the app (evaluateJavaScript): "Type a Request…" in its menu bar item, and the talk key's
+// edges (and the menu's Start/End Conversation, 'toggle'), checked here where they enter. Each
+// returns nothing, so evaluateJavaScript has no result to convert.
+const KEY_EDGES = ['down', 'up', 'cancel', 'toggle']
+function key(edge) {
+  if (!KEY_EDGES.includes(edge)) throw new Error(`lookma.key: unknown edge ${JSON.stringify(edge)}`)
+  voice.key(edge)
+}
+window.lookma = { toggleTyping, key }
 
 render()

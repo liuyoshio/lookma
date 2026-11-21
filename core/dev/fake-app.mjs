@@ -3,7 +3,7 @@
 // docs/protocol.md with plausible rects and a placeholder PNG. Nothing on the real screen moves.
 //   node core/dev/fake-app.mjs [--port 8791] [--idle 10] [--front Finder]
 // As a module: startFakeApp({ port, idle, front }) → { ops, notices, setIdle, send, front, elementIds, ready, close }
-//   notices: what the core sent besides requests ({ type: 'paused' }, { type: 'quit' })
+//   notices: what the core sent besides requests ({ type: 'paused' }, { type: 'talk' }, { type: 'quit' })
 //   send(msg): what the menu bar and hotkey send ({ type: 'pause' | 'resume' | 'quit' })
 import zlib from 'node:zlib'
 import WebSocket from 'ws'

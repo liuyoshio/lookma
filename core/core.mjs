@@ -1,9 +1,9 @@
-// The core: one place that decides. Holds turn, focus, attention, cards, tasks, the outbox and
-// paused; runs the hands pipeline; answers the overlay's requests (tell, answer, control: stop,
-// go ahead, pause) with one ack each, takes its receipts for the outbox, and the app's pause,
-// resume and quit; talks to one executor through the executor host (executor/host.mjs), and grants
-// the overlay its voice sessions through the voice host (voice/host.mjs). Transport is
-// server.mjs's: it hands each socket to an entry point.
+// The core: one place that decides. Holds turn, focus, attention, cards, tasks, the outbox,
+// paused and the talk mode; runs the hands pipeline; answers the overlay's requests (tell, answer,
+// control: stop, go ahead, pause) with one ack each, takes its receipts for the outbox, and the
+// app's pause, resume, talk mode and quit; talks to one executor through the executor host
+// (executor/host.mjs), and grants the overlay its voice sessions through the voice host
+// (voice/host.mjs). Transport is server.mjs's: it hands each socket to an entry point.
 import { createLog, logUnknown, cancelled } from './util.mjs'
 import { createStore } from './state.mjs'
 import { createAppLink } from './app-link.mjs'
@@ -20,7 +20,7 @@ const IDLE_S = 3
 // onQuit: the app asked to quit; the CLI runs its graceful shutdown. createExecutor and timing go
 // to the executor host, for checks.
 export async function createCore(config, { log = createLog(), createExecutor, timing, onQuit = () => {} } = {}) {
-  const store = createStore()
+  const store = createStore({ talk: config.voice.talk })
   let n = 0
   const nextId = prefix => `${prefix}${++n}`
   const outbox = createOutbox({ store, nextId })
@@ -101,6 +101,7 @@ export async function createCore(config, { log = createLog(), createExecutor, ti
         onQuit()
       }
     },
+    onTalk: setTalk, // the menu's Listen choice
   })
   const hands = createHands({ store, app, grants: createGrants(config.appsFile), ask, log })
 
@@ -255,6 +256,17 @@ export async function createCore(config, { log = createLog(), createExecutor, ti
     setPaused(false)
   }
 
+  // ---------------------------------------------------------------- talk mode
+
+  // The talk mode: LOOKMA_TALK at start, the app's menu for this run, like pause. The overlay's
+  // turn source reads it from the snapshot; the app shows it in its menu.
+  function setTalk(mode) {
+    if (store.data.talk === mode) return
+    log('talk', mode)
+    store.update(s => (s.talk = mode))
+    app.send({ type: 'talk', mode })
+  }
+
   // ---------------------------------------------------------------- overlay
 
   const unknownOverlay = logUnknown(log, 'overlay')
@@ -325,6 +337,7 @@ export async function createCore(config, { log = createLog(), createExecutor, ti
     connectApp(ws) {
       app.attach(ws)
       app.send({ type: 'paused', paused: store.data.paused })
+      app.send({ type: 'talk', mode: store.data.talk })
     },
     connectExecutor: ws => executor.connect(ws),
 

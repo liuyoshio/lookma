@@ -6,9 +6,11 @@
 //   voice/turns.js    - what is known about each user turn, for approvals and captions
 //   voice/butler.js   - the butler's tools (do, status, answer, control) and the wording of what it is told
 //
-// Full duplex, on one warm session. The talk mode is always: the turn source opens the
-// microphone whenever a session is live, and the provider finds each turn and never
-// replies by itself; every committed turn goes to the floor, which asks for a reply at once, and
+// Full duplex, on one warm session. The talk mode (the snapshot's `talk`) is the turn source's
+// rest: always, the microphone is open whenever a session is live; key, it is closed until the
+// key is held, or a tap opens a hands-free conversation. The key comes from the app (key()). In
+// auto the provider finds each turn, in hold the key bounds it, and the provider never replies by
+// itself; every committed turn goes to the floor, which asks for a reply at once, and
 // the butler decides whether it was meant for it (its pass tool, or saying nothing). What the
 // work wants said is the core's outbox: every snapshot hands it to the floor, which announces
 // what is owed when nobody is talking and sends a receipt (delivered) for each entry. Replies
@@ -43,12 +45,12 @@ import * as source from './voice/source.js'
  *        { kind: 'missed' }                a request the voice gave up on ("say that again")
  *        { kind: 'nomic' }                 the microphone could not open
  * @param {(msg: string) => void} o.log
- * @returns {{ update(snapshot: object): void }}
+ * @returns {{ update(snapshot: object): void, key(edge: 'down' | 'up' | 'cancel' | 'toggle'): void }}
  */
 export function createVoice(o) {
   let state = floor.initial()
   let timer = 0
-  let talking = source.initial('always')
+  let talking = source.initial('always') // until the core's first snapshot says otherwise
   let talkTimer = 0
   let busy = false, calmAt = 0 // the snapshot's work: running or waiting on a card; when it last stopped
   let quiet = null             // the quiet last given to the turn source
@@ -152,13 +154,16 @@ export function createVoice(o) {
   }
 
   return {
-    /** Every core snapshot: paused closes the session and the microphone; the outbox is what is owed. */
+    /** Every core snapshot: the talk mode; paused closes the session and the microphone; the outbox is what is owed. */
     update(snapshot) {
+      if (snapshot.talk !== talking.mode) talk({ type: 'mode', mode: snapshot.talk })
       session.run(!snapshot.paused)
       const working = snapshot.turn?.phase === 'working' || snapshot.cards.length > 0
       if (busy && !working) calmAt = Date.now()
       busy = working
       dispatch({ type: 'outbox', entries: snapshot.outbox })
     },
+    /** The talk key, from the app: down, up, cancel, or toggle (the menu's Start/End Conversation). */
+    key: edge => talk({ type: `key.${edge}` }),
   }
 }

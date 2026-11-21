@@ -201,7 +201,7 @@ More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals a
 ## Privacy and costs
 
 - **Local.** The core listens on 127.0.0.1 only and refuses connections from web pages. No accounts, no telemetry, no servers of ours.
-- **The microphone is on while Lookma runs and is not paused**, and macOS shows its microphone indicator. Its audio streams to OpenAI the whole time, so it hears the room: pause (⌃⌥P or the menu bar) when you want privacy. Paused, the voice session is closed and nothing is sent.
+- **The microphone is on while Lookma runs and is not paused**, and macOS shows its microphone indicator. Its audio streams to OpenAI the whole time, so it hears the room: pause (⌃⌥P or the menu bar) when you want privacy. Paused, the voice session is closed and nothing is sent. With `LOOKMA_TALK=key`, audio goes to OpenAI only while you hold fn or a conversation is open.
 - **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_VOICE=off`, nothing goes to OpenAI and the microphone stays off.
 - **Claude Code uses your Claude plan, Codex your ChatGPT plan**, as usual. The agent's model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
 - **Nothing else leaves your Mac.** Local state is in `~/.lookma/`.
@@ -223,6 +223,7 @@ lookma config --agent codex      # print the settings in effect, and where each 
 | `--agent` | `LOOKMA_EXECUTOR` | `claude` (default) or `codex` |
 | `--voice` | `LOOKMA_VOICE` | `openai` (default) or `off` |
 | `--audio` | `LOOKMA_AUDIO` | `room` (default) or `headset` |
+| `--talk` | `LOOKMA_TALK` | `always` (default) or `key` |
 
 The agent and the voice are plug-ins (folders in `executors/` and `voices/`), and each declares its own settings, named `LOOKMA_<PLUGIN>_<SETTING>`. `lookma --help` lists those of the agent and voice you selected, and `lookma doctor` shows the ones in effect and warns about any `LOOKMA_*` variable that Lookma does not read, such as a misspelled one.
 
@@ -232,6 +233,7 @@ The agent and the voice are plug-ins (folders in `executors/` and `voices/`), an
 | `LOOKMA_VOICE` | `openai` | The voice: `openai` (OpenAI Realtime) or `off`, text only: nothing is sent to OpenAI. |
 | `LOOKMA_VOICE_LANGUAGE` | detected | The language you speak, as an ISO code (`en`, `zh`, `ja`), for a better transcript. |
 | `LOOKMA_AUDIO` | `room` | How you hear the voice: `room` (speakers) or `headset`. With a headset, talking over the voice cuts it off; in a room it finishes its sentence. Sets the microphone's noise reduction to match. |
+| `LOOKMA_TALK` | `always` | How you talk to the voice: `always` (it listens whenever it is not paused) or `key` (it listens while you hold fn; a tap of fn keeps it listening, hands-free, until 20 s of quiet or another tap). In both, holding fn gives you the floor and a tap stops the voice mid-sentence. |
 | `LOOKMA_PORT` | `8790` | The core's port, on 127.0.0.1. |
 | `LOOKMA_DATA` | `~/.lookma` | Per-app grants (`apps.json`) and the generated session folder. |
 | `LOOKMA_SIGN_IDENTITY` | your first signing identity, else ad hoc | Code signing for the app build; `-` forces ad hoc. Environment only. |
