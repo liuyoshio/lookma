@@ -40,6 +40,15 @@
 //     says Lookma has no microphone access
 //   - voice off (the core has no voice): no session and no microphone, and what is owed is
 //     settled as shown; a ?voice=0 page: no session, no microphone and no receipts
+//   - always listening never switches the provider's detector off
+//   - the provider on its own, driven with listen and cut as the turn source would: no track at
+//     connect; a hold from off switches the detector off and discards what came before, begins
+//     the turn under its own id, and at release takes the microphone off, stops the turn and
+//     commits it only after the audio in flight drained; the service's item id for it is an
+//     alias (its commit, its transcript, a drop of it); a tap's hold is discarded; auto restores
+//     the grant's detection; a hold from auto adopts the turn the detector has open (no discard,
+//     its id) and the detector comes back after the commit; a refused commit drops the turn; cut
+//     cancels a reply being made and silences audio playing, each only when it applies
 // The provider's own checks (what it asks its service for) are its dev/check.mjs.
 //
 //   node overlay/dev/check-voices.mjs [--port 8795] [--cdp 8796]
@@ -511,6 +520,8 @@ async function scenario(name, fake) {
   const lostThen = !receipted(id, 'spoken')
   check(lostThen && (await until(() => receipted(id, 'spoken'))) && (await noCreate(300)), `a receipt lost with the link is sent again after the reconnect (${id}), with no new announcement`)
 
+  check(!(await sent()).some(e => e.type === 'listen'), 'always listening: the provider\'s detector was never switched off')
+
   // 13. A microphone that cannot open: the session stays up, nothing on its sender, and a notice.
   since = page.logs.length
   await page.goto(`${mock.base}?backdrop=1&fakeNoMic=1`)
@@ -541,6 +552,95 @@ async function scenario(name, fake) {
   id = await entryId('Not for a spectator.')
   await sleep(800)
   check(!!id && !toCore('delivered').some(m => m.ids.includes(id)), `?voice=0: a spectator sends no receipts (${id} still owed)`)
+
+  // 15. The provider on its own, on the spectator page (no session of its own), driven as the
+  // turn source drives it: manual turns and cut.
+  await page.evaluate(`(async () => {
+    const provider = await import('/voices/${name}/page.js')
+    const mic = new AudioContext().createMediaStreamDestination().stream
+    window.__heard = []
+    const io = { signal: new AbortController().signal, onEvent: ev => window.__heard.push(ev), onClose: () => {}, log: () => {} }
+    const conn = await provider.connect(${JSON.stringify({ provider: name, ...fake.grant })}, io)
+    window.__direct = e => conn.send(e.type === 'listen' && e.how !== 'off' ? { ...e, mic } : e)
+    window.__micId = mic.getAudioTracks()[0].id
+  })()`)
+  const micId = await page.evaluate('window.__micId')
+  const direct = effect => page.evaluate(`window.__direct(${JSON.stringify(effect)})`)
+  const mark2 = async () => ({ sent: (await sent()).length, heard: await page.evaluate('window.__heard.length') })
+  const heardSince = async k => (await page.evaluate('window.__heard')).slice(k.heard)
+  const steps = async k => (await sent()).slice(k.sent).filter(e => ['listen', 'cut'].includes(e.type))
+  const stepNames = async k => (await steps(k)).map(e => e.step).join()
+  const track = async () => (await lastConnection()).tracks.at(-1)
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  check((await connections()).length === 1 && (await lastConnection()).tracks.length === 0, 'alone: connected with no track on its sender')
+
+  let k = await mark2()
+  await direct({ type: 'listen', how: 'hold' })
+  let h = await heardSince(k)
+  const held = h[0]?.id
+  check((await stepNames(k)) === 'undetect,discard' && (await track()) === micId && h.length === 1 && h[0].type === 'turn.started',
+    `hold from off: the detector off, what came before discarded, the microphone on, the turn begun ${JSON.stringify(h)}`)
+  k = await mark2()
+  await direct({ type: 'listen', how: 'off' })
+  check((await track()) === null && same(await heardSince(k), [{ type: 'turn.stopped', id: held }]) && (await stepNames(k)) === '',
+    'released: the microphone off and the turn stopped, not yet committed')
+  await sleep(250)
+  check((await stepNames(k)) === 'commit', 'released: committed once the audio in flight drained')
+  await emit({ type: 'turn.committed', id: 'item_a' }, { type: 'turn.transcript', id: 'item_a', text: 'Open Maps' })
+  check(same((await heardSince(k)).slice(1), [{ type: 'turn.committed', id: held }, { type: 'turn.transcript', id: held, text: 'Open Maps' }]),
+    `the service's item id is the held turn's alias: its commit and its transcript come under ${held}`)
+  k = await mark2()
+  await direct({ type: 'drop', items: [held] })
+  check(same((await sent()).slice(k.sent).map(e => e.items), [['item_a']]), 'a drop of the held turn goes out under the service\'s item id')
+
+  k = await mark2()
+  await direct({ type: 'listen', how: 'hold' })
+  await direct({ type: 'listen', how: 'off', drop: true })
+  await sleep(250)
+  h = await heardSince(k)
+  check((await stepNames(k)) === 'discard,discard' && same(h.map(e => e.type), ['turn.started', 'turn.dropped']) && h[0].id === h[1].id && h[0].id !== held,
+    `a tap's hold: a new turn, discarded and dropped, never committed ${JSON.stringify(h)}`)
+
+  k = await mark2()
+  await direct({ type: 'listen', how: 'auto' })
+  const restored = await steps(k)
+  check((await stepNames(k)) === 'detect' && same(restored[0].detection, fake.grant.session.detection) && (await track()) === micId,
+    'auto: the grant\'s detection restored, the microphone on')
+
+  await emit({ type: 'turn.started', id: 'item_b' })
+  k = await mark2()
+  await direct({ type: 'listen', how: 'hold' })
+  await emit({ type: 'turn.stopped', id: 'item_b' }) // the detector's, in flight as it was switched off
+  check((await stepNames(k)) === 'undetect' && (await heardSince(k)).length === 0,
+    'hold from auto with a turn open: adopted, nothing discarded, no new turn; the detector\'s late stop is not the end')
+  await direct({ type: 'listen', how: 'auto' })
+  await sleep(250)
+  await emit({ type: 'turn.committed', id: 'item_b' })
+  check((await stepNames(k)) === 'undetect,commit,detect' && same(await heardSince(k), [{ type: 'turn.stopped', id: 'item_b' }, { type: 'turn.committed', id: 'item_b' }]),
+    'released to auto: the adopted turn committed under its id, then the detector back on')
+
+  k = await mark2()
+  await direct({ type: 'listen', how: 'hold' })
+  await direct({ type: 'listen', how: 'auto' })
+  await sleep(250)
+  const refusedCommit = (await steps(k)).find(e => e.step === 'commit')
+  await emit({ type: 'error', eventId: refusedCommit?.eventId, message: 'buffer too small' })
+  h = await heardSince(k)
+  check(same(h.map(e => e.type), ['turn.started', 'turn.stopped', 'turn.dropped', 'error']) && h.slice(0, 3).every(e => e.id === h[0].id),
+    `hold from auto with no turn open: a new turn; its commit refused, it is dropped ${JSON.stringify(h.map(e => e.type))}`)
+
+  k = await mark2()
+  await direct({ type: 'cut' })
+  const idle = await stepNames(k)
+  await emit({ type: 'response.started', response: 'rc1' })
+  k = await mark2()
+  await direct({ type: 'cut' })
+  const making = await stepNames(k)
+  await emit({ type: 'response.done', response: 'rc1', status: 'completed', items: [] }, { type: 'audio.started', response: 'rc1' })
+  k = await mark2()
+  await direct({ type: 'cut' })
+  check(idle === '' && making === 'cancel' && (await stepNames(k)) === 'silence',
+    `cut: nothing when nothing plays, cancel while a reply is made, silence while its audio plays (${JSON.stringify([idle, making, await stepNames(k)])})`)
 
   for (const { identifier } of scripts) await page.cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier })
 }

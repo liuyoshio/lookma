@@ -1,7 +1,8 @@
 // The OpenAI Realtime voice, core half (the contract: core/voice/host.mjs). Mints a short-lived
 // Realtime key for the page with the butler's session baked in (set up for a room or a headset),
-// and hands the page the parameters each kind of reply is asked for with. The real key never
-// leaves the core.
+// and hands the page the parameters each kind of reply is asked for with, and the session's turn
+// detection, which the page switches off while the key holds a turn and restores after. The talk
+// mode is not an input: one grant serves both. The real key never leaves the core.
 
 // Each constant below is the single place to change if the OpenAI behaviour it assumes proves wrong.
 
@@ -25,7 +26,7 @@ const RENEW_AFTER_MS = 50 * 60000
 // to say) is speak-only, which assumes tool_choice 'none' still yields speech.
 export const RESPONSES = { turn: {}, speak: { tool_choice: 'none' } }
 
-/** The butler's Realtime session: always listening, and replying only when the overlay asks. */
+/** The butler's Realtime session: the server finds the turns, and replies only when the overlay asks. */
 export function butlerSession({ options, instructions, tools, audio, language }) {
   const setup = SETUPS[audio]
   // No transcription prompt: it makes the transcriber drop the "?" the approval check relies on.
@@ -51,10 +52,11 @@ export function butlerSession({ options, instructions, tools, audio, language })
 
 /** One grant: an ephemeral key, usable to start a call until it expires. */
 export async function mint(ctx) {
+  const session = butlerSession(ctx)
   const res = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
     method: 'POST',
     headers: { Authorization: `Bearer ${ctx.options.apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session: butlerSession(ctx) }),
+    body: JSON.stringify({ session }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error?.message || `key request failed (${res.status})`)
@@ -63,6 +65,6 @@ export async function mint(ctx) {
     startBy: data.expires_at * 1000,
     renewAfter: RENEW_AFTER_MS,
     label: ctx.options.model,
-    session: { responses: RESPONSES },
+    session: { responses: RESPONSES, detection: session.audio.input.turn_detection },
   }
 }

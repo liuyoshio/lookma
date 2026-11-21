@@ -15,11 +15,19 @@
 //                 response.done carry whole items with their ids ({ item } and { items }), and
 //                 a call's args are an object
 //   fromService({ connection, event })  a client event as the effect it carries, one per event
-//                 ({ type: 'tell', texts: [text] }, ...) with its connection; anything else is
-//                 { type: 'other', event }
-import { RESPONSES } from '../mint.mjs'
+//                 ({ type: 'tell', texts: [text] }, ...) with its connection. One that is a step
+//                 of a listen or a cut is { type: 'listen' | 'cut', step }, in the check's words:
+//                   listen  detect (the VAD back on, with the grant's detection: { detection }),
+//                           undetect (the VAD off), discard (the input buffer cleared),
+//                           commit (the input buffer committed: { eventId })
+//                   cut     cancel (the reply being made), silence (the audio playing)
+//                 Anything else is { type: 'other', event }
+import { RESPONSES, butlerSession } from '../mint.mjs'
 
-export const grant = { credential: 'fake', label: 'fake-realtime', renewAfter: 50 * 60000, session: { responses: RESPONSES } }
+// The detection a room session is minted with, as the grant hands it to the page.
+const detection = butlerSession({ options: {}, instructions: '', tools: [], audio: 'room', language: '' }).audio.input.turn_detection
+
+export const grant = { credential: 'fake', label: 'fake-realtime', renewAfter: 50 * 60000, session: { responses: RESPONSES, detection } }
 
 export const page = `{
   window.__fake = { connections: [], sent: [], ch: null }
@@ -97,6 +105,14 @@ export function fromService({ connection, event: e }) {
     if (e.type === 'conversation.item.delete') return { type: 'drop', items: [e.item_id] }
     if (e.type === 'conversation.item.create' && e.item.type === 'message' && e.item.role === 'user') return { type: 'tell', texts: [e.item.content[0].text] }
     if (e.type === 'conversation.item.create' && e.item.type === 'function_call_output') return { type: 'output', results: [{ callId: e.item.call_id, output: JSON.parse(e.item.output) }] }
+    if (e.type === 'session.update') {
+      const td = e.session.audio.input.turn_detection
+      return td ? { type: 'listen', step: 'detect', detection: td } : { type: 'listen', step: 'undetect' }
+    }
+    if (e.type === 'input_audio_buffer.clear') return { type: 'listen', step: 'discard' }
+    if (e.type === 'input_audio_buffer.commit') return { type: 'listen', step: 'commit', eventId: e.event_id }
+    if (e.type === 'response.cancel') return { type: 'cut', step: 'cancel' }
+    if (e.type === 'output_audio_buffer.clear') return { type: 'cut', step: 'silence' }
     return { type: 'other', event: e }
   })()
   return { ...effect, connection }

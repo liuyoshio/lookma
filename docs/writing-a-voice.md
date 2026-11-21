@@ -76,7 +76,7 @@ export async function mint({ options, instructions, tools, audio, language, log 
 | `startBy` | epoch ms: no connection may start with this grant after it. The session mints a renewal's grant a minute ahead and uses it only if `startBy` is still far enough away |
 | `renewAfter` | ms after which the session is swapped for a fresh one at the next idle moment. Set it below the service's session limit (OpenAI: 50 min of 60) |
 | `label` | for the log line `voice: connected (<label>)`, e.g. the model |
-| `session` | anything your `page.js` needs, opaque to everyone else (OpenAI: the parameters of each kind of reply) |
+| `session` | anything your `page.js` needs, opaque to everyone else (OpenAI: the parameters of each kind of reply, and the turn detection to restore after a hold) |
 
 Set the session up here, once, wherever the service lets you: OpenAI's key carries the butler's instructions, tools, transcription and turn detection, so the page never builds a session. A `mint` that throws is a 502: the page tries again later.
 
@@ -165,14 +165,14 @@ Everything outside the "When the service cannot" table is mandatory.
 
 ## The voice check
 
-`node overlay/dev/check-voices.mjs` runs the real overlay, the real session and floor and your real `page.js` in headless Chrome, once per folder in `voices/`, against your `dev/fake.mjs`. It plays user turns, replies, audio, drops and pauses in as voice events, and reads back the effects your page sent. Nothing reaches the network. The fake exports:
+`node overlay/dev/check-voices.mjs` runs the real overlay, the real session and floor and your real `page.js` in headless Chrome, once per folder in `voices/`, against your `dev/fake.mjs`. It plays user turns, replies, audio, drops and pauses in as voice events, and reads back the effects your page sent. Then it drives your `connect` on its own with `listen` and `cut`, as the turn source would: a hold from `off` and from `auto`, a tap's dropped hold, a refused commit, a cut while a reply is made and while it plays. Nothing reaches the network. The fake exports:
 
 | Export | |
 |---|---|
 | `grant` | a grant as your `mint` returns it, without `startBy` (the check adds one) |
 | `page` | a script the check runs in the page before it loads: it replaces your transport (OpenAI: `RTCPeerConnection` and the SDP `fetch`) with a fake service, and defines `window.__fake` with `connections` (one `{ tracks, closed }` per connection; `tracks` every track put on its sender, `null` for one taken off: OpenAI records `replaceTrack`), `sent` (every message your page sent, as `{ connection, event }`), `emit(messages)` (plays service messages in, on the newest connection) and `drop()` (the newest connection closes by itself) |
 | `toService(event)` | a scripted voice event as the service messages that carry it. `response.item` and `response.done` carry whole items (`{ item }`, `{ items }`) with their ids, and a call's `args` are an object |
-| `fromService({ connection, event })` | one message your page sent, as the effect it carries (`{ type: 'tell', texts: [text] }`, ...) plus its `connection`; anything else is `{ type: 'other', event }` |
+| `fromService({ connection, event })` | one message your page sent, as the effect it carries (`{ type: 'tell', texts: [text] }`, ...) plus its `connection`. A message that is a step of a `listen` or a `cut` is `{ type: 'listen' \| 'cut', step }`: `detect` (detection back on, with `detection`), `undetect`, `discard` (buffered input cleared), `commit` (with `eventId`), `cancel`, `silence`. Anything else is `{ type: 'other', event }`. The steps are drawn from OpenAI, like the rest of this interface |
 
 `voices/openai/dev/fake.mjs` is the complete example. Put checks of your own parts in `dev/check.mjs` (OpenAI's checks the session it would mint, without a call). `check-voices.mjs` needs Google Chrome; `npm test` runs your `dev/check.mjs`.
 
@@ -180,11 +180,11 @@ Everything outside the "When the service cannot" table is mandatory.
 
 ### OpenAI Realtime (`voices/openai/`, real)
 
-One WebRTC call per session: the call's audio sender starts with no track and `listen` puts the microphone on it, the butler's voice plays on an `<audio>` element, and the events run on the `oai-events` data channel. Server voice activity detection finds the turns in `auto`.
+One WebRTC call per session: the call's audio sender starts with no track and `listen` puts the microphone on it, the butler's voice plays on an `<audio>` element, and the events run on the `oai-events` data channel. Server voice activity detection finds the turns in `auto`; in `hold` the page switches it off and commits the turn itself at release.
 
 | Lookma | OpenAI Realtime |
 |---|---|
-| `mint` | `POST /v1/realtime/client_secrets` with the whole session baked in: instructions, tools, `semantic_vad` with `create_response: false`, transcription, noise reduction, voice, `max_output_tokens`. `startBy` is the key's `expires_at`, `renewAfter` 50 min |
+| `mint` | `POST /v1/realtime/client_secrets` with the whole session baked in: instructions, tools, `semantic_vad` with `create_response: false`, transcription, noise reduction, voice, `max_output_tokens`. `startBy` is the key's `expires_at`, `renewAfter` 50 min; `session` carries the reply parameters and the minted `turn_detection` |
 | `turn.started / stopped / committed` | `input_audio_buffer.speech_started / speech_stopped / committed`, by `item_id` |
 | `turn.transcript` | `conversation.item.input_audio_transcription.completed`, or `.failed` as `null` |
 | `response.started`, `response.item` | `response.created`, `response.output_item.added` |
@@ -196,7 +196,8 @@ One WebRTC call per session: the call's audio sender starts with no track and `l
 | `tell` | `conversation.item.create`, a user message per text |
 | `drop` | `conversation.item.delete` per item |
 | `output` | `conversation.item.create`, a `function_call_output` per result |
-| `listen` | `sender.replaceTrack(mic track)`, or `replaceTrack(null)` for `off`; `off` with a VAD turn open: `input_audio_buffer.clear`, then `turn.dropped`. `hold` is heard as `auto` (no manual turns yet) |
+| `listen` | `sender.replaceTrack(mic track)`, or `replaceTrack(null)` for `off`; `off` with a VAD turn open: `input_audio_buffer.clear`, then `turn.dropped`. `hold`: `session.update` with `turn_detection: null`; from `off` also `input_audio_buffer.clear` and `turn.started` under the page's own id; from `auto` a VAD turn already open is adopted. Leaving `hold`: `turn.stopped`, then after 150 ms `input_audio_buffer.commit` (with `drop`: `input_audio_buffer.clear`, `turn.dropped`). `auto` after a hold: `session.update` with the minted detection |
+| turn ids | A held turn's server `item_id`, where it differs from the page's id, is an alias: transcripts come in and `drop` goes out under the one id the floor knows |
 | `cut` | `response.cancel` while a reply is being made, `output_audio_buffer.clear` while its audio plays, each independently |
 
 ### Gemini Live (design only, not built, not verified)

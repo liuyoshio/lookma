@@ -93,7 +93,7 @@ export function createSession({ enabled, onEvent, onChange, isIdle, log }) {
       return
     }
     const stream = await openMic().catch(err => { if (me === listens) throw err })
-    if (me === listens) send({ type: 'listen', how, mic: stream })
+    if (me === listens) send({ type: 'listen', how, mic: stream, ...(drop && { drop }) }) // a tap's hold, dropped on the way back to auto
   }
 
   async function connect(why = '') {
