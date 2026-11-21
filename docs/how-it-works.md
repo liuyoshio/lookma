@@ -20,8 +20,8 @@ This page explains the design. The exact messages are in [protocol.md](protocol.
 | Piece | Where | What it does |
 |---|---|---|
 | Core | `core/` | A resident Node process on 127.0.0.1:8790. The only piece that decides anything: it holds the turn, focus, attention and approval cards, runs the hands pipeline and grants the voice its sessions. |
-| App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, the fn key's edges, and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
-| Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks and cards, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
+| App | `app/` | `Lookma.app`, a small Swift menu bar app with no Dock icon. It provides primitives and decides nothing: Accessibility (AX) reads and presses, screenshots, keyboard and mouse input, seconds since your last input, the fn key's edges, hand gestures from the camera (opt-in), and the overlay window. macOS permissions belong to it, so the core launches it with `open`. |
+| Overlay | `overlay/` | A web page in the app's full-screen, transparent, click-through window. It draws the capsule, marks, cards and your hand's dot, and runs the voice. The window takes clicks only on the card, the Go ahead button and the text box. |
 | Executor adapter | `executors/<name>/` | Wraps one agent behind the executor contract: `claude`, Claude Code run headless through the Claude Agent SDK, or `codex`, Codex CLI through its app-server. Its `manifest.mjs` declares its settings and checks. |
 | Voice provider | `voices/<name>/` | The voice service, today `openai` (OpenAI Realtime). Its `manifest.mjs` declares its settings, `mint.mjs` runs in the core and mints a short-lived grant for each session, and `page.js` runs in the overlay and connects to the service. The rest of the voice (`overlay/voice/`) is the same for every provider. |
 | Prompts | `prompts/` | `butler.md` and `butler-tools.json` for the voice, `executor.md` for the agent. |
@@ -167,6 +167,46 @@ Declines go through the same checks, with an explicit no instead (“no”, “c
 When a voiced answer is refused, nothing is sent. The card shows “Not a clear yes” with what was heard, and the voice asks again. The approval words are English, whatever language you speak to it in; you can always click instead. Clicking Approve or Decline always works.
 
 **Commands.** An utterance that is only “stop” (or “cancel”) cancels a running turn at once, without waiting for the voice model. “Go ahead” (or “continue”) resumes a step that is waiting for you. “Pause” pauses: the running turn stops as with “stop”, the voice session closes and the microphone is off until you resume from the menu bar or with ⌃⌥P. Resuming only brings the voice back; the stopped turn stays stopped. This works typed or spoken. While a card is up, your words answer the card instead.
+
+## Hand gestures
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/gestures-dark.svg">
+  <img src="images/gestures.svg" width="100%" alt="The camera macOS prefers sends 30 frames a second to Apple's Vision on this Mac, which finds 21 joints per hand. One gesture engine turns them into events, and the gesture output turns each event into input on your Mac (scroll, Command-Tab, Command-equals and Command-minus) or into the overlay's talk key, stop and hand dot. Five gestures: pinch and move up or down to scroll the window under the pointer; pinch and flick sideways to switch apps, sliding to step and opening the hand to pick; pinch with both hands and spread or close them to zoom; raise an open palm and hold it still to hold the talk key; push the open palm toward the camera to stop the work and the voice. Any other hand does nothing: a pinch counts only when made in view, and a hand far from the camera is ignored.">
+</picture>
+
+A hand is a second input device with a clutch. There are two clutches, and they are the whole vocabulary:
+
+| Clutch | While it is engaged | What the motion means |
+|---|---|---|
+| **Pinch**, thumb and index together, made in view | you are holding the Mac | the first motion picks the mode and keeps it: up or down scrolls, a fast sideways flick opens the app switcher, a second hand pinching before any motion zooms |
+| **Open upright palm** | you are talking to Lookma | held still, the talk key is down; pushed toward the camera, stop |
+
+Any other hand does nothing. That is the defence against false triggers: nothing happens without a deliberate engage step.
+
+**One owner each.** The core decides only whether gestures are on (`LOOKMA_GESTURES`, or Hand Gestures in the menu for one run); the app runs the camera while they are on and Lookma is not paused. In the app:
+
+| Piece | What it owns |
+|---|---|
+| `HandCamera.swift` | The camera (the one macOS prefers), Apple's Vision hand pose on every frame, camera access, and the one teardown. It checks the joints once: a hand whose wrist, knuckles, thumb tip or index finger Vision is unsure of is dropped for that frame. It knows no gesture. |
+| `Gesture.swift` | The gesture engine: hand frames in, gesture events out. Pure, with no clock of its own, so `npm run test:gesture` drives it with synthetic hands. Every threshold is here. |
+| `GestureOutput.swift` | The one table from event to action: pixel scroll events, Command held through the switcher with Tab for each step, a ⌘= or ⌘− stroke, and the talk key and stop to the page. |
+
+**The engine.** Every measure is relative to the size of your palm, so it does not matter how far you sit or how big the frame is. One point stands for the hand, the middle of the index and middle knuckles, smoothed with a One Euro filter; it does not move when your fingers close, so a pinch or a release never jerks the page. A pinch closes at a fingertip gap of 0.20 palm widths and opens at 0.32, each held for two frames, and needs the other fingers loose, which tells it from a fist. A hand that comes into view already pinched (holding a pen or a cup) never engages until it has opened once, and a hand too small in the frame (far away, behind you) is ignored. A hand that drops out for a moment keeps its state for 0.25 s.
+
+- **Scroll** is direct: the page follows the hand's vertical travel, pixel by pixel, once it has moved past a small deadzone. Sideways wobble is ignored.
+- **The switcher** opens on a fling, a sideways move of 0.07 frame heights within 0.15 s of rest; a slow sideways drag does nothing. The fling is the first step. While you keep pinching, each further 0.10 of sideways travel is another step, back as well as forward, and opening your fingers picks the app. Every way out of the switcher lets Command go: opening your fingers, losing the hand, pausing, turning gestures off, quitting.
+- **Zoom** needs the second pinch before the first hand has moved. Each 20% of change in the distance between the hands is a step, at most five a second.
+- **Talk** needs the open palm in the upper half of the frame and still for 0.5 s. That is long on purpose: a wave, a stretch or a raised hand on a video call is the same pose, and the microphone is the thing to protect. The key stays down until the hand drops below 60% of the frame's height, leaves the frame, or folds at least three fingers, so relaxing your fingers mid-sentence does not end the turn. The edges go to the page as fn's do, so the turn source decides hold or tap exactly as for fn: a palm lowered within 300 ms is a tap, and opens a hands-free conversation.
+- **Stop** is the palm growing by 30% within 0.3 s while it hardly moves, counted only while it stays open and upright, so turning your hand toward the camera as you raise it is not a push. The page cuts the voice and sends the same stop a typed “stop” sends. The same palm cannot then press the talk key until it has closed or left.
+
+**Two targets.** Scroll lands in the window under the real pointer; zoom keys go to the app in front. The dot is not a pointer and targets nothing.
+
+**Your input, not the agent's.** Gesture input comes from its own event source and is not marked as the hands', so it counts as you using the Mac: while you scroll by hand, the agent's steps that need the front wait, as they do while you type. The talk key ignores the input the app posts, so the held Command neither fires nor cancels fn.
+
+**Privacy.** The camera runs only while gestures are on and Lookma is not paused, and macOS's green light shows it for exactly that time. Frames are processed in memory and dropped; only joints leave the camera's callback. The core and the agent never see them. Nothing is stored, logged or sent: the log may say that a gesture fired, never where a hand was.
+
+The gestures learned from three MIT projects, whose ideas and numbers are adapted and whose code is not copied: [Precog](https://github.com/lulu38m/precog-macos) (the finger-straightness test), [Gstrl](https://github.com/tomyang-tz/Gstrl) (a fling as travel within a time window, the private event source) and [Glide](https://github.com/euphoriawolf/glide) (hand identity, starting thresholds). The One Euro filter is from Casiez, Roussel and Vogel, CHI 2012.
 
 ## Background work
 

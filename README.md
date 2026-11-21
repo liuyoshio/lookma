@@ -177,14 +177,36 @@ And one agent:
 | **Pause** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd>, **Pause** in the menu bar, or say “pause”. The task stops, the voice disconnects and the microphone turns off until you resume. |
 | **Resume** | <kbd>⌃</kbd><kbd>⌥</kbd><kbd>P</kbd> again, or **Resume**. The voice is back. The stopped task stays stopped; say “keep going” to carry on. |
 | **Always listening** | Start with `--talk always`, or **Listen: Always** in the menu bar for this run. It listens whenever it is not paused, as if a conversation were always open; fn still interrupts. |
+| **Use your hands** | Turn on **Hand Gestures** in the menu bar: pinch to scroll, switch apps and zoom, raise a palm to talk, push it to stop. See [Hand gestures](#hand-gestures). |
 | **Type instead** | **Type a Request…** in the menu bar. Enter sends, Escape closes. |
 | **Quit** | **Quit** in the menu bar, or Ctrl-C in the terminal that started it. |
 
 **One voice.** You talk to one assistant, a terse one. It answers in your language, in a sentence, says when something is done, and asks when it needs you, even while the microphone is closed. With a headset you can also just talk over it to interrupt.
 
-**The menu bar seal** fills its ring while the microphone is open, shows a pause sign while paused, and dims when the app has lost the core. Its menu also switches how you talk for this run (**Listen: With the fn Key** or **Always**) and, with the key, starts or ends a hands-free conversation.
+**The menu bar seal** fills its ring while the microphone is open, shows a pause sign while paused, and dims when the app has lost the core. Its menu also switches how you talk for this run (**Listen: With the fn Key** or **Always**), with the key starts or ends a hands-free conversation, and turns **Hand Gestures** on or off for this run. If Lookma may not use the camera, the item reads **Hand Gestures: Allow Camera…** and opens System Settings → Privacy & Security → Camera.
 
 **The fn key is also 🌐.** Set System Settings → Keyboard → **Press 🌐 key to** → **Do Nothing**, or a tap of fn also switches the input source, opens Emoji & Symbols or starts Dictation. If you switch input sources with 🌐, <kbd>⌃</kbd><kbd>Space</kbd> does the same. If Dictation's shortcut (Keyboard → Dictation) is **Press 🌐 Twice**, pick another, or two quick taps start Dictation. `lookma doctor` and `lookma start` warn about the first (with `--talk always` it is only a note), and `lookma doctor --fix` opens the Keyboard pane. Lookma never changes either setting itself.
+
+### Hand gestures
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures-dark.svg">
+  <img src="docs/images/gestures.svg" width="100%" alt="The camera macOS prefers sends frames to Apple's Vision on this Mac, which finds the joints of each hand. One gesture engine turns them into events, and the gesture output turns each into input on your Mac (scroll, Command-Tab, Command-equals and Command-minus) or into the overlay's talk key, stop and hand dot. Five gestures: pinch and move up or down to scroll; pinch and flick sideways to switch apps; pinch with both hands and spread or close them to zoom; raise an open palm and hold it still to talk; push it toward the camera to stop. Any other hand does nothing.">
+</picture>
+
+Off by default. Turn on **Hand Gestures** in the menu bar, or start with `--gestures on`. While they are on and Lookma is not paused, the camera runs (its green light is on) and a coral dot follows your hand. It lights up while you pinch.
+
+| Gesture | Do this | What happens |
+|---|---|---|
+| **Scroll** | Pinch your thumb and index finger together, then move your hand up or down | The window under the pointer scrolls with your hand. Open your fingers to let go. |
+| **Switch apps** | Pinch and flick sideways | Right is the next app, left the one before, as with <kbd>⌘</kbd><kbd>Tab</kbd>. Keep pinching and slide to step through the list; open your fingers to pick. |
+| **Zoom** | Pinch with both hands, then spread them apart or bring them together | The app in front zooms in or out, a step at a time (<kbd>⌘</kbd><kbd>=</kbd> and <kbd>⌘</kbd><kbd>−</kbd>). |
+| **Talk** | Raise an open palm, fingers up, and hold it still for half a second | As if you held fn: talk, then lower your hand. Lower it right away and it is a tap: a hands-free conversation. |
+| **Stop** | Push your open palm toward the camera | The work stops, and the voice stops mid-sentence. |
+
+**Two targets.** Scroll goes to the window under the pointer and zoom to the app in front, as with a mouse wheel and the keyboard, so they can be different windows.
+
+**Nothing by accident.** Any other hand does nothing. A pinch counts only when you make it in view, so a hand that comes in holding a pen or a cup does nothing until it opens. Gestures are made for desk distance, within about an arm's length of the camera; a hand farther away, like someone behind you, is ignored. While you scroll or switch by hand you count as busy, so the agent waits for the front as it does while you type.
 
 **Watch the agent itself.** Both agents log their steps, cards and messages in the terminal that started Lookma.
 
@@ -208,12 +230,13 @@ The voice model on its own approves far too easily. So a spoken yes counts only 
   <img src="docs/images/consent-chart.svg" width="100%" alt="Bar chart. The voice model alone approved a lone approve-question 15 of 15 times, a go-ahead said 0.3 seconds after the card 11 of 16 times, and its own leaked voice 4 of 12 times. With Lookma's consent gate, 0 of 169 must-not cases were approved.">
 </picture>
 
-More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals and voice consent drawn out, and [the protocol](docs/protocol.md) between the pieces.
+More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals, voice consent and hand gestures drawn out, and [the protocol](docs/protocol.md) between the pieces.
 
 ## Privacy and costs
 
 - **Local.** The core listens on 127.0.0.1 only and refuses connections from web pages. No accounts, no telemetry, no servers of ours.
 - **The microphone is closed until you ask.** It opens while you hold fn or a conversation is open, and only then does audio go to OpenAI; macOS shows its microphone indicator for exactly that time. In between, the voice stays connected so it can speak to you, but hears nothing. With `--talk always` the microphone is open, and streams to OpenAI, whenever Lookma runs and is not paused, so it hears the room. Paused, the voice session is closed and nothing is sent.
+- **The camera is off unless you turn on hand gestures.** Then it runs while Lookma is not paused, and macOS's green light shows it. Apple's Vision reads each frame on this Mac and the frame is dropped: no image, hand position or gesture is stored or sent, and neither the agent nor the voice sees them. The log says which gesture fired, never where your hand was.
 - **Voice goes to OpenAI.** It also gets the text it reads to you: replies, reports and card text. Your API key stays in the core. It is billed to your key, per use. Without a key, or with `LOOKMA_VOICE=off`, nothing goes to OpenAI and the microphone stays closed.
 - **Claude Code uses your Claude plan, Codex your ChatGPT plan**, as usual. The agent's model sees screenshots and UI text of the app it works in (only that app's windows, never the overlay), plus the files, commands and pages it uses.
 - **Nothing else leaves your Mac.** Local state is in `~/.lookma/`.
@@ -293,6 +316,8 @@ Per-app answers live in `~/.lookma/apps.json` (`{ "Maps": true, "Notes": false }
 - **Codex runs through its app-server**, which Codex marks experimental and changes between releases (checked against 0.163.0). With Codex there are no background tasks yet: all work happens in the turn.
 - **One at a time:** one port, one agent session.
 - **The talk key needs an Apple keyboard.** On most other keyboards fn never reaches macOS: use **Start Conversation** in the menu bar, or `LOOKMA_TALK=always`. While a password field has focus (macOS Secure Input), no app sees fn.
+- **Hand gestures work at desk distance** and need some light on your hands. They use the camera macOS prefers, which can be a nearby iPhone; there is no camera picker. Zoom presses <kbd>⌘</kbd><kbd>=</kbd> and <kbd>⌘</kbd><kbd>−</kbd>, which an app or a keyboard layout may read differently.
+- **A raised palm is the talk key.** A raise lowered right away is a tap, so a stray one opens the microphone for a hands-free conversation. fn and a palm share one key: if both are down, the first to let go ends the turn.
 - **Hands-free, it hears the room.** In a conversation, or with `--talk always`, it stays quiet for speech that is not meant for it, but a TV or a conversation nearby can still start a turn now and then. Hold fn instead when that matters.
 
 ## Swap the agent, swap the voice
@@ -335,6 +360,8 @@ npm run test:e2e   # one short turn of a real Claude Code session on your plan (
 ```
 
 The diagrams are drawn by `node docs/images/src/draw.mjs`, in a light and a dark version each.
+
+Hand gestures run on Apple's Vision and learned from [Precog](https://github.com/lulu38m/precog-macos) (the finger-straightness test), [Gstrl](https://github.com/tomyang-tz/Gstrl) (the fling, the event source) and [Glide](https://github.com/euphoriawolf/glide) (starting thresholds), all MIT, and the One Euro filter of Casiez, Roussel and Vogel (CHI 2012). Their ideas and numbers are adapted; no code is copied.
 
 Built on [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime), the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript), [ws](https://github.com/websockets/ws) and [zod](https://zod.dev).
 

@@ -652,9 +652,80 @@ function talking(c) {
     body)
 }
 
+// ------------------------------------------------------------------ 8. hand gestures
+
+function gestures(c) {
+  // The pipeline: four boxes, then the two places an event lands.
+  const stages = [
+    ['Camera', ['the one you prefer', 'in macOS, 30 fps']],
+    ['Vision', ['21 joints per hand,', 'on this Mac']],
+    ['Gesture engine', ['pinch or palm,', 'one state machine']],
+    ['Gesture output', ['one table from', 'event to action']],
+  ]
+  const Y = 92, W = 150, G = 34, H = 112
+  const pipe = stages.map(([title, lines], i) => {
+    const x = 20 + i * (W + G)
+    const hot = i === 2
+    return box(c, x, Y, W, H, { shadow: true, stroke: hot ? c.coral : c.line, sw: hot ? 2 : 1.2 }) +
+      text(x + 16, Y + 34, title, { size: 16, weight: 700, fill: c.ink }) +
+      lines.map((l, j) => text(x + 16, Y + 64 + j * 20, l, { size: 13, fill: c.ink2 })).join('') +
+      (i < stages.length - 1 ? arrow(c, x + W + 2, Y + H / 2, x + W + G - 2.5, Y + H / 2) : '')
+  }).join('')
+  const ox = 20 + 3 * (W + G) + W, ex = ox + 46, ew = 980 - ex
+  const end = (y, title, s) => box(c, ex, y, ew, 52, { fill: c.sunk }) +
+    text(ex + 14, y + 22, title, { size: 14, weight: 700, fill: c.ink }) +
+    text(ex + 14, y + 41, s, { size: 12.5, fill: c.ink2 })
+  const ends = end(Y, 'Your Mac', 'scroll, ⌘Tab, ⌘= and ⌘−') + end(Y + 60, 'The overlay', 'the talk key, stop, the dot') +
+    curve(c, `M${ox + 2} ${Y + H / 2}C${ox + 24} ${Y + H / 2} ${ex - 24} ${Y + 26} ${ex - 3} ${Y + 26}`) +
+    curve(c, `M${ox + 2} ${Y + H / 2}C${ox + 24} ${Y + H / 2} ${ex - 24} ${Y + 86} ${ex - 3} ${Y + 86}`)
+
+  // Glyphs: a pinch is the overlay's dot, lit; a palm is a plain silhouette.
+  const lit = (x, y) => circle(x, y, 11, { fill: '#FF805C', fillOpacity: .5, filter: 'url(#glow)' }) +
+    circle(x, y, 7.5, { fill: '#FF805C', stroke: '#fff', strokeWidth: 1.5 })
+  const palm = (x, y, s, o = {}) => `<g transform="translate(${x} ${y}) scale(${s})" fill="${c.ink2}"${o.opacity ? ` opacity="${o.opacity}"` : ''}>` +
+    rect(-13, -4, 26, 26, { rx: 9 }) +
+    rect(-13, -24, 6, 24, { rx: 3 }) + rect(-6.5, -28, 6, 28, { rx: 3 }) +
+    rect(0, -25, 6, 25, { rx: 3 }) + rect(6.8, -19, 5.6, 20, { rx: 2.8 }) +
+    rect(-19, 0, 6.5, 18, { rx: 3.25, transform: 'rotate(-32 -13 16)' }) + '</g>'
+  const apps = (x, y) => [0, 1, 2].map(i => rect(x + i * 30, y, 24, 24, { rx: 6, fill: i === 1 ? c.wash : c.surface, stroke: i === 1 ? c.coral : c.line, strokeWidth: i === 1 ? 2 : 1 })).join('')
+
+  const cw = 182, cg = (960 - 5 * cw) / 4, CY = 260, GY = CY + 12, GH = 96
+  const cards = [
+    ['Scroll', ['Pinch, then move up', 'or down. The window', 'under the pointer', 'follows your hand.'], (x, y) =>
+      lit(x, y) + arrow(c, x, y - 16, x, y - 38, { color: c.ink2 }) + arrow(c, x, y + 16, x, y + 38, { color: c.ink2 })],
+    ['Switch apps', ['Pinch and flick right', 'for the next app, left', 'for the last. Slide to', 'step; open to pick.'], (x, y) =>
+      lit(x - 48, y + 22) + arrow(c, x - 32, y + 22, x + 2, y + 22, { color: c.ink2 }) + apps(x - 4, y - 32)],
+    ['Zoom', ['Pinch with both hands,', 'then spread them to', 'zoom in or close them', 'to zoom out.'], (x, y) =>
+      lit(x - 22, y) + lit(x + 22, y) + arrow(c, x - 36, y, x - 64, y, { color: c.ink2 }) + arrow(c, x + 36, y, x + 64, y, { color: c.ink2 })],
+    ['Talk', ['Raise an open palm and', 'hold it still: the talk', 'key is down. Lower it', 'to let go.'], (x, y) =>
+      palm(x - 12, y + 8, 1.15) + MIC(x + 22, y - 18, 26, c.coral)],
+    ['Stop', ['Push the open palm', 'toward the camera: the', 'work stops, and the', 'voice with it.'], (x, y) =>
+      palm(x - 38, y + 10, .8, { opacity: .35 }) + arrow(c, x - 18, y + 4, x + 2, y + 4, { color: c.ink2 }) + palm(x + 36, y + 6, 1.3)],
+  ].map(([title, lines, glyph], i) => {
+    const x = 20 + i * (cw + cg)
+    return box(c, x, CY, cw, 238, { shadow: true }) +
+      rect(x + 10, GY, cw - 20, GH, { rx: 10, fill: c.sunk }) +
+      glyph(x + cw / 2, GY + GH / 2) +
+      text(x + 16, GY + GH + 32, title, { size: 15.5, weight: 700, fill: c.ink }) +
+      lines.map((l, j) => text(x + 16, GY + GH + 54 + j * 19, l, { size: 13, fill: c.ink2 })).join('')
+  }).join('')
+
+  const body = [
+    text(32, 44, 'Hand gestures', { size: 19, weight: 700, fill: c.ink }),
+    text(32, 68, 'Off unless you turn them on. Frames are read on this Mac and dropped: no image, hand or gesture is stored or sent.', { size: 13.5, fill: c.ink2 }),
+    pipe, ends,
+    caps(c, 20, 246, 'A pinch holds the Mac, an open palm talks to Lookma'),
+    cards,
+    text(32, 532, [['Any other hand does nothing', { fontWeight: 700, fill: c.ink }], [': a pinch counts only when you make it in view, and a hand far from the camera is ignored.', { fill: c.ink2 }]], { size: 13.5 }),
+  ].join('\n')
+  return svg(c, 1000, 558, 'Hand gestures',
+    'The camera macOS prefers sends 30 frames a second to Apple\'s Vision on this Mac, which finds 21 joints per hand. One gesture engine turns them into events, and the gesture output turns each event into input on your Mac (scroll, Command-Tab, Command-equals and Command-minus) or into the overlay\'s talk key, stop and hand dot. Five gestures: pinch and move up or down to scroll the window under the pointer; pinch and flick sideways to switch apps, sliding to step and opening the hand to pick; pinch with both hands and spread or close them to zoom; raise an open palm and hold it still to hold the talk key; push the open palm toward the camera to stop the work and the voice. Any other hand does nothing: a pinch counts only when made in view, and a hand far from the camera is ignored.',
+    body)
+}
+
 // ------------------------------------------------------------------ write
 
-const DIAGRAMS = { 'overlay-anatomy': overlayAnatomy, architecture, approvals, 'consent-chart': consentChart, 'hands-pipeline': handsPipeline, 'plug-ins': plugIns, talking }
+const DIAGRAMS = { 'overlay-anatomy': overlayAnatomy, architecture, approvals, 'consent-chart': consentChart, 'hands-pipeline': handsPipeline, 'plug-ins': plugIns, talking, gestures }
 for (const [name, draw] of Object.entries(DIAGRAMS)) {
   for (const [theme, c] of Object.entries(THEMES)) {
     const file = path.join(OUT, `${name}${theme === 'dark' ? '-dark' : ''}.svg`)
