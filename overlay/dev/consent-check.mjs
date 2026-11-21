@@ -10,9 +10,6 @@
 // (deny, hold, echo, early, and the lone ok/yeah/sure the spike called ambiguous)
 // that judgeAnswer lets through is a false approval. There must be none.
 //
-// First, worthAnswering, the documented fallback for the turn gate (admit in voice.js): a turn
-// is admitted only when its transcript could be said to the butler (no silence, hesitation or
-// noise fragment), or when it has none in time.
 // Then commandFor, for typed input: a whole line of just "stop", "go ahead" or "pause" is that
 // control action, whatever the state (the core decides whether it applies); "cancel" is a stop,
 // never a decline.
@@ -22,17 +19,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { judgeAnswer, isExplicitApproval, isExplicitDecline, commandFor, worthAnswering } from '../consent.js'
+import { judgeAnswer, isExplicitApproval, isExplicitDecline, commandFor } from '../consent.js'
 
 const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/voice-consent')
 const MUST_NOT = new Set(['deny', 'hold', 'echo', 'early', 'ambiguous'])
 
-const REPLY = ['Abre Mapas', 'Open Maps', 'stop', 'Stop.', 'pause', 'no', 'No.', 'yes', 'Yes, I approve.', 'OK.', 'wait', 'help', 'Approve?',
-  'Hmm, open Safari', '3', null]
-const SILENT = ['', '  ', '.', 'Um.', 'Uh, um.', 'Hmm...', 'Tja', 'Tja.', 'you', 'Ja', 'Bye']
-const wrongReplies = [...REPLY.filter(t => !worthAnswering(t)).map(t => `${JSON.stringify(t)}: no reply, want one`),
-  ...SILENT.filter(t => worthAnswering(t)).map(t => `${JSON.stringify(t)}: a reply, want none`)]
-console.log(`${wrongReplies.length ? 'FAIL' : 'PASS'} replies: ${REPLY.length} turns answered, ${SILENT.length} not${wrongReplies.map(w => `\n  ${w}`).join('')}`)
 
 const COMMANDS = [
   ['Pause.', 'pause'], ['Pause listening.', 'pause'], ['Pause, please.', 'pause'], ['OK, pause please', 'pause'],
@@ -45,7 +36,7 @@ console.log(`${wrongCommands.length ? 'FAIL' : 'PASS'} commands: ${COMMANDS.leng
 
 if (!fs.existsSync(DIR)) {
   console.log(`SKIP ${DIR} not found`)
-  process.exit(wrongCommands.length || wrongReplies.length ? 1 : 0)
+  process.exit(wrongCommands.length ? 1 : 0)
 }
 
 function turnsOf(rec) {
@@ -91,4 +82,4 @@ if (textOnly.length) console.log(`must-not transcripts that read as approvals, s
 console.log(`approve records approved: ${approve.approved} of ${approve.records} (lone "approve" / "go ahead" and garbled transcripts are asked again by design)`)
 if (falseApprovals.length) console.log(`\n${falseApprovals.length} FALSE APPROVALS:\n  ${falseApprovals.join('\n  ')}`)
 else console.log('\nzero false approvals')
-process.exit(falseApprovals.length || wrongCommands.length || wrongReplies.length ? 1 : 0)
+process.exit(falseApprovals.length || wrongCommands.length ? 1 : 0)

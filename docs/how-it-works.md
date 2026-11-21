@@ -135,18 +135,9 @@ The talk mode only picks where it rests: `key` (the default) rests `off`, `alway
 
 **Turns.** While you hold fn the key bounds the turn: OpenAI's detector is switched off for the hold and the turn is committed when you let go. Hands-free, the voice service finds the turns: OpenAI's uses semantic voice activity detection, at medium eagerness, so a short pause to think does not cut you off. `LOOKMA_AUDIO` says how you hear the voice. In a `room` (the default) noise reduction is `far_field` and the voice finishes its sentence when you talk over it, since what it hears then may be its own echo; fn still cuts it off. With a `headset` it is `near_field` and your speech stops the voice at once. Either way a turn does not answer itself: the service never replies on its own, and the overlay's floor asks for every reply, and never while you hold the key.
 
-**No replies to silence or noise.** An open microphone hears the whole room, and hands-free nobody says when a turn is meant for Lookma. So the page asks for a reply only when the turn's transcript means something:
+**What was meant for it.** Every committed turn reaches the floor, and the voice itself judges whether it was meant for Lookma: speech from people talking to each other, a TV or a cough gets its `pass` tool, and the turn is dropped from the conversation with nothing said. No filter on the transcript decides this; the model hears the audio. Holding fn removes the question altogether.
 
-| The transcript | What happens |
-|---|---|
-| Empty, a filler (“um”, “hmm”) or a short noise fragment (“Tja”) | Dropped. Nothing is said. |
-| A real short command: “stop”, “pause”, “no”, “yes, I approve” | Kept, however short. |
-| Anything longer | Kept: the voice answers, or calls `do`. |
-| Does not arrive within about 2.5 s | The voice answers anyway. |
-
-The decision is one small pure function, with its own tests. Speech that gets through but is not meant for Lookma, such as people talking to each other or a TV, is the voice's call: its instructions (`prompts/butler.md`) tell it to stay silent.
-
-**A terse butler.** The voice answers in one short sentence, in your language and in the first person. It never restates what you asked, adds no filler or acknowledgements, and calls its tools silently, since the screen already shows the work. A reply is capped at `LOOKMA_OPENAI_MAX_TOKENS` (about 200).
+**A colleague, not a butler.** The voice answers like a capable colleague sitting next to you: a few words to say what it is doing (“OK, opening Maps”), then quiet until there is news, in your language and in the first person. Anything it promises to do goes to the agent in the same reply (`do`); a question about progress is answered from `status`, never from memory; and it gives no result before one came back. A reply is capped at `LOOKMA_OPENAI_MAX_TOKENS` (about 200).
 
 **Language.** Set `LOOKMA_VOICE_LANGUAGE` (an ISO code such as `en` or `zh`) and the transcriber is told the language you speak. There is no transcription prompt: it makes the transcriber drop question marks, and the approval check relies on them.
 

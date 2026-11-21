@@ -54,7 +54,7 @@ Every variable is in the README's [Configuration](README.md#configuration) table
 | Command | Checks | Needs |
 |---|---|---|
 | `npm run check` | `node --check` on every script | Node |
-| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, voice consent on recorded runs, which turns get a reply, when the microphone is open | No network, no models, no Chrome |
+| `npm test` | the plug-in manifests and settings, the hands pipeline against a fake app and a stub executor, every executor against its fake agent (`executors/<name>/dev/fake-agent.mjs`), each plug-in's own `dev/check.mjs`, voice consent on recorded runs, the floor that decides who speaks, when the microphone is open | No network, no models, no Chrome |
 | `node overlay/dev/check-voices.mjs` | the voice client with each voice provider, against its fake service (`voices/<name>/dev/fake.mjs`) | Google Chrome in `/Applications` (runs headless) |
 | `node overlay/dev/shoot.mjs` | the overlay through the whole scenario, with screenshots in `overlay/dev/shots/` | Google Chrome in `/Applications` (runs headless) |
 | `npm run test:key` | the talk key's machine in `app/Sources/TalkKey.swift`: fn alone, fn in a shortcut, events the app posted itself | Xcode's command line tools (`swiftc`) |

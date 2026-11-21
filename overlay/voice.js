@@ -155,16 +155,10 @@ export function createVoice(o) {
     talk({ type: 'quiet', since: next })
   }
 
-  // The turn gate: the single decision point for which committed turns reach the floor. Every
-  // one does: the butler judges. Should it prove unable to tell noise from requests, the fallback
-  // is here: wait for the transcript and admit only what worthAnswering (consent.js) keeps.
-  const admit = ev => dispatch(ev)
-
   function onEvent(ev) {
     turns.note(ev, Date.now(), floor.audible(state))
     if (ev.type === 'error') o.log(`voice: ${ev.message}`)
-    if (ev.type === 'turn.committed') admit(ev)
-    else dispatch(ev)
+    dispatch(ev) // every committed turn reaches the floor; the butler judges whether it was meant for it (pass)
   }
 
   // off: the core has no voice, for good; what is owed is then settled as shown.

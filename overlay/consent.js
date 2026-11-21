@@ -1,14 +1,6 @@
 // What the user's words are allowed to do. Pure functions, no DOM, so they can be
 // tested in Node against recorded transcripts (overlay/dev/consent-check.mjs).
 //
-// Which turns could get an answer (worthAnswering): not in use. Every committed turn now gets a
-// reply and the butler judges whether it was meant for it (its pass tool). This is the fallback
-// for the turn gate (admit in voice.js), should the butler prove unable to tell noise from
-// requests: wait for the turn's transcript and admit only one that could be said to the butler,
-// not silence, not hesitation alone ("um", "hmm"), not a lone short fragment ("Tja", "you"),
-// which is how noise and far-off speech come out. Short real answers and commands ("stop",
-// "no", "yes") are kept. With no transcript in time (TURN_WAIT_MS), the turn is admitted anyway.
-//
 // Approvals, from the voice-consent experiments (data in overlay/dev/fixtures/voice-consent). The spoken protocol is
 // "yes, I approve", in English. A voiced approval (allow=true) is sent only when
 // all of these hold:
@@ -147,23 +139,4 @@ const PAUSE = new RegExp(String.raw`^${LEAD}(pause|pause listening)(?: please)?$
 export function commandFor(text) {
   const t = norm(text)
   return STOP.test(t) ? 'stop' : GO.test(t) ? 'go_ahead' : PAUSE.test(t) ? 'pause' : null
-}
-
-// ------------------------------------------------------------ which turns could get an answer (the fallback at admit)
-
-export const TURN_WAIT_MS = 2500 // a turn whose transcript has not come by then is admitted anyway
-
-// Hesitation: a turn of only these is not a request.
-const HESITATION = new Set(['um', 'umm', 'uh', 'uhh', 'uhm', 'er', 'erm', 'eh', 'ah', 'oh', 'hm', 'hmm', 'mm', 'mmm', 'mhm', 'huh'])
-// Real one-word turns short enough to pass for noise: answers, commands, questions.
-const SHORT = new Set(['yes', 'yeah', 'yep', 'yup', 'no', 'nope', 'nah', 'ok', 'okay', 'sure', 'fine', 'stop', 'wait', 'go', 'next',
-  'back', 'undo', 'done', 'skip', 'deny', 'help', 'more', 'hi', 'hey', 'what', 'why', 'how', 'who', 'one', 'two', 'six', 'ten'])
-
-/** Whether a heard turn gets a reply. null: no transcript (yet), so the model's own ears decide. */
-export function worthAnswering(transcript) {
-  if (transcript == null) return true
-  const w = words(transcript).filter(x => !HESITATION.has(x))
-  if (w.length !== 1) return w.length > 1 // nothing, or only hesitation: no reply
-  const [x] = w
-  return SHORT.has(x) || /^\d+$/.test(x) || x.length > (/\p{Script=Latin}/u.test(x) ? 4 : 1)
 }
