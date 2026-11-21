@@ -1,10 +1,10 @@
-// The lookma command: start, doctor, --help, --version. bin/lookma only finds Node and runs this.
+// The lookma command: start, doctor, config, --help, --version. bin/lookma only finds Node and runs this.
 // Its static imports use only Node's own modules, so everything but start works before
 // `npm install`.
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { ROOT, loadConfig } from './config.mjs'
+import { ROOT, loadConfig, parseArgs } from './config.mjs'
 import { createLog } from './util.mjs'
 import { isStale, build } from './app-build.mjs'
 import { doctor, preflight } from './doctor.mjs'
@@ -15,12 +15,19 @@ const log = createLog()
 const HELP = `lookma: talk to your Mac. Watch it work.
 
 Usage:
-  lookma [dir ...]         Start. The agent may work in each dir you pass.
-  lookma start [dir ...]   The same.
-  lookma doctor [--fix]    Check what Lookma needs, with a fix for each problem.
-                           --fix opens System Settings at the first missing permission.
-  lookma --version         Print the version.
-  lookma --help            Print this help.
+  lookma [options] [dir ...]         Start. The agent may work in each dir you pass.
+  lookma start [options] [dir ...]   The same.
+  lookma doctor [options] [--fix]    Check what Lookma needs, with a fix for each problem.
+                                     --fix opens System Settings at the first missing permission.
+  lookma config [options]            Print the settings in effect, and where each came from.
+  lookma --version                   Print the version.
+  lookma --help                      Print this help.
+
+Options (each overrides the environment and .env):
+  --agent <name>       the agent: claude (Claude Code, the default) or codex (Codex CLI)
+  --voice <name>       the voice: openai (the default) or off (type instead, nothing goes to OpenAI)
+  --audio <setup>      room (speakers, the default) or headset
+  --set NAME=value     any setting below, e.g. --set LOOKMA_CODEX_FAST=1
 
 While it runs, watch the agent: Claude Code in its terminal (tmux attach -t lookma),
 Codex in the log of the terminal that started Lookma.
@@ -42,7 +49,28 @@ Settings, from the environment or ${path.join(ROOT, '.env')}:
 All of them: the Configuration table in ${path.join(ROOT, 'README.md')}
 `
 
-const usage = message => Object.assign(new Error(`${message} (see lookma --help)`), { exitCode: 2 })
+// The three switches, and every other setting that is set, with where it came from.
+function settings(config) {
+  const from = name => config.sources[name] || 'default'
+  const rows = [
+    ['agent', config.executor, from('LOOKMA_EXECUTOR')],
+    ['voice', config.voice.enabled ? 'openai' : 'off', from('LOOKMA_NO_VOICE')],
+    ['audio', config.voice.audio, from('LOOKMA_AUDIO')],
+  ]
+  const shown = ['LOOKMA_EXECUTOR', 'LOOKMA_NO_VOICE', 'LOOKMA_AUDIO']
+  for (const name of Object.keys(config.sources).filter(n => !shown.includes(n)).sort()) {
+    rows.push([name, name === 'OPENAI_API_KEY' ? '(set)' : process.env[name], from(name)])
+  }
+  return rows
+}
+
+function printConfig(args) {
+  const { settings: flags, rest } = parseArgs(args)
+  if (rest.length) throw Object.assign(new Error(`config takes options only, not ${rest[0]} (see lookma --help)`), { exitCode: 2 })
+  const rows = settings(loadConfig(flags))
+  const width = Math.max(...rows.map(r => r[0].length))
+  for (const [name, value, from] of rows) console.log(`${name.padEnd(width)}  ${value}  (${from})`)
+}
 
 // `open` makes macOS attribute the permissions to the app, not to this terminal.
 function launchApp(config) {
@@ -53,11 +81,11 @@ function launchApp(config) {
 }
 
 async function start(args) {
-  const option = args.find(a => a.startsWith('-'))
-  if (option) throw usage(`unknown option ${option}`)
-  const dirs = args.map(d => path.resolve(d))
+  const { settings: flags, rest } = parseArgs(args)
+  const dirs = rest.map(d => path.resolve(d))
   for (const d of dirs) if (!fs.statSync(d, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`not a directory: ${d}`)
-  const config = loadConfig()
+  const config = loadConfig(flags)
+  log('settings', settings(config).slice(0, 3).map(([name, value, from]) => `${name} ${value} (${from})`).join(', '))
 
   // Without the app (LOOKMA_NO_APP=1) its build is yours too, which also keeps a dev core from
   // replacing the bundle another Lookma is running.
@@ -96,14 +124,16 @@ async function start(args) {
 }
 
 async function runDoctor(args) {
-  const option = args.find(a => a !== '--fix')
-  if (option) throw usage(`unknown doctor option ${option}`)
-  process.exitCode = await doctor(loadConfig(), { fix: args.includes('--fix') })
+  const { settings: flags, rest } = parseArgs(args, ['--fix'])
+  const extra = rest.find(a => a !== '--fix')
+  if (extra) throw Object.assign(new Error(`doctor takes options only, not ${extra} (see lookma --help)`), { exitCode: 2 })
+  process.exitCode = await doctor(loadConfig(flags), { fix: rest.includes('--fix') })
 }
 
 const COMMANDS = {
   start,
   doctor: runDoctor,
+  config: printConfig,
   '--help': () => process.stdout.write(HELP),
   '-h': () => process.stdout.write(HELP),
   '--version': () => console.log(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version),

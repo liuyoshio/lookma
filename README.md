@@ -111,7 +111,7 @@ lookma doctor
 lookma ~/Projects
 ```
 
-Then just say “turn on dark mode”. To work with Codex instead of Claude Code, start it with `LOOKMA_EXECUTOR=codex lookma ~/Projects`, or set `LOOKMA_EXECUTOR=codex` in `.env`.
+Then just say “turn on dark mode”. To work with Codex instead of Claude Code, start it with `lookma --agent codex ~/Projects`, or set `LOOKMA_EXECUTOR=codex` in `.env`.
 
 > [!NOTE]
 > Voice needs an OpenAI API key: `cp .env.example .env` and set `OPENAI_API_KEY`. Without one, Lookma still works by typing (menu bar → **Type a Request…**).
@@ -210,7 +210,20 @@ More: [how it works](docs/how-it-works.md), with the hands pipeline, approvals a
 
 ## Configuration
 
-Set these in your shell or in `.env` at the repo root. Real environment variables win.
+Set these in `.env` at the repo root, in your shell, or on the command line. A flag wins over the environment, which wins over `.env`. The main switches have their own flags, and `--set NAME=value` sets any other:
+
+```sh
+lookma --agent codex --audio headset ~/Projects
+lookma --voice off --set LOOKMA_CODEX_FAST=1 ~/Projects
+lookma config --agent codex      # print the settings in effect, and where each came from
+```
+
+| Flag | Setting | Values |
+|---|---|---|
+| `--agent` | `LOOKMA_EXECUTOR` | `claude` (default) or `codex` |
+| `--voice` | `LOOKMA_NO_VOICE` | `openai` (default) or `off` |
+| `--audio` | `LOOKMA_AUDIO` | `room` (default) or `headset` |
+
 
 | Variable | Default | What it does |
 |---|---|---|
